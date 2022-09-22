@@ -1,39 +1,36 @@
-using System;
-using System.Buffers;
-using System.Diagnostics;
-
 namespace Npgsql.Pipelines.MiscMessages;
 
 struct ErrorResponse: IBackendMessage
 {
-    public ReadStatus Read(ref MessageReader reader)
+    /// <summary>
+    /// Error and notice message field codes
+    /// </summary>
+    enum ErrorFieldTypeCode : byte
     {
-        throw new System.NotImplementedException();
+        Done = 0,
+        Severity = (byte) 'S',
+        InvariantSeverity = (byte) 'V',
+        Code = (byte) 'C',
+        Message = (byte) 'M',
+        Detail = (byte) 'D',
+        Hint = (byte) 'H',
+        Position = (byte) 'P',
+        InternalPosition = (byte) 'p',
+        InternalQuery = (byte) 'q',
+        Where = (byte) 'W',
+        SchemaName = (byte) 's',
+        TableName = (byte) 't',
+        ColumnName = (byte) 'c',
+        DataTypeName = (byte) 'd',
+        ConstraintName = (byte) 'n',
+        File = (byte) 'F',
+        Line = (byte) 'L',
+        Routine = (byte) 'R'
     }
-}
 
-class ErrorOrNoticeMessage
-{
-    internal string Severity { get; }
-    internal string InvariantSeverity { get; }
-    internal string SqlState { get; }
-    internal string Message { get; }
-    internal string? Detail { get; }
-    internal string? Hint { get; }
-    internal int Position { get; }
-    internal int InternalPosition { get; }
-    internal string? InternalQuery { get; }
-    internal string? Where { get; }
-    internal string? SchemaName { get; }
-    internal string? TableName { get; }
-    internal string? ColumnName { get; }
-    internal string? DataTypeName { get; }
-    internal string? ConstraintName { get; }
-    internal string? File { get; }
-    internal string? Line { get; }
-    internal string? Routine { get; }
+    public ErrorOrNoticeMessage ErrorOrNoticeMessage { get; private set; }
 
-    internal static ErrorOrNoticeMessage Load(ref MessageReader reader)
+    public ReadStatus Read(ref MessageReader reader)
     {
         (string? severity, string? invariantSeverity, string? code, string? message, string? detail, string? hint) = (null, null, null, null, null, null);
         var (position, internalPosition) = (0, 0);
@@ -42,19 +39,23 @@ class ErrorOrNoticeMessage
             (null, null, null, null, null);
         (string? file, string? line, string? routine) = (null, null, null);
 
+        if (!reader.MoveNextAndIsExpected(BackendCode.ErrorResponse, out var status, ensureBuffered: true))
+            return status;
+
         ref var sq = ref reader.Reader;
 
-        while (true)
+        var fin = false;
+        while (!fin)
         {
-            var read = sq.TryRead(out var fieldCodeByte);
-            Debug.Assert(read);
+            sq.TryRead(out var fieldCodeByte);
             var fieldCode = (ErrorFieldTypeCode) fieldCodeByte;
 
             switch (fieldCode)
             {
                 case ErrorFieldTypeCode.Done:
                     // Null terminator; error message fully consumed.
-                    goto End;
+                    fin = true;
+                    break;
                 case ErrorFieldTypeCode.Severity:
                     reader.TryReadCString(out severity);
                     break;
@@ -126,23 +127,40 @@ class ErrorOrNoticeMessage
             }
         }
 
-        End:
-        if (severity == null)
-            throw new Exception("Severity not received in server error message");
-        if (code == null)
-            throw new Exception("Code not received in server error message");
-        if (message == null)
-            throw new Exception("Message not received in server error message");
+        if (severity == null || code == null || message == null)
+            return ReadStatus.InvalidData;
 
-        return new ErrorOrNoticeMessage(
+        ErrorOrNoticeMessage = new ErrorOrNoticeMessage(
             severity, invariantSeverity ?? severity, code, message,
             detail, hint, position, internalPosition, internalQuery, where,
             schemaName, tableName, columnName, dataTypeName, constraintName,
             file, line, routine);
-
+        return ReadStatus.Done;
     }
+}
 
-    internal ErrorOrNoticeMessage(
+class ErrorOrNoticeMessage
+{
+    public string Severity { get; }
+    public string InvariantSeverity { get; }
+    public string SqlState { get; }
+    public string Message { get; }
+    public string? Detail { get; }
+    public string? Hint { get; }
+    public int Position { get; }
+    public int InternalPosition { get; }
+    public string? InternalQuery { get; }
+    public string? Where { get; }
+    public string? SchemaName { get; }
+    public string? TableName { get; }
+    public string? ColumnName { get; }
+    public string? DataTypeName { get; }
+    public string? ConstraintName { get; }
+    public string? File { get; }
+    public string? Line { get; }
+    public string? Routine { get; }
+
+    public ErrorOrNoticeMessage(
         string severity, string invariantSeverity, string sqlState, string message,
         string? detail = null, string? hint = null, int position = 0, int internalPosition = 0, string? internalQuery = null, string? where = null,
         string? schemaName = null, string? tableName = null, string? columnName = null, string? dataTypeName = null, string? constraintName = null,
@@ -166,31 +184,5 @@ class ErrorOrNoticeMessage
         File = file;
         Line = line;
         Routine = routine;
-    }
-
-    /// <summary>
-    /// Error and notice message field codes
-    /// </summary>
-    internal enum ErrorFieldTypeCode : byte
-    {
-        Done = 0,
-        Severity = (byte) 'S',
-        InvariantSeverity = (byte) 'V',
-        Code = (byte) 'C',
-        Message = (byte) 'M',
-        Detail = (byte) 'D',
-        Hint = (byte) 'H',
-        Position = (byte) 'P',
-        InternalPosition = (byte) 'p',
-        InternalQuery = (byte) 'q',
-        Where = (byte) 'W',
-        SchemaName = (byte) 's',
-        TableName = (byte) 't',
-        ColumnName = (byte) 'c',
-        DataTypeName = (byte) 'd',
-        ConstraintName = (byte) 'n',
-        File = (byte) 'F',
-        Line = (byte) 'L',
-        Routine = (byte) 'R'
     }
 }

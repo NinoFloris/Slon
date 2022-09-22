@@ -102,7 +102,7 @@ class Test
         var parameterWriter = ResolveParameterWriter(parameter);
         if (parameterWriter.TryPrecomputeSize(parameter.FormatCode, parameter.Value, out var size))
         {
-            var p = new CommandParameter(parameter.Oid, parameter.FormatCode, MessageWriter.IntByteCount + size, parameter.Value);
+            var p = new CommandParameter(parameter.Oid, parameter.FormatCode, size, parameter.Value);
             return new KeyValuePair<CommandParameter, IParameterWriter>(p, parameterWriter);
         }
         else

@@ -3,6 +3,7 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO.Pipelines;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Buffers;
@@ -118,6 +119,7 @@ class PgV3Protocol : IDisposable
         MessageReader.ResumptionData? resumptionData = null;
         long consumed = 0;
         ReadOnlySequence<byte> sequence = default;
+        Exception? readerExn = null;
         do
         {
             if (consumed == 0)
@@ -129,10 +131,11 @@ class PgV3Protocol : IDisposable
             {
                 status = ReadCore(ref message, sequence, ref resumptionData, ref consumed);
             }
-            catch
+            catch(Exception ex)
             {
                 // Readers aren't supposed to throw, when we have logging do that here.
                 status = ReadStatus.InvalidData;
+                readerExn = ex;
             }
 
             switch (status)
@@ -143,7 +146,24 @@ class PgV3Protocol : IDisposable
                     consumed = 0;
                     break;
                 case ReadStatus.InvalidData:
-                    var exn = new Exception($"Protocol desync on message: {typeof(T).FullName}, expected different response.");
+                    // Try to read error response.
+                    Exception exn;
+                    if (readerExn is null && resumptionData?.Header.IsDefault == false && resumptionData.Value.Header.Code == BackendCode.ErrorResponse)
+                    {
+                        var errorResponse = new ErrorResponse();
+                        consumed -= resumptionData.Value.MessageIndex;
+                        // Let it start clean, as if it has to MoveNext for the first time.
+                        resumptionData = null;
+                        var errorResponseStatus = ReadCore(ref errorResponse, sequence, ref resumptionData, ref consumed);
+                        if (errorResponseStatus != ReadStatus.Done)
+                            exn = new Exception($"Unexpected error on message: {typeof(T).FullName}, could not read full error response, terminated connection.");
+                        else
+                            exn = new Exception($"Unexpected error on message: {typeof(T).FullName}, error message: {errorResponse.ErrorOrNoticeMessage.Message}.");
+                    }
+                    else
+                    {
+                        exn = new Exception($"Protocol desync on message: {typeof(T).FullName}, expected different response.", readerExn);
+                    }
                     _reader.Complete(exn);
                     throw exn;
                 case ReadStatus.AsyncResponse:
@@ -176,10 +196,12 @@ class PgV3Protocol : IDisposable
         return message;
 
         // As MessageReader is a ref struct we need a small method to create it and pass a reference.
-        static ReadStatus ReadCore(ref T message, in ReadOnlySequence<byte> sequence, ref MessageReader.ResumptionData? resumptionData, ref long consumed)
+        static ReadStatus ReadCore<TMessage>(ref TMessage message, in ReadOnlySequence<byte> sequence, ref MessageReader.ResumptionData? resumptionData, ref long consumed) where TMessage: IBackendMessage
         {
             var reader = resumptionData is null ? MessageReader.Create(sequence) :
                 consumed == 0 ? MessageReader.Resume(sequence, resumptionData.Value) : MessageReader.Create(sequence, resumptionData.Value, consumed);
+            if (resumptionData is null && consumed != 0)
+                reader.Reader.Advance(consumed);
             var status = message.Read(ref reader);
             consumed = reader.Consumed;
             if (status != ReadStatus.Done)
