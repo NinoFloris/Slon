@@ -57,12 +57,25 @@ class PgV3Protocol : IDisposable
                 return;
             }
 
+            int length = 0;
             try
             {
-                message.Write(new MessageWriter<HeaderBufferWriter>(_headerBufferWriter));
-                // Completed then do something.
-                _headerBufferWriter.SetCode((byte)message.FrontendCode);
-                _headerBufferWriter.CopyTo(_writer);
+                if (message.TryPrecomputeLength(out length))
+                {
+                    length += MessageWriter.IntByteCount;
+                    var writer = new MessageWriter<FlushableBufferWriter<PipeWriter>>(_writer);
+                    writer.WriteByte((byte)message.FrontendCode);
+                    writer.WriteInt(length);
+                    writer.Commit();
+                    message.Write(writer);
+                }
+                else
+                {
+                    message.Write(new MessageWriter<HeaderBufferWriter>(_headerBufferWriter));
+                    // Completed then do something.
+                    _headerBufferWriter.SetCode((byte)message.FrontendCode);
+                    _headerBufferWriter.CopyTo(_writer);
+                }
             }
             catch (Exception)
             {
@@ -71,7 +84,8 @@ class PgV3Protocol : IDisposable
             }
             finally
             {
-                _headerBufferWriter.Reset();
+                if (length == 0)
+                    _headerBufferWriter.Reset();
             }
         }
         finally

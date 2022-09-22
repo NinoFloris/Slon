@@ -29,6 +29,7 @@ interface IFrontendMessage
 {
     FrontendCode FrontendCode { get; }
     void Write<T>(MessageWriter<T> writer) where T : IBufferWriter<byte>;
+    bool TryPrecomputeLength(out int length);
 }
 
 interface IStreamingFrontendMessage: IFrontendMessage

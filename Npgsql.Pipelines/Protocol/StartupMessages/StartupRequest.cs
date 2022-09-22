@@ -23,7 +23,9 @@ class StartupRequest: IStreamingFrontendMessage
     }
 
     public FrontendCode FrontendCode => throw new NotSupportedException();
-    public void Write<T>(MessageWriter<T> writer) where T : IBufferWriter<byte> => throw new NotImplementedException();
+    public void Write<T>(MessageWriter<T> writer) where T : IBufferWriter<byte> => throw new NotSupportedException();
+    public bool TryPrecomputeLength(out int length) => throw new NotSupportedException();
+
     public ValueTask<FlushResult> WriteWithHeaderAsync<T>(MessageWriter<T> writer, long flushThreshold = 8096, CancellationToken cancellationToken = default) where T : IFlushableBufferWriter<byte>
     {
         // Getting the thread static is safe as long as we don't go async before returning it.

@@ -35,4 +35,13 @@ readonly struct Parse: IFrontendMessage
 
         writer.Commit();
     }
+
+    public bool TryPrecomputeLength(out int length)
+    {
+        length = MessageWriter.GetCStringByteCount(_preparedStatementName) +
+                 MessageWriter.GetCStringByteCount(_commandText) +
+                 MessageWriter.ShortByteCount +
+                 (MessageWriter.IntByteCount * _parameters.Count);
+        return true;
+    }
 }

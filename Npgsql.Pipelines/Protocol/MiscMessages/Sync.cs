@@ -8,4 +8,10 @@ readonly struct Sync : IFrontendMessage
     public void Write<T>(MessageWriter<T> writer) where T : IBufferWriter<byte>
     {
     }
+
+    public bool TryPrecomputeLength(out int length)
+    {
+        length = 0;
+        return true;
+    }
 }

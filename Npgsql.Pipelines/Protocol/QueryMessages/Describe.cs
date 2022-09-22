@@ -36,4 +36,10 @@ readonly struct Describe: IFrontendMessage
         writer.WriteCString(_name.Name);
         writer.Commit();
     }
+
+    public bool TryPrecomputeLength(out int length)
+    {
+        length = MessageWriter.ByteByteCount + MessageWriter.GetCStringByteCount(_name.Name);
+        return true;
+    }
 }

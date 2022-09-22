@@ -20,4 +20,10 @@ readonly struct Execute: IFrontendMessage
         writer.WriteInt(_rowCountLimit);
         writer.Commit();
     }
+
+    public bool TryPrecomputeLength(out int length)
+    {
+        length = MessageWriter.GetCStringByteCount(_portalName) + MessageWriter.IntByteCount;
+        return true;
+    }
 }

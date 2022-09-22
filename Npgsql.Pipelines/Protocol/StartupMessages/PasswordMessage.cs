@@ -21,6 +21,12 @@ class PasswordMessage : IFrontendMessage
         writer.WriteCString(_hashedPassword);
     }
 
+    public bool TryPrecomputeLength(out int length)
+    {
+        length = MessageWriter.GetCStringByteCount(_hashedPassword);
+        return true;
+    }
+
     string HashPassword(string username, string plainPassword, ReadOnlySpan<byte> salt)
     {
         if (plainPassword is null || salt.Length != 4)
