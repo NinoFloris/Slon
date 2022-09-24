@@ -16,7 +16,8 @@ static class PgEncoding
 
 static class MessageWriter
 {
-    public static int GetCStringByteCount(string value) => PgEncoding.UTF8.GetByteCount(value.AsSpan()) + 1;
+    public static int GetCStringByteCount(string value) =>
+        value is "" ? 1 : PgEncoding.UTF8.GetByteCount(value.AsSpan()) + 1;
     public const int IntByteCount = sizeof(int);
     public const int ShortByteCount = sizeof(short);
     public const int ByteByteCount = sizeof(byte);
@@ -107,7 +108,7 @@ struct MessageWriter<T> where T : IBufferWriter<byte>
 
     /// Commit and Flush on the underlying writer if threshold is reached.
     /// Commit is always executed, independent of the flush threshold being reached.
-    public ValueTask<FlushResult> FlushAsync(long flushThreshold = -1, CancellationToken cancellationToken = default)
+    public ValueTask<FlushResult> FlushAsync(long flushThreshold = -1, CancellationTokenOrTimeout cancellationToken = default)
     {
         if (Writer is not IFlushableBufferWriter<byte>)
             throw new NotSupportedException("Underlying writer is not flushable");

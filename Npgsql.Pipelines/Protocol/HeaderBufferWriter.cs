@@ -3,7 +3,6 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
-using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Buffers;
 
@@ -218,5 +217,5 @@ class HeaderBufferWriter: IFlushableBufferWriter<byte>
         }
     }
 
-    public ValueTask<FlushResult> FlushAsync(CancellationToken cancellationToken) => new(new FlushResult());
+    public ValueTask<FlushResult> FlushAsync(CancellationTokenOrTimeout cancellationToken) => new(new FlushResult());
 }

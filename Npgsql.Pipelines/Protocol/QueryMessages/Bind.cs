@@ -1,7 +1,6 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
-using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Buffers;
 
@@ -65,7 +64,7 @@ readonly struct Bind: IStreamingFrontendMessage
     public void Write<T>(MessageWriter<T> writer) where T : IBufferWriter<byte> => throw new NotSupportedException();
     public bool TryPrecomputeLength(out int length) => throw new NotSupportedException();
 
-    public async ValueTask<FlushResult> WriteWithHeaderAsync<T>(MessageWriter<T> writer, long flushThreshold = 8096, CancellationToken cancellationToken = default)
+    public async ValueTask<FlushResult> WriteWithHeaderAsync<T>(MessageWriter<T> writer, long flushThreshold = 8096, CancellationTokenOrTimeout cancellationToken = default)
         where T : IFlushableBufferWriter<byte>
     {
         writer.WriteByte((byte)FrontendCode);

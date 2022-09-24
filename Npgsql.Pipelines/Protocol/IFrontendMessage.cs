@@ -1,5 +1,4 @@
 using System.Buffers;
-using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Buffers;
 
@@ -34,5 +33,5 @@ interface IFrontendMessage
 
 interface IStreamingFrontendMessage: IFrontendMessage
 {
-    ValueTask<FlushResult> WriteWithHeaderAsync<T>(MessageWriter<T> writer, long flushThreshold = 8096, CancellationToken cancellationToken = default) where T : IFlushableBufferWriter<byte>;
+    ValueTask<FlushResult> WriteWithHeaderAsync<T>(MessageWriter<T> writer, long flushThreshold = 8096, CancellationTokenOrTimeout cancellationToken = default) where T : IFlushableBufferWriter<byte>;
 }

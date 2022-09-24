@@ -130,7 +130,7 @@ ref struct MessageReader
     /// <param name="resumptionData"></param>
     /// <param name="consumed"></param>
     /// <returns></returns>
-    public static MessageReader Create(in ReadOnlySequence<byte> sequence, in ResumptionData resumptionData, long consumed)
+    public static MessageReader Create(in ReadOnlySequence<byte> sequence, scoped in ResumptionData resumptionData, long consumed)
     {
         var reader = new MessageReader(sequence, new MessageStartOffset(resumptionData.MessageIndex));
         reader.Current = resumptionData.Header;
@@ -144,7 +144,7 @@ ref struct MessageReader
     /// <param name="sequence"></param>
     /// <param name="resumptionData"></param>
     /// <returns></returns>
-    public static MessageReader Resume(in ReadOnlySequence<byte> sequence, in ResumptionData resumptionData)
+    public static MessageReader Resume(in ReadOnlySequence<byte> sequence, scoped in ResumptionData resumptionData)
     {
         var reader = new MessageReader(sequence, new MessageStartOffset(-resumptionData.MessageIndex));
         reader.Current = resumptionData.Header;

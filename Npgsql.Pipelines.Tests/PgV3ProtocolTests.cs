@@ -13,12 +13,40 @@ public class PgV3ProtocolTests
     const string Database = "postgres";
 
     [Test]
-    public async Task SimpleQueryEmptyQuery()
+    public async Task PipeSimpleQueryAsync()
     {
         try
         {
-            var socket = await PgSocketConnection.ConnectAsync(IPEndPoint.Parse(EndPoint));
+            var socket = await PgPipeConnection.ConnectAsync(IPEndPoint.Parse(EndPoint));
             await PgV3Protocol.StartAsync(socket.Writer, socket.Reader, new ConnectionOptions { Username = Username, Password = Password, Database = Database });
+        }
+        catch(Exception ex)
+        {
+            throw;
+        }
+    }
+
+    [Test]
+    public async Task StreamSimpleQueryAsync()
+    {
+        try
+        {
+            var socket = await PgStreamConnection.ConnectAsync(IPEndPoint.Parse(EndPoint));
+            await PgV3Protocol.StartAsync(socket.Writer, socket.Reader, new ConnectionOptions { Username = Username, Password = Password, Database = Database });
+        }
+        catch(Exception ex)
+        {
+            throw;
+        }
+    }
+
+    [Test]
+    public void StreamSimpleQuery()
+    {
+        try
+        {
+            var socket = PgStreamConnection.Connect(IPEndPoint.Parse(EndPoint));
+            PgV3Protocol.Start(socket.Writer, socket.Reader, new ConnectionOptions { Username = Username, Password = Password, Database = Database });
         }
         catch(Exception ex)
         {

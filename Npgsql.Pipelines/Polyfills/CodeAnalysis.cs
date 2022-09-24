@@ -5,12 +5,13 @@ using System.Diagnostics.CodeAnalysis;
 
 namespace System.Diagnostics.CodeAnalysis
 {
-#if NETSTANDARD2_0
+#if !NET7_0_OR_GREATER
     [AttributeUsage(AttributeTargets.Constructor, AllowMultiple = false, Inherited = false)]
     sealed class SetsRequiredMembersAttribute : Attribute
     {
     }
-
+#endif
+#if NETSTANDARD2_0
     [AttributeUsageAttribute(AttributeTargets.Field | AttributeTargets.Parameter | AttributeTargets.Property)]
     sealed class AllowNullAttribute : Attribute
     {
@@ -172,11 +173,15 @@ namespace System.Diagnostics.CodeAnalysis
 #endif
 }
 
-#if !NET5_0_OR_GREATER
 namespace System.Runtime.CompilerServices
 {
-    internal static class IsExternalInit {}
+#if !NET5_0_OR_GREATER
 
+    internal static class IsExternalInit {}
+#endif
+
+
+#if !NET7_0_OR_GREATER
     [AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct | AttributeTargets.Field | AttributeTargets.Property, AllowMultiple = false, Inherited = false)]
     sealed class RequiredMemberAttribute : Attribute
     { }
@@ -209,5 +214,5 @@ namespace System.Runtime.CompilerServices
         /// </summary>
         public const string RequiredMembers = nameof(RequiredMembers);
     }
-}
 #endif
+}
