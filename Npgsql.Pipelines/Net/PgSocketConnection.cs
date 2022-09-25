@@ -102,9 +102,9 @@ sealed class PgPipeConnection: PgSocketConnection, IDisposable
     const int MaxWriteBufferingOnPipe = 1024 * 1024;
     const int ResumeWriteBufferingOnPipe = MaxWriteBufferingOnPipe / 2;
     static PipeScheduler IOScheduler { get; } = PipeScheduler.Inline;
-    static PipeOptions DefaultSendPipeOptions { get; } =
+    static System.IO.Pipelines.PipeOptions DefaultSendPipeOptions { get; } =
         new(null, IOScheduler, PipeScheduler.Inline, MaxWriteBufferingOnPipe, ResumeWriteBufferingOnPipe, DefaultReaderSegmentSize, false);
-    static PipeOptions DefaultReceivePipeOptions { get; } =
+    static System.IO.Pipelines.PipeOptions DefaultReceivePipeOptions { get; } =
         new(null, PipeScheduler.Inline, IOScheduler, useSynchronizationContext: false);
 
     public static async ValueTask<PgPipeConnection> ConnectAsync(EndPoint endPoint, CancellationToken cancellationToken = default)

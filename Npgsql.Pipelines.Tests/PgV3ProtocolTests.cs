@@ -18,7 +18,7 @@ public class PgV3ProtocolTests
         try
         {
             var socket = await PgPipeConnection.ConnectAsync(IPEndPoint.Parse(EndPoint));
-            await PgV3Protocol.StartAsync(socket.Writer, socket.Reader, new ConnectionOptions { Username = Username, Password = Password, Database = Database });
+            await PgV3Protocol.StartAsync(socket.Writer, socket.Reader, new PgOptions { Username = Username, Password = Password, Database = Database });
         }
         catch(Exception ex)
         {
@@ -32,7 +32,7 @@ public class PgV3ProtocolTests
         try
         {
             var socket = await PgStreamConnection.ConnectAsync(IPEndPoint.Parse(EndPoint));
-            await PgV3Protocol.StartAsync(socket.Writer, socket.Reader, new ConnectionOptions { Username = Username, Password = Password, Database = Database });
+            await PgV3Protocol.StartAsync(socket.Writer, socket.Reader, new PgOptions { Username = Username, Password = Password, Database = Database });
         }
         catch(Exception ex)
         {
@@ -46,7 +46,7 @@ public class PgV3ProtocolTests
         try
         {
             var socket = PgStreamConnection.Connect(IPEndPoint.Parse(EndPoint));
-            PgV3Protocol.Start(socket.Writer, socket.Reader, new ConnectionOptions { Username = Username, Password = Password, Database = Database });
+            PgV3Protocol.Start(socket.Writer, socket.Reader, new PgOptions { Username = Username, Password = Password, Database = Database });
         }
         catch(Exception ex)
         {

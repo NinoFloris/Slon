@@ -132,6 +132,12 @@ sealed class SimplePipeReader
     [DoesNotReturn]
     void ThrowAdvanceOutOfBounds() => throw new ArgumentOutOfRangeException("count", "Cannot read past buffer length");
 
+    public ValueTask CompleteAsync(Exception? exception = null)
+    {
+        _completed = true;
+        return _reader.CompleteAsync(exception);
+    }
+
     public void Complete(Exception? exception = null)
     {
         _completed = true;

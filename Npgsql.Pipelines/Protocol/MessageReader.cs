@@ -165,7 +165,12 @@ ref struct MessageReader
             return false;
 
         if (!MessageHeader.TryParse(ref Reader, out var code, out var length))
+        {
+            // This is here to make sure resumption data accurately reflects that we are on a new message, we just can't read it yet.
+            _messageStart = default;
+            Current = default;
             return false;
+        }
 
         _messageStart = new MessageStartOffset(GetOffsetShim(Reader.Position));
         Current = new MessageHeader(code, length);
@@ -219,6 +224,8 @@ ref struct MessageReader
         public MessageHeader Header { get; }
         // Where we need to start relative to the message in Header.
         public uint MessageIndex { get; }
+
+        public bool IsDefault => Header.IsDefault;
     }
 }
 

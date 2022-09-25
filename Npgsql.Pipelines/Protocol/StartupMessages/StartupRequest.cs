@@ -12,7 +12,7 @@ class StartupRequest: IStreamingFrontendMessage
 {
     readonly List<KeyValuePair<string, string>> _parameters;
 
-    public StartupRequest(ConnectionOptions options)
+    public StartupRequest(PgOptions options)
     {
         _parameters = new(){
             new KeyValuePair<string, string>("user", options.Username),
