@@ -633,6 +633,10 @@ namespace System.IO.Pipelines
 
                     return new FlushResult(isCanceled: false, isCompleted: false);
                 }
+                catch (Exception ex) when (ex is ObjectDisposedException || (ex is IOException ioEx && ioEx.InnerException is ObjectDisposedException))
+                {
+                    return new FlushResult(isCompleted: true, isCanceled: false);
+                }
                 catch (OperationCanceledException)
                 {
                     // Remove the cancellation token such that the next time Flush is called
@@ -672,7 +676,7 @@ namespace System.IO.Pipelines
             }
 
             BufferSegment? segment = _head;
-            int start = -1;
+            long start = -1;
             var timeoutMillis = Timeout.Infinite;
             var previousTimeout = timeoutMillis;
             try
@@ -688,7 +692,7 @@ namespace System.IO.Pipelines
                     previousTimeout = _writeTimeout ?? InnerStream.WriteTimeout;
                     if (timeoutMillis != previousTimeout && timeoutMillis != 0 && timeoutMillis != Timeout.Infinite)
                     {
-                        start = Environment.TickCount;
+                        start = TickCount64Shim.Get();
                         InnerStream.WriteTimeout = timeoutMillis;
                     }
                 }
@@ -702,9 +706,10 @@ namespace System.IO.Pipelines
                     {
                         if (start != -1)
                         {
-                            var remainingTimeout = start + timeoutMillis - start;
-                            if (remainingTimeout < 1)
-                                return new(isCompleted: false, isCanceled: true);
+                            var elapsed = TickCount64Shim.Get() - start;
+                            if (elapsed >= timeoutMillis)
+                                throw new TimeoutException("The operation timed out.");
+                            var remainingTimeout = timeoutMillis - (int)elapsed;
                             // Given this is rather expensive we only begin to do it once we start deviating fairly seriously (under 75%).
                             if (remainingTimeout / timeoutMillis * 100 <= 75)
                                 InnerStream.WriteTimeout = remainingTimeout;
@@ -718,13 +723,17 @@ namespace System.IO.Pipelines
                             InnerStream.Write(returnSegment.Memory);
 #endif
                         }
-                        catch (IOException ex) when (ex.InnerException is not ObjectDisposedException)
+                        catch (Exception ex) when (ex is ObjectDisposedException || (ex is IOException ioEx && ioEx.InnerException is ObjectDisposedException))
+                        {
+                            return new FlushResult(isCompleted: true, isCanceled: false);
+                        }
+                        catch (IOException ex)
                         {
                             // We'll assume that if we're past our deadline a timeout was the reason for this exception, it sucks indeed.
                             // Stream has no contract to communicate an IOException was specifically because of a read/write/close timeout.
                             // This either means baking in all the different patterns (IOException wrapping SocketException etc.), or doing this.
-                            if (start != -1 && start + timeoutMillis - start < 1)
-                                return new(isCompleted: false, isCanceled: true);
+                            if (start != -1 && TickCount64Shim.Get() - start >= timeoutMillis)
+                                throw new TimeoutException("The operation has timed out", ex);
                             throw;
                         }
                     }

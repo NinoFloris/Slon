@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 namespace Npgsql.Pipelines;
@@ -38,6 +39,19 @@ static class UnsafeShim
         value = default!;
 #else
         Unsafe.SkipInit(out value);
+#endif
+    }
+}
+
+static class TickCount64Shim
+{
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static long Get()
+    {
+    #if NETSTANDARD2_0
+        return Stopwatch.GetTimestamp() / (Stopwatch.Frequency / 1000);
+#else
+        return Environment.TickCount64;
 #endif
     }
 }

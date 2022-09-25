@@ -14,6 +14,7 @@ namespace Npgsql.Pipelines;
 
 record ConnectionOptions
 {
+    public TimeSpan ReadTimeout { get; } = TimeSpan.FromSeconds(1);
     public int ReaderSegmentSize { get; init; } = 8096;
     public int WriterSegmentSize { get; init; } = 8096;
 }
@@ -149,11 +150,14 @@ class PgV3Protocol : IDisposable
         long consumed = 0;
         Exception? readerExn = null;
         var isAsync = IsAsync(cancellationToken);
+        // Take the smaller of the two.
+        var readTimeout = isAsync && cancellationToken.Timeout != Timeout.InfiniteTimeSpan && cancellationToken.Timeout < _connectionOptions.ReadTimeout ? cancellationToken.Timeout : _connectionOptions.ReadTimeout;
+        var start = isAsync ? -1 : TickCount64Shim.Get();
         do
         {
             var buffer = isAsync
                 ? await ReadAsync(ComputeMinimumSize(resumptionData), cancellationToken.CancellationToken).ConfigureAwait(false)
-                : Read(ComputeMinimumSize(resumptionData), cancellationToken.Timeout);
+                : Read(ComputeMinimumSize(resumptionData), readTimeout);
 
             try
             {
@@ -201,6 +205,12 @@ class PgV3Protocol : IDisposable
                         }
                     } while (asyncResponseStatus != ReadStatus.Done);
                     break;
+            }
+
+            if (start != -1 && status != ReadStatus.Done)
+            {
+                var elapsed = TimeSpan.FromMilliseconds(TickCount64Shim.Get() - start);
+                readTimeout = elapsed < _connectionOptions.ReadTimeout ? elapsed : _connectionOptions.ReadTimeout;
             }
         } while (status != ReadStatus.Done);
 
@@ -288,12 +298,25 @@ class PgV3Protocol : IDisposable
             throw new NotImplementedException();
         }
 
-        ValueTask<ReadOnlySequence<byte>> ReadAsync(int minimumSize, CancellationToken cancellationToken)
+        async ValueTask<ReadOnlySequence<byte>> ReadAsync(int minimumSize, CancellationToken cancellationToken)
         {
             if (!_reader.TryRead(minimumSize, out var buffer))
-                return _reader.ReadAtLeastAsync(minimumSize, cancellationToken);
+            {
+                // TODO Could be cached (resettable token source).
+                var timeoutSource = new CancellationTokenSource();
+                using var cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(timeoutSource.Token, cancellationToken);
+                timeoutSource.CancelAfter(_connectionOptions.ReadTimeout);
+                try
+                {
+                    return await _reader.ReadAtLeastAsync(minimumSize, cancellationTokenSource.Token);
+                }
+                catch (OperationCanceledException ex) when (timeoutSource.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                {
+                    throw new TimeoutException("The operation has timed out", ex);
+                }
+            }
 
-            return new(buffer);
+            return buffer;
         }
 
         ReadOnlySequence<byte> Read(int minimumSize, TimeSpan timeout)
@@ -331,7 +354,7 @@ class PgV3Protocol : IDisposable
             }
 
             var portal = string.Empty;
-            await conn.WriteMessageAsync(new Parse("SELECT ' from generate_series(1, 10)", new ArraySegment<CommandParameter>())).ConfigureAwait(false);
+            await conn.WriteMessageAsync(new Parse("SELECT pg_sleep(10)", new ArraySegment<CommandParameter>())).ConfigureAwait(false);
             await conn.WriteMessageAsync(new Bind(portal, new ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>>(), ResultColumnCodes.CreateOverall(FormatCode.Binary))).ConfigureAwait(false);
             await conn.WriteMessageAsync(new Describe(DescribeName.CreateForPortal(portal))).ConfigureAwait(false);
             await conn.WriteMessageAsync(new Execute(portal)).ConfigureAwait(false);
@@ -395,7 +418,7 @@ class PgV3Protocol : IDisposable
             }
 
             var portal = string.Empty;
-            conn.WriteMessage(new Parse("SELECT ' from generate_series(1, 10)", new ArraySegment<CommandParameter>()));
+            conn.WriteMessage(new Parse("SELECT pg_sleep(10)", new ArraySegment<CommandParameter>()));
             conn.WriteMessage(new Bind(portal, new ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>>(), ResultColumnCodes.CreateOverall(FormatCode.Binary)));
             conn.WriteMessage(new Describe(DescribeName.CreateForPortal(portal)));
             conn.WriteMessage(new Execute(portal));

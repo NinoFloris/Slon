@@ -53,9 +53,13 @@ static class PipeReaderSyncSupportExtensions
         if (minimumSize < 0)
             ThrowArgumentOutOfRangeException();
 
-        var start = -1;
+        long start = -1;
+        var timeoutMillis = Timeout.Infinite;
         if (timeout != TimeSpan.Zero && timeout != Timeout.InfiniteTimeSpan)
-            start = Environment.TickCount;
+        {
+            start = TickCount64Shim.Get();
+            timeoutMillis = (int)timeout.TotalMilliseconds;
+        }
 
         PipeReader? pipeReader = null;
         while (true)
@@ -71,11 +75,10 @@ static class PipeReaderSyncSupportExtensions
             pipeReader.AdvanceTo(buffer.Start, buffer.End);
             if (start != -1)
             {
-                var remaining = (long)timeout.TotalMilliseconds - start;
-                if (remaining > 0)
-                    timeout = TimeSpan.FromMilliseconds(remaining);
-                else
-                    return new ReadResult(buffer: default, isCompleted: false, isCanceled: true);
+                var elapsed = TickCount64Shim.Get() - start;
+                if (elapsed >= timeoutMillis)
+                    throw new TimeoutException("The operation timed out.");
+                timeout = TimeSpan.FromMilliseconds(timeoutMillis - elapsed);
             }
         }
     }

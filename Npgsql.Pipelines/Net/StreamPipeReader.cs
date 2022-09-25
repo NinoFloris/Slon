@@ -27,7 +27,7 @@ class StreamPipeReader: PipeReader, IPipeReaderSyncSupport
         int read;
         var timeoutMillis = Timeout.Infinite;
         var previousTimeout = timeoutMillis;
-        var start = -1;
+        long start = -1;
         try
         {
             // To map conceptually to pipelines, only one read can be active.
@@ -41,7 +41,7 @@ class StreamPipeReader: PipeReader, IPipeReaderSyncSupport
                 previousTimeout = _readTimeout ?? _stream.ReadTimeout;
                 if (timeoutMillis != previousTimeout && timeoutMillis != 0 && timeoutMillis != Timeout.Infinite)
                     _stream.ReadTimeout = timeoutMillis;
-                start = Environment.TickCount;
+                start = TickCount64Shim.Get();
             }
 
             try
@@ -57,13 +57,13 @@ class StreamPipeReader: PipeReader, IPipeReaderSyncSupport
             {
                 return new(buffer: default, isCompleted: true, isCanceled: false);
             }
-            catch (IOException)
+            catch (IOException ex)
             {
                 // We'll assume that if we're past our deadline a timeout was the reason for this exception, it sucks indeed.
                 // Stream has no contract to communicate an IOException was specifically because of a read/write/close timeout.
                 // This either means baking in all the different patterns (IOException wrapping SocketException etc.), or doing this.
-                if (start != -1 && start + timeoutMillis - start < 1)
-                    return new (buffer: default, isCompleted: false, isCanceled: true);
+                if (start != -1 && TickCount64Shim.Get() - start >= timeoutMillis)
+                    throw new TimeoutException("The operation has timed out", ex);
                 throw;
             }
         }
