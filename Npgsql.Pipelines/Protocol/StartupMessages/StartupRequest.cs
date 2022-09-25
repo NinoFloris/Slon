@@ -26,7 +26,7 @@ class StartupRequest: IStreamingFrontendMessage
     public void Write<T>(MessageWriter<T> writer) where T : IBufferWriter<byte> => throw new NotSupportedException();
     public bool TryPrecomputeLength(out int length) => throw new NotSupportedException();
 
-    public ValueTask<FlushResult> WriteWithHeaderAsync<T>(MessageWriter<T> writer, long flushThreshold = 8096, CancellationTokenOrTimeout cancellationToken = default) where T : IFlushableBufferWriter<byte>
+    public ValueTask<FlushResult> WriteWithHeaderAsync<T>(MessageWriter<T> writer, FlushControl flushControl, CancellationToken cancellationToken = default) where T : IFlushableBufferWriter<byte>
     {
         // Getting the thread static is safe as long as we don't go async before returning it.
         var memWriter = new MessageWriter<MemoryBufferWriter>(MemoryBufferWriter.Get());
@@ -54,6 +54,6 @@ class StartupRequest: IStreamingFrontendMessage
             MemoryBufferWriter.Return(memWriter.Writer);
         }
 
-        return writer.FlushAsync(flushThreshold, cancellationToken);
+        return writer.FlushAsync(flushControl);
     }
 }

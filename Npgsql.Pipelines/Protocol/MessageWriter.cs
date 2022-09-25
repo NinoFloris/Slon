@@ -60,7 +60,7 @@ struct MessageWriter<T> where T : IBufferWriter<byte>
         _writer.WriteByte(0);
     }
 
-    public async ValueTask<FlushResult> WriteHugeCStringAsync(string value)
+    public async ValueTask<FlushResult> WriteHugeCStringAsync(string value, FlushControl flushControl)
     {
         var offset = 0;
         Encoder? encoder = null;
@@ -68,10 +68,10 @@ struct MessageWriter<T> where T : IBufferWriter<byte>
         while (offset < value.Length)
         {
             WriteChunk();
-            await FlushAsync();
+            await FlushAsync(flushControl);
         }
         _writer.WriteByte(0);
-        return await FlushAsync();
+        return await FlushAsync(flushControl);
 
         void WriteChunk()
         {
@@ -108,18 +108,25 @@ struct MessageWriter<T> where T : IBufferWriter<byte>
 
     /// Commit and Flush on the underlying writer if threshold is reached.
     /// Commit is always executed, independent of the flush threshold being reached.
-    public ValueTask<FlushResult> FlushAsync(long flushThreshold = -1, CancellationTokenOrTimeout cancellationToken = default)
+    public ValueTask<FlushResult> FlushAsync(FlushControl flushControl)
     {
         if (Writer is not IFlushableBufferWriter<byte>)
             throw new NotSupportedException("Underlying writer is not flushable");
 
         Commit();
 
-        if (flushThreshold != -1 && flushThreshold > UnflushedBytes)
+        if (flushControl.BytesThreshold != -1 && flushControl.BytesThreshold > UnflushedBytes)
             return new ValueTask<FlushResult>(new FlushResult());
 
         _flushedBytes = _writer.BytesCommitted;
 
-        return ((IFlushableBufferWriter<byte>)Writer).FlushAsync(cancellationToken);
+        try
+        {
+            return ((IFlushableBufferWriter<byte>)Writer).FlushAsync(flushControl.GetFlushToken());
+        }
+        finally
+        {
+            flushControl.CompleteFlush();
+        }
     }
 }

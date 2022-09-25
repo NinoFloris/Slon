@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Buffers;
 
@@ -63,8 +64,7 @@ readonly struct Bind: IStreamingFrontendMessage
     public FrontendCode FrontendCode => FrontendCode.Bind;
     public void Write<T>(MessageWriter<T> writer) where T : IBufferWriter<byte> => throw new NotSupportedException();
     public bool TryPrecomputeLength(out int length) => throw new NotSupportedException();
-
-    public async ValueTask<FlushResult> WriteWithHeaderAsync<T>(MessageWriter<T> writer, long flushThreshold = 8096, CancellationTokenOrTimeout cancellationToken = default)
+    public async ValueTask<FlushResult> WriteWithHeaderAsync<T>(MessageWriter<T> writer, FlushControl flushControl, CancellationToken cancellationToken = default)
         where T : IFlushableBufferWriter<byte>
     {
         writer.WriteByte((byte)FrontendCode);
@@ -84,13 +84,13 @@ readonly struct Bind: IStreamingFrontendMessage
             if (FrontendMessageDebug.Enabled && writer.UnflushedBytes - lastUnflushed > p.Key.Length)
                 throw new InvalidOperationException("Parameter output too big, should have been caught in the parameter writer itself.");
 
-            var result = await writer.FlushAsync(flushThreshold, cancellationToken);
+            var result = await writer.FlushAsync(flushControl);
             if (result.IsCanceled || result.IsCompleted) return result;
             lastUnflushed = writer.UnflushedBytes;
         }
 
         WriteResultColumnCodes(ref writer);
-        return await writer.FlushAsync(flushThreshold, cancellationToken);
+        return await writer.FlushAsync(flushControl);
     }
 
     int PrecomputeMessageLength()
