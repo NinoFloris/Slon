@@ -1,15 +1,16 @@
 using System;
 using System.Buffers;
+using System.Collections.Generic;
 
 namespace Npgsql.Pipelines.QueryMessages;
 
 readonly struct Parse: IFrontendMessage
 {
     readonly string _commandText;
-    readonly ArraySegment<CommandParameter> _parameters;
+    readonly ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> _parameters;
     readonly string _preparedStatementName;
 
-    public Parse(string commandText, ArraySegment<CommandParameter> parameters, string? preparedStatementName = null)
+    public Parse(string commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, string? preparedStatementName = null)
     {
         if (_parameters.Count > short.MaxValue)
             throw new InvalidOperationException($"Cannot accept more than short.MaxValue ({short.MaxValue} parameters.");
@@ -30,7 +31,7 @@ readonly struct Parse: IFrontendMessage
         for (var i = _parameters.Offset; i < _parameters.Count; i++)
         {
             var p = _parameters.Array![i];
-            writer.WriteInt(p.Oid.Value);
+            writer.WriteInt(p.Key.Oid.Value);
         }
 
         writer.Commit();

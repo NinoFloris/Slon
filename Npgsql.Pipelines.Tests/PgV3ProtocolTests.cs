@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Threading.Tasks;
 using NUnit.Framework;
@@ -12,13 +13,17 @@ public class PgV3ProtocolTests
     const string Password = "postgres123";
     const string Database = "postgres";
 
+    static PgOptions PgOptions { get; } = new() { Username = Username, Password = Password, Database = Database };
+    static ProtocolOptions Options { get; } = new() { ReadTimeout = TimeSpan.FromSeconds(5) };
+
     [Test]
     public async Task PipeSimpleQueryAsync()
     {
         try
         {
             var socket = await PgPipeConnection.ConnectAsync(IPEndPoint.Parse(EndPoint));
-            await PgV3Protocol.StartAsync(socket.Writer, socket.Reader, new PgOptions { Username = Username, Password = Password, Database = Database });
+            var conn = await PgV3Protocol.StartAsync(socket.Writer, socket.Reader, PgOptions, Options);
+            await conn.ExecuteQueryAsync("SELECT pg_sleep(2)", ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>>.Empty);
         }
         catch(Exception ex)
         {
@@ -32,7 +37,8 @@ public class PgV3ProtocolTests
         try
         {
             var socket = await PgStreamConnection.ConnectAsync(IPEndPoint.Parse(EndPoint));
-            await PgV3Protocol.StartAsync(socket.Writer, socket.Reader, new PgOptions { Username = Username, Password = Password, Database = Database });
+            var conn = await PgV3Protocol.StartAsync(socket.Writer, socket.Reader, PgOptions, Options);
+            await conn.ExecuteQueryAsync("SELECT pg_sleep(2)", ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>>.Empty);
         }
         catch(Exception ex)
         {
@@ -46,7 +52,8 @@ public class PgV3ProtocolTests
         try
         {
             var socket = PgStreamConnection.Connect(IPEndPoint.Parse(EndPoint));
-            PgV3Protocol.Start(socket.Writer, socket.Reader, new PgOptions { Username = Username, Password = Password, Database = Database });
+            var conn = PgV3Protocol.Start(socket.Writer, socket.Reader, PgOptions, Options);
+            conn.ExecuteQuery("SELECT pg_sleep(2)", ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>>.Empty);
         }
         catch(Exception ex)
         {

@@ -12,12 +12,19 @@ using Npgsql.Pipelines.StartupMessages;
 
 namespace Npgsql.Pipelines;
 
-record ConnectionOptions
+record ProtocolOptions
 {
-    public TimeSpan ReadTimeout { get; } = TimeSpan.FromSeconds(1);
-    public TimeSpan WriteTimeout { get; } = TimeSpan.FromSeconds(1);
+    public TimeSpan ReadTimeout { get; init; } = TimeSpan.FromSeconds(1);
+    public TimeSpan WriteTimeout { get; init;  } = TimeSpan.FromSeconds(1);
+    /// <summary>
+    /// CommandTimeout affects all written and read protocol messages.
+    /// Default is infinite, where behavior purely relies on read and write timeouts.
+    /// </summary>
+    public TimeSpan CommandTimeout { get; init; } = Timeout.InfiniteTimeSpan;
     public int ReaderSegmentSize { get; init; } = 8096;
     public int WriterSegmentSize { get; init; } = 8096;
+
+    public Func<DbParameter, KeyValuePair<CommandParameter, IParameterWriter>> ParameterWriterLookup { get; init; }
 }
 
 record PgOptions
@@ -29,7 +36,8 @@ record PgOptions
 
 class PgV3Protocol : IDisposable
 {
-    readonly ConnectionOptions _connectionOptions;
+    static ProtocolOptions DefaultPipeOptions { get; } = new();
+    readonly ProtocolOptions _protocolOptions;
     readonly SimplePipeReader _reader;
     readonly FlushableBufferWriter<PipeWriter> _writer;
     readonly FlushableBufferWriter<IPipeWriterSyncSupport> _writerSync;
@@ -40,17 +48,17 @@ class PgV3Protocol : IDisposable
     HeaderBufferWriter? _headerBufferWriter;
     readonly ResettableFlushControl _flushControl;
 
-    PgV3Protocol(IPipeWriterSyncSupport writer, IPipeReaderSyncSupport reader, ConnectionOptions connectionOptions)
+    PgV3Protocol(IPipeWriterSyncSupport writer, IPipeReaderSyncSupport reader, ProtocolOptions? protocolOptions = null)
     {
-        _connectionOptions = connectionOptions;
-        _flushControl = new ResettableFlushControl(_connectionOptions.WriteTimeout, connectionOptions.WriterSegmentSize);
+        _protocolOptions = protocolOptions ?? DefaultPipeOptions;
+        _flushControl = new ResettableFlushControl(_protocolOptions.WriteTimeout, _protocolOptions.WriterSegmentSize);
         _writer = FlushableBufferWriter.Create(writer.PipeWriter);
         _writerSync = FlushableBufferWriter.Create(writer);
         _reader = new SimplePipeReader(reader);
     }
 
-    PgV3Protocol(PipeWriter writer, PipeReader reader, ConnectionOptions connectionOptions)
-        : this(new AsyncOnlyPipeWriter(writer), new AsyncOnlyPipeReader(reader), connectionOptions)
+    PgV3Protocol(PipeWriter writer, PipeReader reader, ProtocolOptions protocolOptions)
+        : this(new AsyncOnlyPipeWriter(writer), new AsyncOnlyPipeReader(reader), protocolOptions)
     { }
 
     public ValueTask WriteMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IFrontendMessage
@@ -179,7 +187,7 @@ class PgV3Protocol : IDisposable
         Exception? readerExn = null;
         var isAsync = cancellationToken.IsCancellationToken;
         // Take the smaller of the two.
-        var readTimeout = isAsync && cancellationToken.Timeout != Timeout.InfiniteTimeSpan && cancellationToken.Timeout < _connectionOptions.ReadTimeout ? cancellationToken.Timeout : _connectionOptions.ReadTimeout;
+        var readTimeout = isAsync && cancellationToken.Timeout != Timeout.InfiniteTimeSpan && cancellationToken.Timeout < _protocolOptions.ReadTimeout ? cancellationToken.Timeout : _protocolOptions.ReadTimeout;
         var start = isAsync ? -1 : TickCount64Shim.Get();
         do
         {
@@ -238,7 +246,7 @@ class PgV3Protocol : IDisposable
             if (start != -1 && status != ReadStatus.Done)
             {
                 var elapsed = TimeSpan.FromMilliseconds(TickCount64Shim.Get() - start);
-                readTimeout = readTimeout - elapsed < _connectionOptions.ReadTimeout ? elapsed : _connectionOptions.ReadTimeout;
+                readTimeout = readTimeout - elapsed < _protocolOptions.ReadTimeout ? elapsed : _protocolOptions.ReadTimeout;
             }
         } while (status != ReadStatus.Done);
 
@@ -291,7 +299,7 @@ class PgV3Protocol : IDisposable
                 return remainingMessage;
 
             // Don't ask for the full message given the reader may want to stream it, just ask for more data.
-            return remainingMessage < _connectionOptions.ReaderSegmentSize ? remainingMessage : _connectionOptions.ReaderSegmentSize;
+            return remainingMessage < _protocolOptions.ReaderSegmentSize ? remainingMessage : _protocolOptions.ReaderSegmentSize;
         }
 
         [DoesNotReturn]
@@ -333,7 +341,7 @@ class PgV3Protocol : IDisposable
                 // TODO should be cached.
                 var timeoutSource = new CancellationTokenSource();
                 using var cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(timeoutSource.Token, cancellationToken);
-                timeoutSource.CancelAfter(_connectionOptions.ReadTimeout);
+                timeoutSource.CancelAfter(_protocolOptions.ReadTimeout);
                 try
                 {
                     return await _reader.ReadAtLeastAsync(minimumSize, cancellationTokenSource.Token);
@@ -381,23 +389,6 @@ class PgV3Protocol : IDisposable
                     throw new Exception();
             }
 
-            var portal = string.Empty;
-            await conn.WriteMessageAsync(new Parse("SELECT pg_sleep(10)", new ArraySegment<CommandParameter>())).ConfigureAwait(false);
-            await conn.WriteMessageAsync(new Bind(portal, new ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>>(), ResultColumnCodes.CreateOverall(FormatCode.Binary))).ConfigureAwait(false);
-            await conn.WriteMessageAsync(new Describe(DescribeName.CreateForPortal(portal))).ConfigureAwait(false);
-            await conn.WriteMessageAsync(new Execute(portal)).ConfigureAwait(false);
-            await conn.WriteMessageAsync(new Sync()).ConfigureAwait(false);
-            await conn.ReadMessageAsync<ParseComplete>().ConfigureAwait(false);
-            await conn.ReadMessageAsync<BindComplete>().ConfigureAwait(false);
-            var description = await conn.ReadMessageAsync(new RowDescription(conn._fieldDescriptionPool)).ConfigureAwait(false);
-
-            var dataReader = new DataReader(conn, description);
-            while (await dataReader.ReadAsync().ConfigureAwait(false))
-            {
-                var i = await dataReader.GetFieldValueAsync<int>().ConfigureAwait(false);;
-                i = i;
-            }
-
             return conn;
         }
         catch (Exception ex)
@@ -407,23 +398,23 @@ class PgV3Protocol : IDisposable
         }
     }
 
-    public static ValueTask<PgV3Protocol> StartAsync(PipeWriter writer, PipeReader reader, PgOptions options, ConnectionOptions? pipeOptions = null)
+    public static ValueTask<PgV3Protocol> StartAsync(PipeWriter writer, PipeReader reader, PgOptions options, ProtocolOptions? pipeOptions = null)
     {
-        var conn = new PgV3Protocol(writer, reader, pipeOptions ?? new ConnectionOptions());
+        var conn = new PgV3Protocol(writer, reader, pipeOptions);
         return StartAsyncCore(conn, options);
     }
 
-    public static ValueTask<PgV3Protocol> StartAsync(IPipeWriterSyncSupport writer, IPipeReaderSyncSupport reader, PgOptions options, ConnectionOptions? pipeOptions = null)
+    public static ValueTask<PgV3Protocol> StartAsync(IPipeWriterSyncSupport writer, IPipeReaderSyncSupport reader, PgOptions options, ProtocolOptions? pipeOptions = null)
     {
-        var conn = new PgV3Protocol(writer, reader, pipeOptions ?? new ConnectionOptions());
+        var conn = new PgV3Protocol(writer, reader, pipeOptions);
         return StartAsyncCore(conn, options);
     }
 
-    public static PgV3Protocol Start(IPipeWriterSyncSupport writer, IPipeReaderSyncSupport reader, PgOptions options, ConnectionOptions? pipeOptions = null)
+    public static PgV3Protocol Start(IPipeWriterSyncSupport writer, IPipeReaderSyncSupport reader, PgOptions options, ProtocolOptions? pipeOptions = null)
     {
         try
         {
-            var conn = new PgV3Protocol(writer, reader, pipeOptions ?? new ConnectionOptions());
+            var conn = new PgV3Protocol(writer, reader, pipeOptions);
             conn.WriteMessage(new StartupRequest(options));
             var msg = conn.ReadMessage(new AuthenticationResponse());
             switch (msg.AuthenticationType)
@@ -445,23 +436,6 @@ class PgV3Protocol : IDisposable
                     throw new Exception();
             }
 
-            var portal = string.Empty;
-            conn.WriteMessage(new Parse("SELECT pg_sleep(10)", new ArraySegment<CommandParameter>()));
-            conn.WriteMessage(new Bind(portal, new ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>>(), ResultColumnCodes.CreateOverall(FormatCode.Binary)));
-            conn.WriteMessage(new Describe(DescribeName.CreateForPortal(portal)));
-            conn.WriteMessage(new Execute(portal));
-            conn.WriteMessage(new Sync());
-            conn.ReadMessage<ParseComplete>();
-            conn.ReadMessage<BindComplete>();
-            var description = conn.ReadMessage(new RowDescription(conn._fieldDescriptionPool));
-
-            // var dataReader = new DataReader(conn, description);
-            // while (await dataReader.ReadAsync())
-            // {
-            //     var i = await dataReader.GetFieldValueAsync<int>();
-            //     i = i;
-            // }
-
             return conn;
         }
         catch (Exception ex)
@@ -470,6 +444,84 @@ class PgV3Protocol : IDisposable
             reader.PipeReader.Complete(ex);
             throw;
         }
+    }
+
+    public async ValueTask ExecuteQueryAsync(string commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, string? preparedStatementName = null, TimeSpan commandTimeout = default)
+    {
+        var portal = string.Empty;
+        await WriteMessageAsync(new Parse(commandText, parameters, preparedStatementName)).ConfigureAwait(false);
+        await WriteMessageAsync(new Bind(portal, parameters, ResultColumnCodes.CreateOverall(FormatCode.Binary))).ConfigureAwait(false);
+        await WriteMessageAsync(new Describe(DescribeName.CreateForPortal(portal))).ConfigureAwait(false);
+        await WriteMessageAsync(new Execute(portal)).ConfigureAwait(false);
+        await WriteMessageAsync(new Sync()).ConfigureAwait(false);
+
+        using var commandTimeoutSource = new CancellationTokenSource();
+        commandTimeoutSource.CancelAfter(commandTimeout != TimeSpan.Zero ? commandTimeout : _protocolOptions.CommandTimeout);
+        await ReadMessageAsync<ParseComplete>(commandTimeoutSource.Token).ConfigureAwait(false);
+        await ReadMessageAsync<BindComplete>().ConfigureAwait(false);
+        var description = await ReadMessageAsync(new RowDescription(_fieldDescriptionPool)).ConfigureAwait(false);
+
+        var dataReader = new DataReader(this, description);
+        while (await dataReader.ReadAsync().ConfigureAwait(false))
+        {
+            var i = await dataReader.GetFieldValueAsync<int>().ConfigureAwait(false);;
+            i = i;
+        }
+    }
+
+    public async ValueTask ExecutePreparedQueryAsync(string preparedStatementName, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, TimeSpan commandTimeout = default)
+    {
+        var portal = string.Empty;
+        await WriteMessageAsync(new Bind(portal, parameters, ResultColumnCodes.CreateOverall(FormatCode.Binary), preparedStatementName)).ConfigureAwait(false);
+        await WriteMessageAsync(new Execute(portal)).ConfigureAwait(false);
+        await WriteMessageAsync(new Sync()).ConfigureAwait(false);
+
+        using var commandTimeoutSource = new CancellationTokenSource();
+        commandTimeoutSource.CancelAfter(commandTimeout != TimeSpan.Zero ? commandTimeout : _protocolOptions.CommandTimeout);
+        await ReadMessageAsync<BindComplete>(commandTimeoutSource.Token).ConfigureAwait(false);
+
+        // var dataReader = new DataReader(conn, description);
+        // while (await dataReader.ReadAsync())
+        // {
+        //     var i = await dataReader.GetFieldValueAsync<int>();
+        //     i = i;
+        // }
+    }
+
+    public void ExecuteQuery(string commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, string? preparedStatementName = null, TimeSpan commandTimeout = default)
+    {
+        var portal = string.Empty;
+        WriteMessage(new Parse(commandText, parameters, preparedStatementName));
+        WriteMessage(new Bind(portal, parameters, ResultColumnCodes.CreateOverall(FormatCode.Binary)));
+        WriteMessage(new Describe(DescribeName.CreateForPortal(portal)));
+        WriteMessage(new Execute(portal));
+        WriteMessage(new Sync());
+        ReadMessage<ParseComplete>(commandTimeout != TimeSpan.Zero ? commandTimeout : _protocolOptions.CommandTimeout);
+        ReadMessage<BindComplete>();
+        var description = ReadMessage(new RowDescription(_fieldDescriptionPool));
+
+        // var dataReader = new DataReader(conn, description);
+        // while (await dataReader.ReadAsync())
+        // {
+        //     var i = await dataReader.GetFieldValueAsync<int>();
+        //     i = i;
+        // }
+    }
+
+    public void ExecutePreparedQuery(string preparedStatementName, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, TimeSpan commandTimeout = default)
+    {
+        var portal = string.Empty;
+        WriteMessage(new Bind(portal, parameters, ResultColumnCodes.CreateOverall(FormatCode.Binary), preparedStatementName));
+        WriteMessage(new Execute(portal));
+        WriteMessage(new Sync());
+        ReadMessage<BindComplete>(commandTimeout != TimeSpan.Zero ? commandTimeout : _protocolOptions.CommandTimeout);
+
+        // var dataReader = new DataReader(conn, description);
+        // while (await dataReader.ReadAsync())
+        // {
+        //     var i = await dataReader.GetFieldValueAsync<int>();
+        //     i = i;
+        // }
     }
 
     public void Dispose()
