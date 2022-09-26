@@ -34,7 +34,6 @@ readonly struct Describe: IFrontendMessage
     {
         writer.WriteByte((byte)(_name.IsPortalName ? StatementOrPortal.Portal : StatementOrPortal.Statement));
         writer.WriteCString(_name.Name);
-        writer.Commit();
     }
 
     public bool TryPrecomputeLength(out int length)

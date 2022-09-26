@@ -33,8 +33,6 @@ readonly struct Parse: IFrontendMessage
             var p = _parameters.Array![i];
             writer.WriteInt(p.Key.Oid.Value);
         }
-
-        writer.Commit();
     }
 
     public bool TryPrecomputeLength(out int length)

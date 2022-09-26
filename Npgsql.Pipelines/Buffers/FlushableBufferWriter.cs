@@ -32,6 +32,7 @@ readonly struct FlushResult
 
     public bool IsCanceled => (_resultFlags & ResultFlags.Canceled) != 0;
     public bool IsCompleted => (_resultFlags & ResultFlags.Completed) != 0;
+    public static FlushResult Default { get; } = new(isCanceled: false, isCompleted: false);
 }
 
 readonly struct CancellationTokenOrTimeout

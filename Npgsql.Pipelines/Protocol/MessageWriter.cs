@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -23,9 +24,7 @@ static class MessageWriter
     public const int ByteByteCount = sizeof(byte);
 }
 
-// MessageWriter weighs 36 bytes if T is a ref type.
-// Might be worth passing by ref.
-struct MessageWriter<T> where T : IBufferWriter<byte>
+class MessageWriter<T> where T : IBufferWriter<byte>
 {
     BufferWriter<T> _writer;
     readonly FlushControl? _flushControl;
@@ -33,13 +32,19 @@ struct MessageWriter<T> where T : IBufferWriter<byte>
     public MessageWriter(T writer)
     {
         _writer = new BufferWriter<T>(writer);
+        // About the default MTU payload size.
+        CommitThreshold = 1450;
     }
 
-    public MessageWriter(T writer, FlushControl flushControl)
+    public MessageWriter(T writer, FlushControl flushFlushControl)
         :this(writer)
     {
-        _flushControl = flushControl;
+        _flushControl = flushFlushControl;
+        if (_flushControl.BytesThreshold < CommitThreshold)
+            CommitThreshold = _flushControl.BytesThreshold;
     }
+
+    public int CommitThreshold { get; }
 
     public T Writer => _writer.Output;
 
@@ -110,19 +115,35 @@ struct MessageWriter<T> where T : IBufferWriter<byte>
         _writer.AdvanceCommitted(count);
     }
 
+    public long BufferedBytes => _writer.BufferedBytes;
     public long BytesCommitted => _writer.BytesCommitted;
 
-    // long _flushedBytes;
-    // public long UnflushedBytes => _writer.BufferedBytes + _writer.BytesCommitted - _flushedBytes;
+    [MemberNotNullWhen(true, "_flushControl")]
+    public bool CanFlush => _flushControl is not null;
 
-    /// Commit and Flush on the underlying writer if threshold is reached.
-    /// Commit is always executed, independent of the flush threshold being reached.
-    public ValueTask<FlushResult> FlushAsync(CancellationToken cancellationToken = default)
+    ValueTask<FlushResult> FlushAsyncCore(bool observeFlushThreshold, CancellationToken cancellationToken)
     {
-        if (_flushControl is null)
+        if (!CanFlush)
             throw new NotSupportedException("This instance is not flushable.");
 
         Commit();
-        return _flushControl.FlushAsync(observeFlushThreshold: true, cancellationToken: cancellationToken);
+        return _flushControl.FlushAsync(observeFlushThreshold, cancellationToken);
+    }
+
+    /// Commit and Flush on the underlying writer if threshold is reached.
+    /// Commit is always executed, independent of the flush threshold being reached.
+    public ValueTask<FlushResult> FlushAsync(CancellationToken cancellationToken = default) => FlushAsyncCore(observeFlushThreshold: true, cancellationToken);
+
+    /// Only to be used by the protocol (and even then flush control can still decide not to flush).
+    /// Commit and Flush on the underlying writer if threshold is reached.
+    /// Commit is always executed, independent of the flush threshold being reached.
+    internal ValueTask<FlushResult> ForceFlushAsync(CancellationToken cancellationToken = default) => FlushAsyncCore(observeFlushThreshold: false, cancellationToken);
+
+    public void Reset()
+    {
+        if (_writer.BufferedBytes > 0)
+            throw new InvalidOperationException("Resetting writer while there are still buffered bytes.");
+
+        _writer = new BufferWriter<T>(_writer.Output);
     }
 }

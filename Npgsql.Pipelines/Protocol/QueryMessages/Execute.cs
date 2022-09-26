@@ -18,7 +18,6 @@ readonly struct Execute: IFrontendMessage
     {
         writer.WriteCString(_portalName);
         writer.WriteInt(_rowCountLimit);
-        writer.Commit();
     }
 
     public bool TryPrecomputeLength(out int length)

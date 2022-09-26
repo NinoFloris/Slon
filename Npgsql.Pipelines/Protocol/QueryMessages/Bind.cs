@@ -75,18 +75,34 @@ readonly struct Bind: IStreamingFrontendMessage
         WriteParameterCodes(ref writer);
 
         writer.WriteShort((short)_parameters.Count);
-        writer.Commit();
-        var lastCommmitted = writer.BytesCommitted;
+        var lastBuffered = writer.BufferedBytes;
+        var lastCommitted = writer.BytesCommitted + lastBuffered;
         for (var i = _parameters.Offset; i < _parameters.Count; i++)
         {
             var p = _parameters.Array![i];
             p.Value.Write(writer, p.Key.FormatCode, p.Key.Value);
-            if (FrontendMessageDebug.Enabled && writer.BytesCommitted - lastCommmitted > p.Key.Length)
-                throw new InvalidOperationException("Parameter output too big, should have been caught in the parameter writer itself.");
+            if (FrontendMessageDebug.Enabled)
+            {
+                if (writer.BufferedBytes - lastBuffered < 4)
+                    throw new InvalidOperationException("Parameter writer should at least write 4 bytes for the length.");
+                if (writer.BytesCommitted > lastCommitted)
+                    throw new InvalidOperationException("Please don't call writer.Commit inside parameter writers, this is handled globally.");
+                if (writer.BytesCommitted + writer.BufferedBytes - lastCommitted > p.Key.Length)
+                    throw new InvalidOperationException("Parameter output too big, should have been caught in the parameter writer itself.");
+            }
 
-            var result = await writer.FlushAsync(cancellationToken);
-            if (result.IsCanceled || result.IsCompleted) return result;
-            lastCommmitted = writer.BytesCommitted;
+            // Make sure we don't commit too often, as this requires a memory slice in the pipe
+            // additionally any writer loop may start writing small packets if we let it know certain memory is returned.
+            if (writer.BufferedBytes > writer.CommitThreshold)
+            {
+                var result = await writer.FlushAsync(cancellationToken);
+                if (result.IsCanceled || result.IsCompleted) return result;
+                lastCommitted = writer.BytesCommitted;
+                lastBuffered = 0;
+            }
+
+            lastCommitted += writer.BufferedBytes - lastBuffered;
+            lastBuffered = writer.BufferedBytes;
         }
 
         WriteResultColumnCodes(ref writer);
