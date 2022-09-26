@@ -12,7 +12,7 @@ readonly struct Parse: IFrontendMessage
 
     public Parse(string commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, string? preparedStatementName = null)
     {
-        if (_parameters.Count > short.MaxValue)
+        if (FrontendMessageDebug.Enabled && _parameters.Count > short.MaxValue)
             throw new InvalidOperationException($"Cannot accept more than short.MaxValue ({short.MaxValue} parameters.");
 
         _commandText = commandText;

@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Buffers;
@@ -33,10 +34,10 @@ readonly struct Bind: IStreamingFrontendMessage
 
     public Bind(string portalName, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, ResultColumnCodes resultColumnCodes, string? preparedStatementName = null)
     {
-        if (_parameters.Count > short.MaxValue)
+        if (FrontendMessageDebug.Enabled && _parameters.Count > short.MaxValue)
             throw new InvalidOperationException($"Cannot accept more than short.MaxValue ({short.MaxValue} parameters.");
 
-        if (_resultColumnCodes.IsPerColumnCodes && _resultColumnCodes.PerColumnCodes.Count > short.MaxValue)
+        if (FrontendMessageDebug.Enabled && _resultColumnCodes.IsPerColumnCodes && _resultColumnCodes.PerColumnCodes.Count > short.MaxValue)
             throw new InvalidOperationException($"Cannot accept more than short.MaxValue ({short.MaxValue} result columns.");
 
         var forall = true;
@@ -82,14 +83,7 @@ readonly struct Bind: IStreamingFrontendMessage
             var p = _parameters.Array![i];
             p.Value.Write(writer, p.Key.FormatCode, p.Key.Value);
             if (FrontendMessageDebug.Enabled)
-            {
-                if (writer.BufferedBytes - lastBuffered < 4)
-                    throw new InvalidOperationException("Parameter writer should at least write 4 bytes for the length.");
-                if (writer.BytesCommitted > lastCommitted)
-                    throw new InvalidOperationException("Please don't call writer.Commit inside parameter writers, this is handled globally.");
-                if (writer.BytesCommitted + writer.BufferedBytes - lastCommitted > p.Key.Length)
-                    throw new InvalidOperationException("Parameter output too big, should have been caught in the parameter writer itself.");
-            }
+                CheckParameterWriterOutput(p.Key.Length);
 
             // Make sure we don't commit too often, as this requires a memory slice in the pipe
             // additionally any writer loop may start writing small packets if we let it know certain memory is returned.
@@ -107,6 +101,17 @@ readonly struct Bind: IStreamingFrontendMessage
 
         WriteResultColumnCodes(ref writer);
         return await writer.FlushAsync(cancellationToken);
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        void CheckParameterWriterOutput(int parameterLength)
+        {
+            if (writer.BufferedBytes - lastBuffered < 4)
+                throw new InvalidOperationException("A parameter writer should at least write 4 bytes for the length.");
+            if (writer.BytesCommitted > lastCommitted)
+                throw new InvalidOperationException("Parameter writers should not call writer.Commit(), this is handled globally.");
+            if (writer.BytesCommitted + writer.BufferedBytes - lastCommitted > parameterLength)
+                throw new InvalidOperationException("The parameter writer output was not consistent with the parameter length.");
+        }
     }
 
     int PrecomputeMessageLength()
