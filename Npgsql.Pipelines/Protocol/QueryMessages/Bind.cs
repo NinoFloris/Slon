@@ -64,8 +64,7 @@ readonly struct Bind: IStreamingFrontendMessage
     public FrontendCode FrontendCode => FrontendCode.Bind;
     public void Write<T>(MessageWriter<T> writer) where T : IBufferWriter<byte> => throw new NotSupportedException();
     public bool TryPrecomputeLength(out int length) => throw new NotSupportedException();
-    public async ValueTask<FlushResult> WriteWithHeaderAsync<T>(MessageWriter<T> writer, FlushControl flushControl, CancellationToken cancellationToken = default)
-        where T : IFlushableBufferWriter<byte>
+    public async ValueTask<FlushResult> WriteWithHeaderAsync<T>(MessageWriter<T> writer, CancellationToken cancellationToken = default) where T : IBufferWriter<byte>
     {
         writer.WriteByte((byte)FrontendCode);
         writer.WriteInt(_precomputedMessageLength);
@@ -76,21 +75,22 @@ readonly struct Bind: IStreamingFrontendMessage
         WriteParameterCodes(ref writer);
 
         writer.WriteShort((short)_parameters.Count);
-        var lastUnflushed = writer.UnflushedBytes;
+        writer.Commit();
+        var lastCommmitted = writer.BytesCommitted;
         for (var i = _parameters.Offset; i < _parameters.Count; i++)
         {
             var p = _parameters.Array![i];
             p.Value.Write(writer, p.Key.FormatCode, p.Key.Value);
-            if (FrontendMessageDebug.Enabled && writer.UnflushedBytes - lastUnflushed > p.Key.Length)
+            if (FrontendMessageDebug.Enabled && writer.BytesCommitted - lastCommmitted > p.Key.Length)
                 throw new InvalidOperationException("Parameter output too big, should have been caught in the parameter writer itself.");
 
-            var result = await writer.FlushAsync(flushControl);
+            var result = await writer.FlushAsync(cancellationToken);
             if (result.IsCanceled || result.IsCompleted) return result;
-            lastUnflushed = writer.UnflushedBytes;
+            lastCommmitted = writer.BytesCommitted;
         }
 
         WriteResultColumnCodes(ref writer);
-        return await writer.FlushAsync(flushControl);
+        return await writer.FlushAsync(cancellationToken);
     }
 
     int PrecomputeMessageLength()

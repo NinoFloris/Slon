@@ -1,5 +1,7 @@
 using System;
+using System.IO.Pipelines;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Npgsql.Pipelines.Buffers;
 
@@ -8,13 +10,14 @@ abstract class FlushControl: IDisposable
     public abstract TimeSpan FlushTimeout { get; }
     public abstract int BytesThreshold { get; }
     public abstract CancellationToken TimeoutCancellationToken { get; }
-    internal abstract CancellationTokenOrTimeout GetFlushToken();
-    internal abstract void CompleteFlush();
+    public abstract ValueTask<FlushResult> FlushAsync(bool observeFlushThreshold = true, CancellationToken cancellationToken = default); 
     protected bool _disposed;
 
-    public static FlushControl Create(TimeSpan flushTimeout, int flushThreshold, CancellationTokenOrTimeout cancellationToken = default)
+    public static FlushControl Create(IPipeWriterSyncSupport writer, TimeSpan flushTimeout, int flushThreshold, CancellationTokenOrTimeout cancellationToken = default)
     {
-        var flushControl = new ResettableFlushControl(flushTimeout, flushThreshold);
+        if (!writer.PipeWriter.CanGetUnflushedBytes)
+            throw new ArgumentException("Cannot accept PipeWriters that don't support UnflushedBytes.", nameof(writer));
+        var flushControl = new ResettableFlushControl(writer, flushTimeout, flushThreshold);
         flushControl.Initialize(cancellationToken);
         return flushControl;
     }
@@ -39,13 +42,17 @@ abstract class FlushControl: IDisposable
 
 class ResettableFlushControl: FlushControl
 {
+    readonly IPipeWriterSyncSupport _writer;
+    readonly PipeWriter _pipeWriter;
     CancellationTokenOrTimeout _cancellationToken;
     CancellationTokenSource? _timeoutSource;
     CancellationTokenRegistration? _registration;
     long _start = -1;
 
-    public ResettableFlushControl(TimeSpan flushTimeout, int flushThreshold)
+    public ResettableFlushControl(IPipeWriterSyncSupport writer, TimeSpan flushTimeout, int flushThreshold)
     {
+        _writer = writer;
+        _pipeWriter = writer.PipeWriter;
         FlushTimeout = flushTimeout;
         BytesThreshold = flushThreshold;
     }
@@ -54,35 +61,71 @@ class ResettableFlushControl: FlushControl
     public override int BytesThreshold { get; }
     public override CancellationToken TimeoutCancellationToken => _timeoutSource?.Token ?? CancellationToken.None;
 
-    internal override CancellationTokenOrTimeout GetFlushToken()
+    TimeSpan GetTimeout()
     {
         ThrowIfDisposed();
-        if (_cancellationToken.IsCancellationToken)
+        if (_start != -1)
         {
-            _timeoutSource!.Token.ThrowIfCancellationRequested();
-            _timeoutSource.CancelAfter(FlushTimeout);
-            return CancellationTokenOrTimeout.CreateCancellationToken(_timeoutSource.Token);
-        }
-        else
-        {
-            if (_start != -1)
-            {
-                var remaining = _cancellationToken.Timeout - TimeSpan.FromMilliseconds(TickCount64Shim.Get() - _start);
-                if (remaining <= TimeSpan.Zero)
-                    throw new TimeoutException();
+            var remaining = _cancellationToken.Timeout - TimeSpan.FromMilliseconds(TickCount64Shim.Get() - _start);
+            if (remaining <= TimeSpan.Zero)
+                throw new TimeoutException();
 
-                return CancellationTokenOrTimeout.CreateTimeout(remaining < FlushTimeout ? remaining : FlushTimeout);
-            }
-
-            return CancellationTokenOrTimeout.CreateTimeout(FlushTimeout);
+            return remaining < FlushTimeout ? remaining : FlushTimeout;
         }
+
+        return FlushTimeout;
     }
 
-    internal override void CompleteFlush()
+    CancellationToken GetToken()
+    {
+        ThrowIfDisposed();
+        _timeoutSource!.Token.ThrowIfCancellationRequested();
+        _timeoutSource.CancelAfter(FlushTimeout);
+        return _timeoutSource.Token;
+    }
+
+    void CompleteFlush()
     {
         _timeoutSource?.CancelAfter(Timeout.Infinite);
     }
 
+    bool AlwaysObserveFlushThreshold { get; set; } = false;
+
+    public override ValueTask<FlushResult> FlushAsync(bool observeFlushThreshold = true, CancellationToken cancellationToken = default)
+    {
+        if (AlwaysObserveFlushThreshold || observeFlushThreshold)
+        {
+            if (BytesThreshold != -1 && BytesThreshold > _pipeWriter.UnflushedBytes)
+                return new ValueTask<FlushResult>(new FlushResult(isCanceled: false, isCompleted: false));
+        }
+
+        return FlushAsyncCore();
+
+        async ValueTask<FlushResult> FlushAsyncCore()
+        {
+            try
+            {
+                System.IO.Pipelines.FlushResult result;
+                if (_timeoutSource is null)
+                {
+                    result = _writer.Flush(GetTimeout());
+                }
+                else
+                {
+                    result = await _writer.PipeWriter.FlushAsync(GetToken());
+                }
+
+                return new FlushResult(isCanceled: result.IsCanceled, isCompleted: result.IsCompleted);
+            }
+            finally
+            {
+                CompleteFlush();
+            }
+        }
+    }
+
+    internal void Initialize(TimeSpan timeout) => Initialize(CancellationTokenOrTimeout.CreateTimeout(timeout));
+    internal void Initialize(CancellationToken cancellationToken) => Initialize(CancellationTokenOrTimeout.CreateCancellationToken(cancellationToken));
     internal void Initialize(CancellationTokenOrTimeout cancellationToken)
     {
         ThrowIfDisposed();

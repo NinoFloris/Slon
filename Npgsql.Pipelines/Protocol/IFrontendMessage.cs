@@ -5,7 +5,7 @@ using Npgsql.Pipelines.Buffers;
 
 namespace Npgsql.Pipelines;
 
-public static class FrontendMessageDebug {
+static class FrontendMessageDebug {
     public static bool Enabled { get; set; } = true;
 }
 
@@ -34,5 +34,5 @@ interface IFrontendMessage
 
 interface IStreamingFrontendMessage: IFrontendMessage
 {
-    ValueTask<FlushResult> WriteWithHeaderAsync<T>(MessageWriter<T> writer, FlushControl flushControl, CancellationToken cancellationToken = default) where T : IFlushableBufferWriter<byte>;
+    ValueTask<FlushResult> WriteWithHeaderAsync<T>(MessageWriter<T> writer, CancellationToken cancellationToken = default) where T : IBufferWriter<byte>;
 }

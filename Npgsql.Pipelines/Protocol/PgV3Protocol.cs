@@ -17,7 +17,7 @@ record ProtocolOptions
     public TimeSpan ReadTimeout { get; init; } = TimeSpan.FromSeconds(1);
     public TimeSpan WriteTimeout { get; init;  } = TimeSpan.FromSeconds(1);
     /// <summary>
-    /// CommandTimeout affects all written and read protocol messages.
+    /// CommandTimeout affects the first IO read after writing out a command.
     /// Default is infinite, where behavior purely relies on read and write timeouts.
     /// </summary>
     public TimeSpan CommandTimeout { get; init; } = Timeout.InfiniteTimeSpan;
@@ -39,8 +39,8 @@ class PgV3Protocol : IDisposable
     static ProtocolOptions DefaultPipeOptions { get; } = new();
     readonly ProtocolOptions _protocolOptions;
     readonly SimplePipeReader _reader;
-    readonly FlushableBufferWriter<PipeWriter> _writer;
-    readonly FlushableBufferWriter<IPipeWriterSyncSupport> _writerSync;
+    readonly IPipeWriterSyncSupport _writer;
+    readonly PipeWriter _pipeWriter;
     readonly ArrayPool<FieldDescription> _fieldDescriptionPool = ArrayPool<FieldDescription>.Create(RowDescription.MaxColumns, 50);
 
     // Lock held for a message write, writes to the pipe for one message shouldn't be interleaved with another.
@@ -51,9 +51,9 @@ class PgV3Protocol : IDisposable
     PgV3Protocol(IPipeWriterSyncSupport writer, IPipeReaderSyncSupport reader, ProtocolOptions? protocolOptions = null)
     {
         _protocolOptions = protocolOptions ?? DefaultPipeOptions;
-        _flushControl = new ResettableFlushControl(_protocolOptions.WriteTimeout, _protocolOptions.WriterSegmentSize);
-        _writer = FlushableBufferWriter.Create(writer.PipeWriter);
-        _writerSync = FlushableBufferWriter.Create(writer);
+        _writer = writer;
+        _pipeWriter = writer.PipeWriter;
+        _flushControl = new ResettableFlushControl(_writer, _protocolOptions.WriteTimeout, _protocolOptions.WriterSegmentSize);
         _reader = new SimplePipeReader(reader);
     }
 
@@ -61,43 +61,65 @@ class PgV3Protocol : IDisposable
         : this(new AsyncOnlyPipeWriter(writer), new AsyncOnlyPipeReader(reader), protocolOptions)
     { }
 
-    public ValueTask WriteMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IFrontendMessage
-        => WriteMessageCore(message, CancellationTokenOrTimeout.CreateCancellationToken(cancellationToken));
+    public async ValueTask WriteMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IFrontendMessage
+    {
+        if (!_messageWriteLock.Wait(0))
+            await _messageWriteLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            _flushControl.Initialize(cancellationToken);
+            await UnsynchronizedWriteMessage(message, _flushControl, cancellationToken);
+        }
+        finally
+        {
+            _flushControl.Reset();
+            _messageWriteLock.Release();
+        }
+    }
+
+    public async ValueTask WriteMessageAsync<T>(T message, FlushControl flushControl, CancellationToken cancellationToken = default) where T : IFrontendMessage
+    {
+        if (!_messageWriteLock.Wait(0))
+            await _messageWriteLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await UnsynchronizedWriteMessage(message, flushControl, cancellationToken);
+        }
+        finally
+        {
+            _messageWriteLock.Release();
+        }
+    }
 
     public void WriteMessage<T>(T message, TimeSpan timeout = default) where T : IFrontendMessage
-        => WriteMessageCore(message, CancellationTokenOrTimeout.CreateTimeout(timeout)).GetAwaiter().GetResult();
-
-    async ValueTask WriteMessageCore<T>(T message, CancellationTokenOrTimeout cancellationToken) where T : IFrontendMessage
     {
-        var isAsync = cancellationToken.IsCancellationToken;
-        if (isAsync && !_messageWriteLock.Wait(0))
-            await _messageWriteLock.WaitAsync().ConfigureAwait(false);
-        else if (!isAsync)
-            _messageWriteLock.Wait(cancellationToken.Timeout);
+        // TODO probably want to pass the remaining timeout to Unsynchronized.
+        _messageWriteLock.Wait(timeout);
+        try
+        {
+            _flushControl.Initialize(timeout);
+            UnsynchronizedWriteMessage(message, _flushControl).GetAwaiter().GetResult();
+        }
+        finally
+        {
+            _flushControl.Reset();
+            _messageWriteLock.Release();
+        }
+    }
 
-        _flushControl.Initialize(cancellationToken);
+    async ValueTask UnsynchronizedWriteMessage<T>(T message, FlushControl flushControl, CancellationToken cancellationToken = default) where T : IFrontendMessage
+    {
+        var isAsync = flushControl.TimeoutCancellationToken.CanBeCanceled;
         try
         {
             if (message is IStreamingFrontendMessage streamingMessage)
             {
-                if (isAsync)
+                var result = await streamingMessage.WriteWithHeaderAsync(new MessageWriter<PipeWriter>(_pipeWriter, flushControl), cancellationToken: cancellationToken).ConfigureAwait(false);
+                // Complete it again but now with any updates to our protocol state.
+                if (result.IsCompleted)
                 {
-                    var result = await streamingMessage.WriteWithHeaderAsync(new MessageWriter<FlushableBufferWriter<PipeWriter>>(_writer), _flushControl, cancellationToken: cancellationToken.CancellationToken).ConfigureAwait(false);
-                    // Complete it again but now with any updates to our protocol state.
-                    if (result.IsCompleted)
-                    {
-                        await CompletePipeWriter(_writer.Writer, isAsync);
-                        return;
-                    }
-                }
-                else
-                {
-                    var result = streamingMessage.WriteWithHeaderAsync(new MessageWriter<FlushableBufferWriter<IPipeWriterSyncSupport>>(_writerSync), _flushControl).GetAwaiter().GetResult();
-                    if (result.IsCompleted)
-                    {
-                        CompletePipeWriter(_writer.Writer, isAsync).GetAwaiter().GetResult();
-                        return;
-                    }
+                    await CompletePipeWriter(_writer.PipeWriter, isAsync);
+                    return;
                 }
             }
             else if (message.TryPrecomputeLength(out var precomputedLength))
@@ -106,7 +128,7 @@ class PgV3Protocol : IDisposable
                     throw new InvalidOperationException("TryPrecomputeLength out value \"length\" cannot be negative.");
 
                 precomputedLength += MessageWriter.IntByteCount;
-                var writer = new MessageWriter<FlushableBufferWriter<PipeWriter>>(_writer);
+                var writer = new MessageWriter<PipeWriter>(_pipeWriter);
                 writer.WriteByte((byte)message.FrontendCode);
                 writer.WriteInt(precomputedLength);
                 writer.Commit();
@@ -129,32 +151,16 @@ class PgV3Protocol : IDisposable
             }
 
             // Flush all remaining data.
-            if (isAsync)
-            {
-                var result = await _writer.FlushAsync(_flushControl.GetFlushToken()).ConfigureAwait(false);
-                if (result.IsCompleted)
-                    await CompletePipeWriter(_writer.Writer, isAsync).ConfigureAwait(false);
-            }
-            else
-            {
-                var result = _writerSync.FlushAsync(_flushControl.GetFlushToken()).GetAwaiter().GetResult();
-                if (result.IsCompleted)
-                    CompletePipeWriter(_writer.Writer, isAsync).GetAwaiter().GetResult();
-            }
+            await _flushControl.FlushAsync(observeFlushThreshold: false, cancellationToken).ConfigureAwait(false);
         }
-        catch (OperationCanceledException ex) when (isAsync && _flushControl.TimeoutCancellationToken.IsCancellationRequested && !cancellationToken.CancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException ex) when (isAsync && flushControl.TimeoutCancellationToken.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
             throw new TimeoutException("The operation has timed out.", ex);
         }
         catch (Exception ex)
         {
-            await CompletePipeWriter(_writer.Writer, isAsync, ex);
+            await CompletePipeWriter(_pipeWriter, isAsync, ex);
             throw;
-        }
-        finally
-        {
-            _flushControl.Reset();
-            _messageWriteLock.Release();
         }
 
         static async ValueTask CompletePipeWriter(PipeWriter pipeWriter, bool isAsync, Exception? exception = null)
@@ -527,7 +533,7 @@ class PgV3Protocol : IDisposable
     public void Dispose()
     {
         _reader.Complete();
-        _writer.Writer.Complete();
+        _pipeWriter.Complete();
         _messageWriteLock.Dispose();
         _flushControl.Dispose();
     }

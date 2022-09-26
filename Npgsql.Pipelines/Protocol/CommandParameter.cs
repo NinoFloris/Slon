@@ -113,7 +113,7 @@ class Test
             try
             {
                 parameterWriter.Write(writer, parameter.FormatCode, parameter.Value);
-                var p = new CommandParameter(parameter.Oid, parameter.FormatCode, (int)writer.UnflushedBytes, writer.Writer.DetachAndReset());
+                var p = new CommandParameter(parameter.Oid, parameter.FormatCode, (int)writer.BytesCommitted, writer.Writer.DetachAndReset());
                 return new KeyValuePair<CommandParameter, IParameterWriter>(p, BlittingWriter.Instance);
             }
             finally

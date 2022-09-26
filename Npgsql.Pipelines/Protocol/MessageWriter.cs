@@ -28,10 +28,17 @@ static class MessageWriter
 struct MessageWriter<T> where T : IBufferWriter<byte>
 {
     BufferWriter<T> _writer;
+    readonly FlushControl? _flushControl;
 
     public MessageWriter(T writer)
     {
         _writer = new BufferWriter<T>(writer);
+    }
+
+    public MessageWriter(T writer, FlushControl flushControl)
+        :this(writer)
+    {
+        _flushControl = flushControl;
     }
 
     public T Writer => _writer.Output;
@@ -60,7 +67,7 @@ struct MessageWriter<T> where T : IBufferWriter<byte>
         _writer.WriteByte(0);
     }
 
-    public async ValueTask<FlushResult> WriteHugeCStringAsync(string value, FlushControl flushControl)
+    public async ValueTask<FlushResult> WriteHugeCStringAsync(string value, CancellationToken cancellationToken = default)
     {
         var offset = 0;
         Encoder? encoder = null;
@@ -68,10 +75,10 @@ struct MessageWriter<T> where T : IBufferWriter<byte>
         while (offset < value.Length)
         {
             WriteChunk();
-            await FlushAsync(flushControl);
+            await FlushAsync(cancellationToken);
         }
         _writer.WriteByte(0);
-        return await FlushAsync(flushControl);
+        return await FlushAsync(cancellationToken);
 
         void WriteChunk()
         {
@@ -103,30 +110,19 @@ struct MessageWriter<T> where T : IBufferWriter<byte>
         _writer.AdvanceCommitted(count);
     }
 
-    long _flushedBytes;
-    public long UnflushedBytes => _writer.BufferedBytes + _writer.BytesCommitted - _flushedBytes;
+    public long BytesCommitted => _writer.BytesCommitted;
+
+    // long _flushedBytes;
+    // public long UnflushedBytes => _writer.BufferedBytes + _writer.BytesCommitted - _flushedBytes;
 
     /// Commit and Flush on the underlying writer if threshold is reached.
     /// Commit is always executed, independent of the flush threshold being reached.
-    public ValueTask<FlushResult> FlushAsync(FlushControl flushControl)
+    public ValueTask<FlushResult> FlushAsync(CancellationToken cancellationToken = default)
     {
-        if (Writer is not IFlushableBufferWriter<byte>)
-            throw new NotSupportedException("Underlying writer is not flushable");
+        if (_flushControl is null)
+            throw new NotSupportedException("This instance is not flushable.");
 
         Commit();
-
-        if (flushControl.BytesThreshold != -1 && flushControl.BytesThreshold > UnflushedBytes)
-            return new ValueTask<FlushResult>(new FlushResult());
-
-        _flushedBytes = _writer.BytesCommitted;
-
-        try
-        {
-            return ((IFlushableBufferWriter<byte>)Writer).FlushAsync(flushControl.GetFlushToken());
-        }
-        finally
-        {
-            flushControl.CompleteFlush();
-        }
+        return _flushControl.FlushAsync(observeFlushThreshold: true, cancellationToken: cancellationToken);
     }
 }

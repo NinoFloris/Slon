@@ -1,6 +1,6 @@
 namespace Npgsql.Pipelines;
 
-public static class BackendMessageDebug {
+static class BackendMessageDebug {
     public static bool Enabled { get; set; } = false;
 }
 

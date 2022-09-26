@@ -3,15 +3,13 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
-using System.Threading.Tasks;
-using Npgsql.Pipelines.Buffers;
 
 namespace Npgsql.Pipelines;
 
 /// <summary>
 /// Buffer writer which backfills a PG header on copy.
 /// </summary>
-class HeaderBufferWriter: IFlushableBufferWriter<byte>
+class HeaderBufferWriter: IBufferWriter<byte>
 {
     readonly int _minimumSegmentSize;
     int _bytesWritten;
@@ -216,6 +214,4 @@ class HeaderBufferWriter: IFlushableBufferWriter<byte>
             ArrayPool<byte>.Shared.Return(Buffer);
         }
     }
-
-    public ValueTask<FlushResult> FlushAsync(CancellationTokenOrTimeout cancellationToken) => new(new FlushResult());
 }

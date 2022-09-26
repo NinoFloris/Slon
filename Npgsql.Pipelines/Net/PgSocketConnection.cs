@@ -90,7 +90,7 @@ sealed class PgPipeConnection: PgSocketConnection, IDisposable
     {
         _connection = connection;
         Reader = new AsyncOnlyPipeReader(connection.Input);
-        Writer = new AsyncOnlyPipeWriter(connection.Output);
+        Writer = new AsyncOnlyPipeWriter(new PipeWriterUnflushedBytes(connection.Output));
     }
 
     public override IPipeReaderSyncSupport Reader { get; }
