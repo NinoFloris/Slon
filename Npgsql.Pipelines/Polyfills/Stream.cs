@@ -7,7 +7,7 @@ namespace System.IO.Pipelines;
 
 #if NETSTANDARD2_0
 
-public static class StreamExtensions
+static class StreamExtensions
 {
     public static void Write(this Stream stream, ReadOnlyMemory<byte> buffer)
     {

@@ -1,12 +1,24 @@
 namespace System.Threading;
 #if NETSTANDARD2_0
 
-internal static class CancellationTokenExtensions
+static class CancellationTokenExtensions
 {
-    internal static CancellationTokenRegistration UnsafeRegister(this CancellationToken cancellationToken, Action<object> callback, object state)
+    public static CancellationTokenRegistration UnsafeRegister(this CancellationToken cancellationToken, Action<object> callback, object state)
     {
         return cancellationToken.Register(callback, state);
     }
 }
+
+static class CancellationTokenSourceExtensions
+{
+    public static bool TryReset(this CancellationTokenSource cancellationTokenSource)
+    {
+        // Best effort, as we can't actually reset the registrations (sockets do correctly unregister when they complete).
+        // Npgsql would have the same issues otherwise.
+        cancellationTokenSource.CancelAfter(Timeout.Infinite);
+        return !cancellationTokenSource.IsCancellationRequested;
+    }
+}
+
 
 #endif

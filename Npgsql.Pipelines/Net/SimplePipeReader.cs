@@ -26,31 +26,55 @@ sealed class SimplePipeReader
         _reader = reader.PipeReader;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryRead(int minimumSize, out ReadOnlySequence<byte> buffer)
     {
-        if (!_completed && _bufferLength != 0)
+        var bufferLength = _bufferLength;
+        var readPosition = _readPosition;
+        if (bufferLength - readPosition >= minimumSize)
         {
-            _reader.AdvanceTo(_buffer.GetPosition(_readPosition), _buffer.GetPosition(Math.Max(_readPosition, _bufferLength - 1)));
-            _readPosition = 0;
-            _buffer = ReadOnlySequence<byte>.Empty;
-            _bufferLength = 0;
-        }
-
-        if (!_completed && _reader.TryRead(out var result))
-        {
-            var buf = result.Buffer;
-            var bufferLength = buf.Length;
-
-            if (bufferLength >= minimumSize)
+            if (readPosition == 0)
             {
-                buffer =_buffer = buf;
-                _bufferLength = bufferLength;
+                buffer = _buffer;
                 return true;
             }
+
+            _buffer = buffer = _buffer.Slice(readPosition);
+            _bufferLength = buffer.Length;
+            _readPosition = 0;
+            return true;
         }
 
-        buffer = ReadOnlySequence<byte>.Empty;
-        return false;
+        return TryReadSlow(out buffer);
+
+        bool TryReadSlow(out ReadOnlySequence<byte> buffer)
+        {
+            if (!_completed && _bufferLength != 0)
+            {
+                _reader.AdvanceTo(_buffer.GetPosition(_readPosition), _buffer.GetPosition(Math.Max(_readPosition, _bufferLength - 1)));
+                _readPosition = 0;
+                _buffer = ReadOnlySequence<byte>.Empty;
+                _bufferLength = 0;
+            }
+
+            if (!_completed && _reader.TryRead(out var result))
+            {
+                var buf = result.Buffer;
+                var bufferLength = buf.Length;
+
+                if (bufferLength >= minimumSize)
+                {
+                    buffer =_buffer = buf;
+                    _bufferLength = bufferLength;
+                    return true;
+                }
+
+                _reader.AdvanceTo(buf.Start, buf.End);
+            }
+
+            buffer = ReadOnlySequence<byte>.Empty;
+            return false;
+        }
     }
 
     /// <summary>Asynchronously reads a sequence of bytes from the current <see cref="System.IO.Pipelines.PipeReader" />.</summary>

@@ -9,6 +9,7 @@ using Npgsql.Pipelines.QueryMessages;
 
 namespace Npgsql.Pipelines.Benchmark
 {
+    [SimpleJob(targetCount: 10)]
     public class Benchmarks
     {
         const string EndPoint = "127.0.0.1:5432";
@@ -45,7 +46,7 @@ namespace Npgsql.Pipelines.Benchmark
             Command = new NpgsqlCommand($"SELECT generate_series(1, {NumRows})", conn);
         }
 
-        // [Benchmark(Baseline = true)]
+        [Benchmark(Baseline = true)]
         public async ValueTask ReadNpgsql()
         {
             await using var reader = await Command.ExecuteReaderAsync();
@@ -55,29 +56,29 @@ namespace Npgsql.Pipelines.Benchmark
             }
         }
 
-        const int PipelinedCommands = 1000;
+        const int PipelinedCommands = 1;
 
         [Benchmark(OperationsPerInvoke = PipelinedCommands)]
         public async ValueTask ReadPipelines()
         {
+            var conn = _protocol;
             for (int i = 0; i < PipelinedCommands; i++)
             {
-                await _protocol.ExecuteQueryAsync(_commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>>.Empty);
+                await conn.ExecuteQueryAsyncInline(_commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>>.Empty);
             }
 
             for (int i = 0; i < PipelinedCommands; i++)
             {
-                await _protocol.ReadMessageAsync<ParseComplete>(CancellationToken.None).ConfigureAwait(false);
-                await _protocol.ReadMessageAsync<BindComplete>().ConfigureAwait(false);
-                using var description = await _protocol.ReadMessageAsync(new RowDescription(_protocol._fieldDescriptionPool)).ConfigureAwait(false);
-                var dataReader = new DataReader(_protocol, description);
-                while (await dataReader.ReadAsync().ConfigureAwait(false))
+                await conn.ReadMessageAsync<ParseComplete>(CancellationToken.None);
+                await conn.ReadMessageAsync<BindComplete>();
+                using var description = await conn.ReadMessageAsync(new RowDescription(conn._fieldDescriptionPool));
+                var dataReader = new DataReader(conn, description);
+                while (await dataReader.ReadAsync())
                 {
                     // var i = await dataReader.GetFieldValueAsync<int>().ConfigureAwait(false);;
                     // i = i;
                 }
-
-                await _protocol.ReadMessageAsync<ReadyForQuery>().ConfigureAwait(false);
+                await conn.ReadMessageAsync<ReadyForQuery>();
             }
 
         }

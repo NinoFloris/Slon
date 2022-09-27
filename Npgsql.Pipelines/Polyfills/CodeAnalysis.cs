@@ -177,7 +177,7 @@ namespace System.Runtime.CompilerServices
 {
 #if !NET5_0_OR_GREATER
 
-    internal static class IsExternalInit {}
+    static class IsExternalInit {}
 #endif
 
 
@@ -187,7 +187,7 @@ namespace System.Runtime.CompilerServices
     { }
 
     [AttributeUsage(AttributeTargets.All, AllowMultiple = true, Inherited = false)]
-    public sealed class CompilerFeatureRequiredAttribute : Attribute
+    sealed class CompilerFeatureRequiredAttribute : Attribute
     {
         public CompilerFeatureRequiredAttribute(string featureName)
         {

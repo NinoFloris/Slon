@@ -204,8 +204,7 @@ class PgV3Protocol : IDisposable
         long consumed = 0;
         Exception? readerExn = null;
         var isAsync = cancellationToken.IsCancellationToken;
-        // Take the smaller of the two.
-        var readTimeout = isAsync && cancellationToken.Timeout != Timeout.InfiniteTimeSpan && cancellationToken.Timeout < _protocolOptions.ReadTimeout ? cancellationToken.Timeout : _protocolOptions.ReadTimeout;
+        var readTimeout = !isAsync && cancellationToken.Timeout != Timeout.InfiniteTimeSpan ? cancellationToken.Timeout : _protocolOptions.ReadTimeout;
         var start = isAsync ? -1 : TickCount64Shim.Get();
         do
         {
@@ -356,17 +355,28 @@ class PgV3Protocol : IDisposable
         {
             if (!_reader.TryRead(minimumSize, out var buffer))
             {
-                // TODO should be cached.
-                var timeoutSource = new CancellationTokenSource();
-                using var cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(timeoutSource.Token, cancellationToken);
-                timeoutSource.CancelAfter(_protocolOptions.ReadTimeout);
+                CancellationTokenSource? timeoutSource = null;
+                if (!cancellationToken.CanBeCanceled)
+                {
+                    timeoutSource = _readTimeoutSource ??= new CancellationTokenSource();
+                    timeoutSource.CancelAfter(_protocolOptions.ReadTimeout);
+                    cancellationToken = timeoutSource.Token;
+                }
                 try
                 {
-                    return await _reader.ReadAtLeastAsync(minimumSize, cancellationTokenSource.Token).ConfigureAwait(false);
+                    return await _reader.ReadAtLeastAsync(minimumSize, cancellationToken).ConfigureAwait(false);
                 }
-                catch (OperationCanceledException ex) when (timeoutSource.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                catch (OperationCanceledException ex) when (timeoutSource?.Token.IsCancellationRequested == true && !cancellationToken.IsCancellationRequested)
                 {
                     throw new TimeoutException("The operation has timed out.", ex);
+                }
+                finally
+                {
+                    if (timeoutSource is not null && _readTimeoutSource?.TryReset() == false)
+                    {
+                        _readTimeoutSource.Dispose();
+                        _readTimeoutSource = null;
+                    }
                 }
             }
 
@@ -381,6 +391,8 @@ class PgV3Protocol : IDisposable
             return buffer;
         }
     }
+
+    CancellationTokenSource? _readTimeoutSource;
 
     static async ValueTask<PgV3Protocol> StartAsyncCore(PgV3Protocol conn, PgOptions options)
     {
@@ -464,7 +476,7 @@ class PgV3Protocol : IDisposable
         }
     }
 
-    public async ValueTask ExecuteQueryAsync(string commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, string? preparedStatementName = null, TimeSpan commandTimeout = default, CancellationToken cancellationToken = default)
+    public async ValueTask ExecuteQueryAsyncInline(string commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, string? preparedStatementName = null, CancellationToken cancellationToken = default)
     {
         if (!_messageWriteLock.Wait(0))
             await _messageWriteLock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -475,17 +487,16 @@ class PgV3Protocol : IDisposable
         try
         {
             var portal = string.Empty;
-            await WriteMessage(new Parse(commandText, parameters, preparedStatementName)).ConfigureAwait(false);
-            await WriteMessage(new Bind(portal, parameters, ResultColumnCodes.CreateOverall(FormatCode.Binary))).ConfigureAwait(false);
-            await WriteMessage(new Describe(DescribeName.CreateForPortal(portal))).ConfigureAwait(false);
-            await WriteMessage(new Execute(portal)).ConfigureAwait(false);
-            await WriteMessage(new Sync()).ConfigureAwait(false);
-
+            await WriteMessageAsync(new Parse(commandText, parameters, preparedStatementName), cancellationToken).ConfigureAwait(false);
+            await WriteMessageAsync(new Bind(portal, parameters, ResultColumnCodes.CreateOverall(FormatCode.Binary)), cancellationToken).ConfigureAwait(false);
+            await WriteMessageAsync(new Describe(DescribeName.CreateForPortal(portal)), cancellationToken).ConfigureAwait(false);
+            await WriteMessageAsync(new Execute(portal), cancellationToken).ConfigureAwait(false);
+            await WriteMessageAsync(new Sync(), cancellationToken).ConfigureAwait(false);
             // Disable extraneous flush suppression and truly flush all data.
             _flushControl.AlwaysObserveFlushThreshold = false;
             await _flushControl.FlushAsync(observeFlushThreshold: false, cancellationToken);
         }
-        catch (Exception ex) when (ex is not TimeoutException && ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not TimeoutException && (ex is not OperationCanceledException || ex is OperationCanceledException oce && oce.CancellationToken != cancellationToken))
         {
             await CompletePipeWriterAsync(ex).ConfigureAwait(false);
             throw;
@@ -499,29 +510,11 @@ class PgV3Protocol : IDisposable
         }
 
         // TODO meh
-        async ValueTask WriteMessage<T>(T message) where T : IFrontendMessage
+        async ValueTask WriteMessageAsync<T>(T message, CancellationToken cancellationToken) where T : IFrontendMessage
         {
             await ProcessFlushResultAsync(await UnsynchronizedWriteMessage(message, writer, cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
         }
-    }
 
-    public async ValueTask ExecutePreparedQueryAsync(string preparedStatementName, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, TimeSpan commandTimeout = default)
-    {
-        var portal = string.Empty;
-        await WriteMessageAsync(new Bind(portal, parameters, ResultColumnCodes.CreateOverall(FormatCode.Binary), preparedStatementName)).ConfigureAwait(false);
-        await WriteMessageAsync(new Execute(portal)).ConfigureAwait(false);
-        await WriteMessageAsync(new Sync()).ConfigureAwait(false);
-
-        using var commandTimeoutSource = new CancellationTokenSource();
-        commandTimeoutSource.CancelAfter(commandTimeout != TimeSpan.Zero ? commandTimeout : _protocolOptions.CommandTimeout);
-        await ReadMessageAsync<BindComplete>(commandTimeoutSource.Token).ConfigureAwait(false);
-
-        // var dataReader = new DataReader(conn, description);
-        // while (await dataReader.ReadAsync())
-        // {
-        //     var i = await dataReader.GetFieldValueAsync<int>();
-        //     i = i;
-        // }
     }
 
     public void ExecuteQuery(string commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, string? preparedStatementName = null, TimeSpan commandTimeout = default)
@@ -535,22 +528,6 @@ class PgV3Protocol : IDisposable
         ReadMessage<ParseComplete>(commandTimeout != TimeSpan.Zero ? commandTimeout : _protocolOptions.CommandTimeout);
         ReadMessage<BindComplete>();
         var description = ReadMessage(new RowDescription(_fieldDescriptionPool));
-
-        // var dataReader = new DataReader(conn, description);
-        // while (await dataReader.ReadAsync())
-        // {
-        //     var i = await dataReader.GetFieldValueAsync<int>();
-        //     i = i;
-        // }
-    }
-
-    public void ExecutePreparedQuery(string preparedStatementName, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, TimeSpan commandTimeout = default)
-    {
-        var portal = string.Empty;
-        WriteMessage(new Bind(portal, parameters, ResultColumnCodes.CreateOverall(FormatCode.Binary), preparedStatementName));
-        WriteMessage(new Execute(portal));
-        WriteMessage(new Sync());
-        ReadMessage<BindComplete>(commandTimeout != TimeSpan.Zero ? commandTimeout : _protocolOptions.CommandTimeout);
 
         // var dataReader = new DataReader(conn, description);
         // while (await dataReader.ReadAsync())

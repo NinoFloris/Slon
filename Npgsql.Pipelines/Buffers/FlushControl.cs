@@ -177,22 +177,11 @@ class ResettableFlushControl: FlushControl
         {
             _registration?.Dispose();
             _registration = null;
-#if NETSTANDARD2_0
-            // Best effort, as we can't actually reset the registrations (sockets do correctly unregister when they complete).
-            // Npgsql would have the same issues otherwise.
-            _timeoutSource.CancelAfter(Timeout.Infinite);
-            if (_timeoutSource.IsCancellationRequested)
-            {
-                _timeoutSource.Dispose();
-                _timeoutSource = null;
-            }
-#else
             if (!_timeoutSource.TryReset())
             {
                 _timeoutSource.Dispose();
                 _timeoutSource = null;
             }
-#endif
         }
     }
 
