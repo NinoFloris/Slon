@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Npgsql.Pipelines.Tests" />
+    <InternalsVisibleTo Include="Npgsql.Pipelines.Benchmark" />
     <PackageReference Include="Pipelines.Sockets.Unofficial" Version="2.2.2" />
     <PackageReference Include="System.IO.Pipelines" Version="7.0.0-rc.1.22426.10" />
   </ItemGroup>

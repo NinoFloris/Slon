@@ -41,11 +41,14 @@ class DataRow : IBackendMessage
             case ReaderState.ConsumeRow: goto ConsumeRow;
         }
 
-        if (!reader.MoveNextAndIsExpected(BackendCode.DataRow, out var status))
-        {
-            if (!reader.IsExpected(BackendCode.CommandComplete, out status, ensureBuffered: true))
-                return status;
+        if (!reader.MoveNext())
+            return ReadStatus.NeedMoreData;
 
+        if (reader.Current.Code != BackendCode.DataRow && !reader.IsExpected(BackendCode.CommandComplete, out var status, ensureBuffered: true))
+            return status;
+
+        if (reader.Current.Code == BackendCode.CommandComplete)
+        {
             reader.ConsumeCurrent();
             CommandComplete = true;
             return ReadStatus.Done;
@@ -72,7 +75,8 @@ class DataRow : IBackendMessage
         }
 
         ConsumeRow:
-        reader = MessageReader.Resume(Sequence, _resumptionData);
+        reader = MessageReader.Resume(reader.Sequence, _resumptionData);
+
         if (!reader.ConsumeCurrent())
             return ReadStatus.NeedMoreData;
 
@@ -82,6 +86,7 @@ class DataRow : IBackendMessage
     public void Reset()
     {
         _state = 0;
+        _resumptionData = default;
         _invalidData = false;
     }
 }
@@ -119,8 +124,8 @@ class DataReader: IDisposable
             _currentRow.Reset();
         }
         _currentRow = await _protocol.ReadMessageAsync(_currentRow);
-        if (_currentRow.CommandComplete) return false;
         _resumptionData = _currentRow.ResumptionData;
+        if (_currentRow.CommandComplete) return false;
         return true;
     }
 

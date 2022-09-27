@@ -41,7 +41,7 @@ class PgV3Protocol : IDisposable
     readonly ProtocolOptions _protocolOptions;
     readonly SimplePipeReader _reader;
     readonly PipeWriter _pipeWriter;
-    readonly ArrayPool<FieldDescription> _fieldDescriptionPool = ArrayPool<FieldDescription>.Create(RowDescription.MaxColumns, 50);
+    internal readonly ArrayPool<FieldDescription> _fieldDescriptionPool = ArrayPool<FieldDescription>.Create(RowDescription.MaxColumns, 50);
 
     // Lock held for a message write, writes to the pipe for one message shouldn't be interleaved with another.
     readonly SemaphoreSlim _messageWriteLock = new(1);
@@ -147,7 +147,7 @@ class PgV3Protocol : IDisposable
             var result = await streamingMessage.WriteWithHeaderAsync(writer, cancellationToken: cancellationToken).ConfigureAwait(false);
             if (result.IsCompleted)
                 return result;
-        } 
+        }
         else if (message.TryPrecomputeLength(out var precomputedLength))
         {
             if (precomputedLength < 0)
@@ -339,7 +339,7 @@ class PgV3Protocol : IDisposable
             }
             else
             {
-                exception = new Exception($"Protocol desync on message: {typeof(T).FullName}, expected different response.", readerException);
+                exception = new Exception($"Protocol desync on message: {typeof(T).FullName}, expected different response{(resumptionData.Header.IsDefault ? "" : ", actual code: " + resumptionData.Header.Code)}.", readerException);
             }
             return exception;
         }
@@ -496,20 +496,6 @@ class PgV3Protocol : IDisposable
                 _defaultMessageWriter.Reset();
             _flushControl.Reset();
             _messageWriteLock.Release();
-        }
-
-
-        using var commandTimeoutSource = new CancellationTokenSource();
-        commandTimeoutSource.CancelAfter(commandTimeout != TimeSpan.Zero ? commandTimeout : _protocolOptions.CommandTimeout);
-        await ReadMessageAsync<ParseComplete>(commandTimeoutSource.Token).ConfigureAwait(false);
-        await ReadMessageAsync<BindComplete>().ConfigureAwait(false);
-        var description = await ReadMessageAsync(new RowDescription(_fieldDescriptionPool)).ConfigureAwait(false);
-
-        var dataReader = new DataReader(this, description);
-        while (await dataReader.ReadAsync().ConfigureAwait(false))
-        {
-            var i = await dataReader.GetFieldValueAsync<int>().ConfigureAwait(false);;
-            i = i;
         }
 
         // TODO meh

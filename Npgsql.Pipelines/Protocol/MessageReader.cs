@@ -77,11 +77,32 @@ readonly struct MessageHeader
 
 readonly struct MessageStartOffset
 {
-    readonly long _offset;
+    [Flags]
+    enum MessageStartOffsetFlags
+    {
+        None = 0,
+        ResumptionOffset = 1,
+        BeforeFirstMove = 2
+    }
 
-    public MessageStartOffset(long offset) => _offset = offset;
+    readonly MessageStartOffsetFlags _flags;
+    readonly uint _offset;
 
-    public long GetOffset() => _offset;
+    MessageStartOffset(uint offset, MessageStartOffsetFlags flags)
+        : this(offset)
+    {
+        _flags = flags;
+    }
+    public MessageStartOffset(uint offset) => _offset = offset;
+
+    public bool IsResumption => (_flags & MessageStartOffsetFlags.ResumptionOffset) != 0;
+    public bool IsBeforeFirstMove => (_flags & MessageStartOffsetFlags.BeforeFirstMove) != 0;
+
+    public long GetOffset() => IsResumption ? -_offset : _offset;
+
+    public static MessageStartOffset Recreate(uint offset) => new(offset, MessageStartOffsetFlags.BeforeFirstMove);
+    public static MessageStartOffset Resume(uint offset) => new(offset, MessageStartOffsetFlags.ResumptionOffset | MessageStartOffsetFlags.BeforeFirstMove);
+    public MessageStartOffset MoveNext() => new(_offset, MessageStartOffsetFlags.ResumptionOffset);
 }
 
 [DebuggerDisplay("Code = {Current.Code}, Length = {Current.Length}")]
@@ -108,7 +129,7 @@ ref struct MessageReader
 
     public bool IsCurrentBuffered => Reader.Length >= CurrentStart.GetOffset() + Current.Length;
 
-    // Having to subtract start is a bug in ReadOnlySequence https://github.com/dotnet/runtime/issues/75866
+    // Multiple bugs on this api https://github.com/dotnet/runtime/issues/75866
     static readonly bool HasGetOffsetBug = CheckGetOffsetBug();
 
     static bool CheckGetOffsetBug()
@@ -117,7 +138,16 @@ ref struct MessageReader
         return seq.GetOffset(seq.Start) != 0;
     }
 
-    long GetOffsetShim(SequencePosition position) => Sequence.GetOffset(position) - (HasGetOffsetBug ? Sequence.Start.GetInteger() : 0);
+    long GetOffsetShim(SequencePosition position)
+    {
+        if (!HasGetOffsetBug)
+            return Sequence.GetOffset(position);
+
+        if (Sequence.IsSingleSegment)
+            return Sequence.GetOffset(position) - Sequence.Start.GetInteger();
+
+        return Sequence.Length - Sequence.GetOffset(Sequence.End) + Sequence.GetOffset(position);
+    }
 
     public MessageStartOffset CurrentStart => _messageStart;
 
@@ -132,7 +162,7 @@ ref struct MessageReader
     /// <returns></returns>
     public static MessageReader Create(in ReadOnlySequence<byte> sequence, scoped in ResumptionData resumptionData, long consumed)
     {
-        var reader = new MessageReader(sequence, new MessageStartOffset(resumptionData.MessageIndex));
+        var reader = new MessageReader(sequence, MessageStartOffset.Recreate(resumptionData.MessageIndex));
         reader.Current = resumptionData.Header;
         reader.Reader.Advance(consumed);
         return reader;
@@ -144,9 +174,9 @@ ref struct MessageReader
     /// <param name="sequence"></param>
     /// <param name="resumptionData"></param>
     /// <returns></returns>
-    public static MessageReader Resume(in ReadOnlySequence<byte> sequence, scoped in ResumptionData resumptionData)
+    public static MessageReader Resume(scoped in ReadOnlySequence<byte> sequence, scoped in ResumptionData resumptionData)
     {
-        var reader = new MessageReader(sequence, new MessageStartOffset(-resumptionData.MessageIndex));
+        var reader = new MessageReader(sequence, MessageStartOffset.Resume(resumptionData.MessageIndex));
         reader.Current = resumptionData.Header;
         return reader;
     }
@@ -161,6 +191,12 @@ ref struct MessageReader
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MoveNext()
     {
+        if (CurrentStart.IsBeforeFirstMove)
+        {
+            _messageStart = _messageStart.MoveNext();
+            return true;
+        }
+
         if (!Current.IsDefault && !ConsumeCurrent())
             return false;
 
@@ -172,7 +208,11 @@ ref struct MessageReader
             return false;
         }
 
-        _messageStart = new MessageStartOffset(GetOffsetShim(Reader.Position));
+        var ret = GetOffsetShim(Reader.Position);
+        if (BackendMessageDebug.Enabled && ret < 0 || ret > Reader.Length)
+            throw new InvalidOperationException("Probably a GetOffset() bug, message offset is negative or bigger than current sequence.");
+
+        _messageStart = new MessageStartOffset((uint)ret);
         Current = new MessageHeader(code, length);
         Reader.Advance(MessageHeader.CodeAndLengthByteCount);
         return true;
@@ -193,7 +233,6 @@ ref struct MessageReader
             // Friendly error, otherwise ArgumentOutOfRange is thrown from Advance.
             if (BackendMessageDebug.Enabled && _messageStart.GetOffset() + Current.Length < Reader.Consumed)
                 throw new InvalidOperationException("Can't consume current message as the reader already advanced past this message boundary.");
-
             Reader.Advance(_messageStart.GetOffset() + Current.Length - Reader.Consumed);
         }
 
@@ -209,7 +248,7 @@ ref struct MessageReader
         if (!MessageHeader.TryParse(ref Reader, out var code, out var messageLength))
             throw new ArgumentOutOfRangeException(nameof(offset), "Given offset is not valid for this reader.");
         Current = new MessageHeader(code, messageLength);
-        _messageStart = new MessageStartOffset(GetOffsetShim(Reader.Position));
+        _messageStart = new MessageStartOffset((uint)GetOffsetShim(Reader.Position));
     }
 
     public readonly struct ResumptionData
@@ -236,13 +275,17 @@ static class MessageReaderExtensions
     /// </summary>
     /// <param name="reader"></param>
     /// <param name="code"></param>
+    /// <param name="status">returned if we found an async response or couldn't skip past 'code' yet.</param>
     /// <returns>Returns true if skip succeeded, false if it could not skip past 'code' yet.</returns>
-    public static bool SkipSimilar(this ref MessageReader reader, BackendCode code)
+    public static bool SkipSimilar(this ref MessageReader reader, BackendCode code, out ReadStatus status)
     {
         bool moved = true;
         while (reader.Current.Code == code && (moved = reader.MoveNext()))
         {}
 
+        reader.IsExpected(code, out status);
+        if (status != ReadStatus.AsyncResponse)
+            status = ReadStatus.NeedMoreData;
         return moved;
     }
 
