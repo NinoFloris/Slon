@@ -102,54 +102,27 @@ readonly struct MessageStartOffset
 
     public static MessageStartOffset Recreate(uint offset) => new(offset, MessageStartOffsetFlags.BeforeFirstMove);
     public static MessageStartOffset Resume(uint offset) => new(offset, MessageStartOffsetFlags.ResumptionOffset | MessageStartOffsetFlags.BeforeFirstMove);
-    public MessageStartOffset MoveNext() => new(_offset, MessageStartOffsetFlags.ResumptionOffset);
+    public MessageStartOffset MovedNext() => new(_offset, MessageStartOffsetFlags.ResumptionOffset);
 }
 
 [DebuggerDisplay("Code = {Current.Code}, Length = {Current.Length}")]
 ref struct MessageReader
 {
-    readonly ReadOnlySequence<byte> _sequence;
+    public MessageStartOffset CurrentStart;
+    public readonly ReadOnlySequence<byte> Sequence;
     public SequenceReader<byte> Reader;
-    MessageStartOffset _messageStart;
+    public MessageHeader Current;
 
-    MessageReader(ReadOnlySequence<byte> sequence, MessageStartOffset messageStart)
+    MessageReader(ReadOnlySequence<byte> sequence, MessageStartOffset currentStart)
     {
-        _sequence = sequence;
-        _messageStart = messageStart;
-        Reader = new SequenceReader<byte>(_sequence);
+        Sequence = sequence;
+        CurrentStart = currentStart;
+        Reader = new SequenceReader<byte>(Sequence);
     }
 
-    public MessageHeader Current { [MethodImpl(MethodImplOptions.AggressiveInlining)] get; private set; }
-
-    public ReadOnlySpan<byte> UnreadSpan => Reader.UnreadSpan;
-    public ReadOnlySequence<byte> Sequence => _sequence;
-
-    public long Consumed => Reader.Consumed;
-    public uint CurrentConsumed => (uint)(Consumed - CurrentStart.GetOffset());
-
-    public bool IsCurrentBuffered => Reader.Length >= CurrentStart.GetOffset() + Current.Length;
-
-    // Multiple bugs on this api https://github.com/dotnet/runtime/issues/75866
-    static readonly bool HasGetOffsetBug = CheckGetOffsetBug();
-
-    static bool CheckGetOffsetBug()
-    {
-        var seq = new ReadOnlySequence<byte>(new byte[1], 1, 0);
-        return seq.GetOffset(seq.Start) != 0;
-    }
-
-    long GetOffsetShim(SequencePosition position)
-    {
-        if (!HasGetOffsetBug)
-            return Sequence.GetOffset(position);
-
-        if (Sequence.IsSingleSegment)
-            return Sequence.GetOffset(position) - Sequence.Start.GetInteger();
-
-        return Sequence.Length - Sequence.GetOffset(Sequence.End) + Sequence.GetOffset(position);
-    }
-
-    public MessageStartOffset CurrentStart => _messageStart;
+    public readonly long Consumed => Reader.Consumed;
+    public readonly uint CurrentConsumed => (uint)(Consumed - CurrentStart.GetOffset());
+    public readonly bool IsCurrentBuffered => Reader.Length >= CurrentStart.GetOffset() + Current.Length;
 
     public static MessageReader Create(in ReadOnlySequence<byte> sequence) => new(sequence, new MessageStartOffset(0));
 
@@ -160,7 +133,7 @@ ref struct MessageReader
     /// <param name="resumptionData"></param>
     /// <param name="consumed"></param>
     /// <returns></returns>
-    public static MessageReader Create(in ReadOnlySequence<byte> sequence, scoped in ResumptionData resumptionData, long consumed)
+    public static MessageReader Create(scoped in ReadOnlySequence<byte> sequence, scoped in ResumptionData resumptionData, long consumed)
     {
         var reader = new MessageReader(sequence, MessageStartOffset.Recreate(resumptionData.MessageIndex));
         reader.Current = resumptionData.Header;
@@ -181,7 +154,7 @@ ref struct MessageReader
         return reader;
     }
 
-    public ResumptionData GetResumptionData()
+    public readonly ResumptionData GetResumptionData()
     {
         if (Current.IsDefault)
             throw new InvalidOperationException("Cannot get resumption data, enumeration hasn't started.");
@@ -193,7 +166,7 @@ ref struct MessageReader
     {
         if (CurrentStart.IsBeforeFirstMove)
         {
-            _messageStart = _messageStart.MoveNext();
+            CurrentStart = CurrentStart.MovedNext();
             return true;
         }
 
@@ -203,16 +176,12 @@ ref struct MessageReader
         if (!MessageHeader.TryParse(ref Reader, out var code, out var length))
         {
             // This is here to make sure resumption data accurately reflects that we are on a new message, we just can't read it yet.
-            _messageStart = default;
+            CurrentStart = default;
             Current = default;
             return false;
         }
 
-        var ret = GetOffsetShim(Reader.Position);
-        if (BackendMessageDebug.Enabled && ret < 0 || ret > Reader.Length)
-            throw new InvalidOperationException("Probably a GetOffset() bug, message offset is negative or bigger than current sequence.");
-
-        _messageStart = new MessageStartOffset((uint)ret);
+        CurrentStart = new MessageStartOffset((uint)Reader.Consumed);
         Current = new MessageHeader(code, length);
         Reader.Advance(MessageHeader.CodeAndLengthByteCount);
         return true;
@@ -226,20 +195,20 @@ ref struct MessageReader
     {
         if (!IsCurrentBuffered)
             return false;
-        if (_messageStart.GetOffset() + MessageHeader.CodeAndLengthByteCount == Consumed)
+        if (CurrentStart.GetOffset() + MessageHeader.CodeAndLengthByteCount == Consumed)
             Reader.Advance(Current.PayloadLength);
         else
         {
             // Friendly error, otherwise ArgumentOutOfRange is thrown from Advance.
-            if (BackendMessageDebug.Enabled && _messageStart.GetOffset() + Current.Length < Reader.Consumed)
+            if (BackendMessageDebug.Enabled && CurrentStart.GetOffset() + Current.Length < Reader.Consumed)
                 throw new InvalidOperationException("Can't consume current message as the reader already advanced past this message boundary.");
-            Reader.Advance(_messageStart.GetOffset() + Current.Length - Reader.Consumed);
+            Reader.Advance(CurrentStart.GetOffset() + Current.Length - Reader.Consumed);
         }
 
         return true;
     }
 
-    public void MoveTo(MessageStartOffset offset)
+    public void MoveTo(in MessageStartOffset offset)
     {
         // Workaround https://github.com/dotnet/runtime/issues/68774
         if (Consumed - offset.GetOffset() > 0)
@@ -248,7 +217,7 @@ ref struct MessageReader
         if (!MessageHeader.TryParse(ref Reader, out var code, out var messageLength))
             throw new ArgumentOutOfRangeException(nameof(offset), "Given offset is not valid for this reader.");
         Current = new MessageHeader(code, messageLength);
-        _messageStart = new MessageStartOffset((uint)GetOffsetShim(Reader.Position));
+        CurrentStart = new MessageStartOffset((uint)Reader.Consumed);
     }
 
     public readonly struct ResumptionData
