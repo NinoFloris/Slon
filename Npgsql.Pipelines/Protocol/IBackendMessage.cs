@@ -1,7 +1,7 @@
 namespace Npgsql.Pipelines;
 
 static class BackendMessageDebug {
-    public static bool Enabled { get; set; } = true;
+    public static bool Enabled { get; } = false;
 }
 
 enum BackendCode : byte

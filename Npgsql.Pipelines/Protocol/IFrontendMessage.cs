@@ -6,7 +6,7 @@ using Npgsql.Pipelines.Buffers;
 namespace Npgsql.Pipelines;
 
 static class FrontendMessageDebug {
-    public static bool Enabled { get; set; } = true;
+    public static bool Enabled { get; } = false;
 }
 
 enum FrontendCode: byte

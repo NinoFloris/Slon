@@ -56,12 +56,14 @@ class MessageWriter<T> where T : IBufferWriter<byte>
 
     public void WriteShort(short value)
     {
+        _writer.Ensure(MessageWriter.ShortByteCount);
         BinaryPrimitives.WriteInt16BigEndian(_writer.Span, value);
         _writer.Advance(sizeof(short));
     }
 
     public void WriteInt(int value)
     {
+        _writer.Ensure(MessageWriter.IntByteCount);
         BinaryPrimitives.WriteInt32BigEndian(_writer.Span, value);
         _writer.Advance(sizeof(int));
     }

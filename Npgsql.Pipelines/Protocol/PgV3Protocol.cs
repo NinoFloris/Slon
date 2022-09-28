@@ -119,7 +119,7 @@ class PgV3Protocol : IDisposable
         }
     }
 
-    public async ValueTask<ReadActivation> WriteMessageBatchAsync<TState>(Func<BatchWriter, TState, CancellationToken, ValueTask> batchWriter, TState state, CancellationToken cancellationToken = default)
+    public async ValueTask<ReadActivation> WriteMessageBatchAsync<TState>(Func<BatchWriter, TState, CancellationToken, ValueTask> batchWriter, TState state, bool moreToCome = false, CancellationToken cancellationToken = default)
     {
         if (!_messageWriteLock.Wait(0))
             await _messageWriteLock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -138,8 +138,11 @@ class PgV3Protocol : IDisposable
         {
             await batchWriter.Invoke(new BatchWriter(this), state, cancellationToken);
             // Disable extraneous flush suppression and truly flush all data.
-            _flushControl.AlwaysObserveFlushThreshold = false;
-            await _flushControl.FlushAsync(observeFlushThreshold: false, cancellationToken);
+            if (!moreToCome)
+            {
+                _flushControl.AlwaysObserveFlushThreshold = false;
+                await _flushControl.FlushAsync(observeFlushThreshold: false, cancellationToken);
+            }
         }
         catch (Exception ex) when (ex is not TimeoutException && (ex is not OperationCanceledException || ex is OperationCanceledException oce && oce.CancellationToken != cancellationToken))
         {
@@ -148,7 +151,7 @@ class PgV3Protocol : IDisposable
         }
         finally
         {
-            if (!_writerCompleted)
+            if (!_writerCompleted && !moreToCome)
                 _defaultMessageWriter.Reset();
             _flushControl.Reset();
             _messageWriteLock.Release();
@@ -569,7 +572,7 @@ class PgV3Protocol : IDisposable
         }
     }
 
-    public ValueTask<ReadActivation> ExecuteQueryAsync(string commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, string? preparedStatementName = null, CancellationToken cancellationToken = default)
+    public ValueTask<ReadActivation> ExecuteQueryAsync(string commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, bool moreToCome = false, string? preparedStatementName = null, CancellationToken cancellationToken = default)
         => WriteMessageBatchAsync(static async (writer, state, cancellationToken) =>
         {
             var (commandText, parameters, preparedStatementName) = state;
@@ -579,7 +582,7 @@ class PgV3Protocol : IDisposable
             await writer.WriteMessageAsync(new Describe(DescribeName.CreateForPortal(portal)), cancellationToken).ConfigureAwait(false);
             await writer.WriteMessageAsync(new Execute(portal), cancellationToken).ConfigureAwait(false);
             await writer.WriteMessageAsync(new Sync(), cancellationToken).ConfigureAwait(false);
-        }, (commandText, parameters, preparedStatementName), cancellationToken);
+        }, (commandText, parameters, preparedStatementName), moreToCome, cancellationToken);
 
     public void ExecuteQuery(string commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, string? preparedStatementName = null, TimeSpan commandTimeout = default)
     {

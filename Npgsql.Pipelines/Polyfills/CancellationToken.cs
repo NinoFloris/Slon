@@ -3,9 +3,14 @@ namespace System.Threading;
 
 static class CancellationTokenExtensions
 {
-    public static CancellationTokenRegistration UnsafeRegister(this CancellationToken cancellationToken, Action<object> callback, object state)
+    public static CancellationTokenRegistration UnsafeRegister(this CancellationToken cancellationToken, Action<object?> callback, object? state)
     {
         return cancellationToken.Register(callback, state);
+    }
+    
+    public static CancellationTokenRegistration UnsafeRegister(this CancellationToken cancellationToken, Action<object?, CancellationToken> callback, object? state)
+    {
+        return cancellationToken.Register(state => callback.Invoke(state, cancellationToken), state);
     }
 }
 

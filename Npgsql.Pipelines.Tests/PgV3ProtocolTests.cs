@@ -92,7 +92,7 @@ public class PgV3ProtocolTests
 
             for (int i = 0; i < Pipelined; i++)
             {
-                activations[i] = await conn.ExecuteQueryAsync($"SELECT generate_series(1, {NumRows})", ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>>.Empty);
+                activations[i] = await conn.ExecuteQueryAsync($"SELECT generate_series(1, {NumRows})", ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>>.Empty, i < activations.Length - 1);
             }
 
             for (int i = 0; i < Pipelined; i++)

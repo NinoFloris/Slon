@@ -73,7 +73,7 @@ readonly struct Bind: IStreamingFrontendMessage
         writer.WriteCString(_portalName);
         writer.WriteCString(_preparedStatementName);
 
-        WriteParameterCodes(ref writer);
+        WriteParameterCodes(writer);
 
         writer.WriteShort((short)_parameters.Count);
         var lastBuffered = writer.BufferedBytes;
@@ -99,7 +99,7 @@ readonly struct Bind: IStreamingFrontendMessage
             lastBuffered = writer.BufferedBytes;
         }
 
-        WriteResultColumnCodes(ref writer);
+        WriteResultColumnCodes(writer);
         return await writer.FlushAsync(cancellationToken);
 
         [MethodImpl(MethodImplOptions.NoInlining)]
@@ -141,7 +141,7 @@ readonly struct Bind: IStreamingFrontendMessage
         return length;
     }
 
-    void WriteParameterCodes<T>(ref MessageWriter<T> writer) where T : IBufferWriter<byte>
+    void WriteParameterCodes<T>(MessageWriter<T> writer) where T : IBufferWriter<byte>
     {
         if (_parameters.Count == 0)
         {
@@ -164,7 +164,7 @@ readonly struct Bind: IStreamingFrontendMessage
         }
     }
 
-    void WriteResultColumnCodes<T>(ref MessageWriter<T> writer) where T : IBufferWriter<byte>
+    void WriteResultColumnCodes<T>(MessageWriter<T> writer) where T : IBufferWriter<byte>
     {
         if (_resultColumnCodes.IsOverallCode)
         {

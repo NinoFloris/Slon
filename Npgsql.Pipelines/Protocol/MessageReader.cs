@@ -313,7 +313,6 @@ static class MessageReaderExtensions
         status = default;
         return true;
 
-        [MethodImpl(MethodImplOptions.NoInlining)]
         static ReadStatus ResolveStatus(BackendCode code) =>
             code is BackendCode.NoticeResponse or BackendCode.NotificationResponse or BackendCode.ParameterStatus
                 ? ReadStatus.AsyncResponse : ReadStatus.InvalidData;
