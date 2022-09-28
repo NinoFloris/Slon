@@ -151,7 +151,7 @@ class PgV3Protocol : IDisposable
         }
         finally
         {
-            if (!_writerCompleted && !moreToCome)
+            if (!_writerCompleted)
                 _defaultMessageWriter.Reset();
             _flushControl.Reset();
             _messageWriteLock.Release();

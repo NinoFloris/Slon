@@ -17,7 +17,7 @@ namespace Npgsql.Pipelines.Benchmark
         const string Database = "postgres";
 
         const string ConnectionString = $"Server={EndPoint};User ID={Username};Password={Password};Database=postgres;SSL Mode=Disable;Pooling=false;Max Auto Prepare=0;";
-
+        const string ConnectionString2 = $"Server={EndPoint};User ID={Username};Password={Password};Database=postgres;SSL Mode=Disable;Pooling=true;MaxPoolSize=1;Max Auto Prepare=0;Multiplexing=true";
         static PgOptions PgOptions { get; } = new() { Username = Username, Password = Password, Database = Database };
         static ProtocolOptions Options { get; } = new() { ReadTimeout = TimeSpan.FromSeconds(5) };
 
@@ -29,7 +29,7 @@ namespace Npgsql.Pipelines.Benchmark
 
         NpgsqlCommand Command;
 
-        [GlobalSetup(Targets = new[] { nameof(ReadPipelines), nameof(ReadPipelinesPipelined) })]
+        [GlobalSetup(Targets = new[] { nameof(Pipelines), nameof(PipelinesPipelined) })]
         public async ValueTask SetupNpgsqlPipelines()
         {
             var socket = await PgStreamConnection.ConnectAsync(IPEndPoint.Parse(EndPoint));
@@ -37,16 +37,25 @@ namespace Npgsql.Pipelines.Benchmark
             _commandText = $"SELECT generate_series(1, {NumRows})";
         }
 
-        [GlobalSetup(Target = nameof(ReadNpgsql))]
+        [GlobalSetup(Targets = new []{ nameof(Npgsql)})]
         public async ValueTask SetupNpgsql()
         {
-            var conn = new NpgsqlConnection(ConnectionString);
-            await conn.OpenAsync();
-            Command = new NpgsqlCommand($"SELECT generate_series(1, {NumRows})", conn);
+            _conn = new NpgsqlConnection(ConnectionString);
+            await _conn.OpenAsync();
+            Command = new NpgsqlCommand($"SELECT generate_series(1, {NumRows})", _conn);
         }
 
-        [Benchmark(Baseline = true)]
-        public async ValueTask ReadNpgsql()
+        [GlobalSetup(Targets = new []{ nameof(NpgsqlPipelined) })]
+        public async ValueTask SetupNpgsqlMultiplexing()
+        {
+            _conn = new NpgsqlConnection(ConnectionString2);
+            await _conn.OpenAsync();
+            _commandText = $"SELECT generate_series(1, {NumRows})";
+        }
+
+
+        // [Benchmark(Baseline = true)]
+        public async ValueTask Npgsql()
         {
             await using var reader = await Command.ExecuteReaderAsync();
             while (await reader.ReadAsync())
@@ -55,8 +64,27 @@ namespace Npgsql.Pipelines.Benchmark
             }
         }
 
-        [Benchmark]
-        public async ValueTask ReadPipelines()
+        [Benchmark(OperationsPerInvoke = PipelinedCommands)]
+        public async ValueTask NpgsqlPipelined()
+        {
+            var readerTasks = new Task<NpgsqlDataReader>[PipelinedCommands];
+            for (var i = 0; i < readerTasks.Length; i++)
+            {
+                readerTasks[i] = new NpgsqlCommand(_commandText, _conn).ExecuteReaderAsync();
+            }
+
+            for (var i = 0; i < readerTasks.Length; i++)
+            {
+                await using var reader = await readerTasks[i];
+                while (await reader.ReadAsync()) // put a breakpoint here and run test in the debugger
+                {
+
+                }
+            }
+        }
+
+        // [Benchmark]
+        public async ValueTask Pipelines()
         {
             var conn = _protocol;
             var activation = await conn.ExecuteQueryAsync(_commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>>.Empty);
@@ -64,6 +92,7 @@ namespace Npgsql.Pipelines.Benchmark
             await conn.ReadMessageAsync<ParseComplete>();
             await conn.ReadMessageAsync<BindComplete>();
             using var description = await conn.ReadMessageAsync(new RowDescription(conn._fieldDescriptionPool));
+
             var dataReader = new DataReader(conn, description);
             while (await dataReader.ReadAsync())
             {
@@ -77,9 +106,10 @@ namespace Npgsql.Pipelines.Benchmark
 
         const int PipelinedCommands = 1000;
         readonly ReadActivation[] _readActivations = new ReadActivation[PipelinedCommands];
+        NpgsqlConnection _conn;
 
         [Benchmark(OperationsPerInvoke = PipelinedCommands)]
-        public async ValueTask ReadPipelinesPipelined()
+        public async ValueTask PipelinesPipelined()
         {
         var activations = _readActivations;
         var conn = _protocol;
@@ -91,7 +121,9 @@ namespace Npgsql.Pipelines.Benchmark
         for (var i = 0; i < activations.Length; i++)
         {
             var activation = activations[i];
+
             await activation.Task;
+            // await conn.ReadMessageAsync<InlinedReader>();
             await conn.ReadMessageAsync<ParseComplete>();
             await conn.ReadMessageAsync<BindComplete>();
             using var description = await conn.ReadMessageAsync(new RowDescription(conn._fieldDescriptionPool));
@@ -106,5 +138,54 @@ namespace Npgsql.Pipelines.Benchmark
         }
         }
 
+        struct InlinedReader: IBackendMessage
+        {
+            int _state;
+            public ReadStatus Read(ref MessageReader reader)
+            {
+                switch (_state)
+                {
+                    case 1: goto state1;
+                    case 2: goto state2;
+                    case 3: goto state3;
+                    case 4: goto state4;
+                }
+
+                if (!reader.MoveNextAndIsExpected(BackendCode.ParseComplete, out var status, ensureBuffered: true))
+                    return status;
+
+                _state = 1;
+                state1:
+                if (!reader.MoveNextAndIsExpected(BackendCode.BindComplete, out status, ensureBuffered: true))
+                    return status;
+
+                _state = 2;
+                state2:
+                status = new RowDescription().Read(ref reader);
+                if (status != ReadStatus.Done)
+                    return status;
+
+                _state = 3;
+                state3:
+
+                if (!reader.MoveNext())
+                    return ReadStatus.NeedMoreData;
+
+                if (!reader.SkipSimilar(BackendCode.DataRow, out status))
+                    return status;
+
+                if (!reader.IsExpected(BackendCode.CommandComplete, out status, ensureBuffered: true))
+                    return status;
+
+                _state = 4;
+                state4:
+
+                if (!reader.MoveNextAndIsExpected(BackendCode.ReadyForQuery, out status, ensureBuffered: true))
+                    return status;
+
+                reader.ConsumeCurrent();
+                return ReadStatus.Done;
+            }
+        }
     }
 }
