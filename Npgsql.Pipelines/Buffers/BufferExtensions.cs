@@ -1,20 +1,48 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
+using Npgsql.Pipelines;
 
 namespace System.Buffers;
 
 internal static class BufferExtensions
 {
-    internal static void WriteByte<T>(ref this BufferWriter<T> buffer, byte b)
+    public static void WriteRaw<T>(ref this BufferWriter<T> buffer, ReadOnlySpan<byte> value) where T : IBufferWriter<byte>
+    {
+        buffer.Write(value);
+    }
+
+    public static void WriteShort<T>(ref this BufferWriter<T> buffer, short value)  where T : IBufferWriter<byte>
+    {
+        buffer.Ensure(sizeof(short));
+        BinaryPrimitives.WriteInt16BigEndian(buffer.Span, value);
+        buffer.Advance(sizeof(short));
+    }
+
+    public static void WriteInt<T>(ref this BufferWriter<T> buffer, int value) where T : IBufferWriter<byte>
+    {
+        buffer.Ensure(sizeof(int));
+        BinaryPrimitives.WriteInt32BigEndian(buffer.Span, value);
+        buffer.Advance(sizeof(int));
+    }
+
+    public static void WriteCString<T>(ref this BufferWriter<T> buffer, string value) where T : IBufferWriter<byte>
+    {
+        if (value is not "")
+            buffer.WriteEncoded(value.AsSpan(), PgEncoding.UTF8);
+        buffer.WriteByte(0);
+    }
+
+    public static void WriteByte<T>(ref this BufferWriter<T> buffer, byte b)
         where T : IBufferWriter<byte>
     {
-        buffer.Ensure(1);
+        buffer.Ensure(sizeof(byte));
         buffer.Span[0] = b;
         buffer.Advance(1);
     }
 
-    internal static Encoder? WriteEncoded<T>(ref this BufferWriter<T> buffer, ReadOnlySpan<char> data, Encoding encoding, Encoder? encoder = null)
+    public static Encoder? WriteEncoded<T>(ref this BufferWriter<T> buffer, ReadOnlySpan<char> data, Encoding encoding, Encoder? encoder = null)
         where T : IBufferWriter<byte>
     {
         if (data.IsEmpty)

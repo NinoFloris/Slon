@@ -47,33 +47,13 @@ class MessageWriter<T> where T : IBufferWriter<byte>
 
     public int CommitThreshold { get; }
 
-    public T Writer => _writer.Output;
+    public T Output => _writer.Output;
 
-    public void WriteRaw(ReadOnlySpan<byte> value)
-    {
-        _writer.Write(value);
-    }
-
-    public void WriteShort(short value)
-    {
-        _writer.Ensure(MessageWriter.ShortByteCount);
-        BinaryPrimitives.WriteInt16BigEndian(_writer.Span, value);
-        _writer.Advance(sizeof(short));
-    }
-
-    public void WriteInt(int value)
-    {
-        _writer.Ensure(MessageWriter.IntByteCount);
-        BinaryPrimitives.WriteInt32BigEndian(_writer.Span, value);
-        _writer.Advance(sizeof(int));
-    }
-
-    public void WriteCString(string value)
-    {
-        if (value is not "")
-            _writer.WriteEncoded(value.AsSpan(), PgEncoding.UTF8);
-        _writer.WriteByte(0);
-    }
+    public void WriteRaw(ReadOnlySpan<byte> value) => _writer.Write(value);
+    public void WriteByte(byte value) => _writer.WriteByte(value);
+    public void WriteShort(short value) => _writer.WriteShort(value);
+    public void WriteInt(int value) => _writer.WriteInt(value);
+    public void WriteCString(string value) => _writer.WriteCString(value);
 
     public async ValueTask<FlushResult> WriteHugeCStringAsync(string value, CancellationToken cancellationToken = default)
     {
@@ -95,9 +75,6 @@ class MessageWriter<T> where T : IBufferWriter<byte>
             offset += span.Length;
         }
     }
-
-    public void WriteByte(byte value)
-        => _writer.WriteByte(value);
 
     /// <summary>
     /// Calls <see cref="IBufferWriter{T}.Advance(int)"/> on the underlying writer

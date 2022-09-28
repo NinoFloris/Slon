@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Buffers;
@@ -23,6 +24,16 @@ enum FrontendCode: byte
     CopyFail = (byte) 'f',
     Terminate = (byte) 'X',
     Password = (byte) 'p',
+}
+
+static class FrontendMessage
+{
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool CannotPrecomputeLength(out int length)
+    {
+        length = default;
+        return false;
+    }
 }
 
 interface IFrontendMessage

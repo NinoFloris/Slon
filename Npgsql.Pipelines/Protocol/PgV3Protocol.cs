@@ -22,8 +22,8 @@ record ProtocolOptions
     /// Default is infinite, where behavior purely relies on read and write timeouts.
     /// </summary>
     public TimeSpan CommandTimeout { get; init; } = Timeout.InfiniteTimeSpan;
-    public int ReaderSegmentSize { get; init; } = 8096;
-    public int WriterSegmentSize { get; init; } = 8096;
+    public int ReaderSegmentSize { get; init; } = 8192;
+    public int WriterSegmentSize { get; init; } = 8192;
 
     public Func<DbParameter, KeyValuePair<CommandParameter, IParameterWriter>> ParameterWriterLookup { get; init; }
 }
@@ -233,13 +233,7 @@ class PgV3Protocol : IDisposable
     async ValueTask<FlushResult> UnsynchronizedWriteMessage<T, TWriter>(T message, MessageWriter<TWriter> writer, CancellationToken cancellationToken = default)
         where T : IFrontendMessage where TWriter : IBufferWriter<byte>
     {
-        if (message is IStreamingFrontendMessage streamingMessage)
-        {
-            var result = await streamingMessage.WriteWithHeaderAsync(writer, cancellationToken: cancellationToken).ConfigureAwait(false);
-            if (result.IsCompleted)
-                return result;
-        }
-        else if (message.TryPrecomputeLength(out var precomputedLength))
+        if (message.TryPrecomputeLength(out var precomputedLength))
         {
             if (precomputedLength < 0)
                 throw new InvalidOperationException("TryPrecomputeLength out value \"length\" cannot be negative.");
@@ -250,6 +244,12 @@ class PgV3Protocol : IDisposable
             message.Write(writer);
             writer.Commit();
         }
+        else if (message is IStreamingFrontendMessage streamingMessage)
+        {
+            var result = await streamingMessage.WriteWithHeaderAsync(writer, cancellationToken: cancellationToken).ConfigureAwait(false);
+            if (result.IsCompleted)
+                return result;
+        }
         else
         {
             try
@@ -258,8 +258,8 @@ class PgV3Protocol : IDisposable
                 message.Write(_headerBufferWriter);
                 _headerBufferWriter.Commit();
                 // Completed then do something.
-                _headerBufferWriter.Writer.SetCode((byte)message.FrontendCode);
-                _headerBufferWriter.Writer.CopyTo(writer.Writer);
+                _headerBufferWriter.Output.SetCode((byte)message.FrontendCode);
+                _headerBufferWriter.Output.CopyTo(writer.Output);
                 writer.AdvanceCommitted(_headerBufferWriter.BytesCommitted);
             }
             finally

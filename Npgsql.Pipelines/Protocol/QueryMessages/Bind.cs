@@ -64,7 +64,8 @@ readonly struct Bind: IStreamingFrontendMessage
 
     public FrontendCode FrontendCode => FrontendCode.Bind;
     public void Write<T>(MessageWriter<T> writer) where T : IBufferWriter<byte> => throw new NotSupportedException();
-    public bool TryPrecomputeLength(out int length) => throw new NotSupportedException();
+    public bool TryPrecomputeLength(out int length) => FrontendMessage.CannotPrecomputeLength(out length);
+
     public async ValueTask<FlushResult> WriteWithHeaderAsync<T>(MessageWriter<T> writer, CancellationToken cancellationToken = default) where T : IBufferWriter<byte>
     {
         writer.WriteByte((byte)FrontendCode);

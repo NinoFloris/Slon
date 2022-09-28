@@ -154,12 +154,7 @@ ref struct MessageReader
         return reader;
     }
 
-    public readonly ResumptionData GetResumptionData()
-    {
-        if (Current.IsDefault)
-            throw new InvalidOperationException("Cannot get resumption data, enumeration hasn't started.");
-        return new(Current, CurrentConsumed);
-    }
+    public readonly ResumptionData GetResumptionData() => new(Current, CurrentConsumed);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MoveNext()
@@ -239,6 +234,8 @@ ref struct MessageReader
 
 static class MessageReaderExtensions
 {
+    static bool IsAsyncResponse(BackendCode code) => code is BackendCode.NoticeResponse or BackendCode.NotificationResponse or BackendCode.ParameterStatus;
+
     /// <summary>
     /// Skip messages until code does not equal Current.Code.
     /// </summary>
@@ -252,9 +249,12 @@ static class MessageReaderExtensions
         while (reader.Current.Code == code && (moved = reader.MoveNext()))
         {}
 
-        reader.IsExpected(code, out status);
-        if (status != ReadStatus.AsyncResponse)
-            status = ReadStatus.NeedMoreData;
+        if (moved && IsAsyncResponse(reader.Current.Code))
+        {
+            status = ReadStatus.AsyncResponse;
+            return false;
+        }
+        status = ReadStatus.NeedMoreData;
         return moved;
     }
 
@@ -300,7 +300,7 @@ static class MessageReaderExtensions
     {
         if (reader.Current.Code != code)
         {
-            status = ResolveStatus(code);
+            status = IsAsyncResponse(code) ? ReadStatus.AsyncResponse : ReadStatus.InvalidData;
             return false;
         }
 
@@ -312,10 +312,6 @@ static class MessageReaderExtensions
 
         status = default;
         return true;
-
-        static ReadStatus ResolveStatus(BackendCode code) =>
-            code is BackendCode.NoticeResponse or BackendCode.NotificationResponse or BackendCode.ParameterStatus
-                ? ReadStatus.AsyncResponse : ReadStatus.InvalidData;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
