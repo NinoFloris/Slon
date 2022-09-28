@@ -23,7 +23,7 @@ enum FormatCode: short
 interface IParameterWriter
 {
     bool TryPrecomputeSize(FormatCode code, object value, out int size);
-    void Write<T>(MessageWriter<T> writer, FormatCode code, object value) where T : IBufferWriter<byte>;
+    void Write<T>(ref BufferWriter<T> writer, FormatCode code, object value) where T : IBufferWriter<byte>;
 }
 
 class BlittingWriter: IParameterWriter
@@ -33,7 +33,7 @@ class BlittingWriter: IParameterWriter
     public bool TryPrecomputeSize(FormatCode code, object value, out int size)
         => throw new NotSupportedException("BlittingWriter is only a writer.");
 
-    public void Write<T>(MessageWriter<T> writer, FormatCode code, object value) where T : IBufferWriter<byte>
+    public void Write<T>(ref BufferWriter<T> writer, FormatCode code, object value) where T : IBufferWriter<byte>
     {
         if (value is not MemoryBufferWriter.WrittenBuffers buf)
             throw new InvalidOperationException("Unexpected value of type: " + value.GetType().FullName);
@@ -61,7 +61,7 @@ class DBNullWriter : IParameterWriter
         return false;
     }
 
-    public void Write<T>(MessageWriter<T> writer, FormatCode code, object value) where T : IBufferWriter<byte>
+    public void Write<T>(ref BufferWriter<T> writer, FormatCode code, object value) where T : IBufferWriter<byte>
     {
         writer.WriteInt(-1);
     }
@@ -109,10 +109,10 @@ class Test
         {
             // If we couldn't precompute the size we are going to write it out directly, taking the length, and cache the buffers until Bind.
             // This happens when it's more expensive to calculate the length than it would be to cache the result, for instance, json serialization.
-            var writer = new MessageWriter<MemoryBufferWriter>(MemoryBufferWriter.Get());
+            var writer = new BufferWriter<MemoryBufferWriter>(MemoryBufferWriter.Get());
             try
             {
-                parameterWriter.Write(writer, parameter.FormatCode, parameter.Value);
+                parameterWriter.Write(ref writer, parameter.FormatCode, parameter.Value);
                 var p = new CommandParameter(parameter.Oid, parameter.FormatCode, (int)writer.BytesCommitted, writer.Output.DetachAndReset());
                 return new KeyValuePair<CommandParameter, IParameterWriter>(p, BlittingWriter.Instance);
             }

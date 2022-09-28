@@ -23,7 +23,7 @@ class StartupRequest: IStreamingFrontendMessage
     }
 
     public FrontendCode FrontendCode => throw new NotSupportedException();
-    public void Write<T>(MessageWriter<T> writer) where T : IBufferWriter<byte> => throw new NotSupportedException();
+    public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte> => throw new NotSupportedException();
     public bool TryPrecomputeLength(out int length) => FrontendMessage.CannotPrecomputeLength(out length);
 
     public ValueTask<FlushResult> WriteWithHeaderAsync<T>(MessageWriter<T> writer, CancellationToken cancellationToken = default) where T : IBufferWriter<byte>
@@ -45,9 +45,7 @@ class StartupRequest: IStreamingFrontendMessage
             memWriter.Commit();
 
             writer.WriteInt(MessageWriter.IntByteCount + (int)memWriter.BytesCommitted);
-            writer.Commit();
-            memWriter.Output.CopyTo(writer.Output);
-            writer.AdvanceCommitted(memWriter.BytesCommitted);
+            memWriter.CopyTo(ref writer.Writer);
         }
         finally
         {

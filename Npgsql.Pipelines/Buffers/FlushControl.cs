@@ -8,7 +8,7 @@ namespace Npgsql.Pipelines.Buffers;
 abstract class FlushControl: IDisposable
 {
     public abstract TimeSpan FlushTimeout { get; }
-    public abstract int BytesThreshold { get; }
+    public abstract int FlushThreshold { get; }
     public abstract CancellationToken TimeoutCancellationToken { get; }
     public abstract bool IsFlushBlocking { get; }
     public abstract long UnflushedBytes { get; }
@@ -29,7 +29,7 @@ abstract class FlushControl: IDisposable
         if (!writer.PipeWriter.CanGetUnflushedBytes)
             throw new ArgumentException("Cannot accept PipeWriters that don't support UnflushedBytes.", nameof(writer));
         var flushControl = new ResettableFlushControl(writer, flushTimeout, flushThreshold);
-        flushControl.Initialize(userTimeout);
+        flushControl.InitializeAsBlocking(userTimeout);
         return flushControl;
     }
 
@@ -65,11 +65,11 @@ class ResettableFlushControl: FlushControl
         _writer = writer;
         _pipeWriter = writer.PipeWriter;
         FlushTimeout = flushTimeout;
-        BytesThreshold = flushThreshold;
+        FlushThreshold = flushThreshold;
     }
 
     public override TimeSpan FlushTimeout { get; }
-    public override int BytesThreshold { get; }
+    public override int FlushThreshold { get; }
     public override CancellationToken TimeoutCancellationToken => _timeoutSource?.Token ?? CancellationToken.None;
     public override bool IsFlushBlocking => _timeoutSource is null;
     public override long UnflushedBytes => _pipeWriter.UnflushedBytes;
@@ -111,7 +111,7 @@ class ResettableFlushControl: FlushControl
     {
         if (AlwaysObserveFlushThreshold || observeFlushThreshold)
         {
-            if (BytesThreshold != -1 && BytesThreshold > _pipeWriter.UnflushedBytes)
+            if (FlushThreshold != -1 && FlushThreshold > _pipeWriter.UnflushedBytes)
                 return new ValueTask<FlushResult>(new FlushResult(isCanceled: false, isCompleted: false, isIgnored: true));
         }
 
@@ -150,7 +150,7 @@ class ResettableFlushControl: FlushControl
         }
     }
 
-    internal void Initialize(TimeSpan timeout)
+    internal void InitializeAsBlocking(TimeSpan timeout)
     {
         ThrowIfDisposed();
         if (_start != -2)

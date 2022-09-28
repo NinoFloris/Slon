@@ -45,7 +45,7 @@ class PgV3Protocol : IDisposable
 
     // Lock held for a message write, writes to the pipe for one message shouldn't be interleaved with another.
     readonly SemaphoreSlim _messageWriteLock = new(1);
-    MessageWriter<HeaderBufferWriter>? _headerBufferWriter;
+    HeaderBufferWriter? _headerBufferWriter;
     readonly ResettableFlushControl _flushControl;
     readonly MessageWriter<IPipeWriterSyncSupport> _defaultMessageWriter;
     bool _writerCompleted;
@@ -54,12 +54,13 @@ class PgV3Protocol : IDisposable
 
     readonly Action<ReadActivation> _completeActivationAction;
     readonly ReadActivation _readyReadActivation;
+    CancellationTokenSource? _readTimeoutSource;
 
     PgV3Protocol(IPipeWriterSyncSupport writer, IPipeReaderSyncSupport reader, ProtocolOptions? protocolOptions = null)
     {
         _protocolOptions = protocolOptions ?? DefaultPipeOptions;
         _pipeWriter = writer.PipeWriter;
-        _flushControl = new ResettableFlushControl(writer, _protocolOptions.WriteTimeout, Math.Max(MessageWriter.DefaultCommitThreshold, _protocolOptions.WriterSegmentSize / 2));
+        _flushControl = new ResettableFlushControl(writer, _protocolOptions.WriteTimeout, Math.Max(BufferWriter.DefaultCommitThreshold, _protocolOptions.WriterSegmentSize / 2));
         _defaultMessageWriter = new MessageWriter<IPipeWriterSyncSupport>(writer, _flushControl);
         _reader = new SimplePipeReader(reader);
         _completeActivationAction = activation => CompleteReadActivation(activation);
@@ -85,7 +86,13 @@ class PgV3Protocol : IDisposable
         _flushControl.Initialize();
         try
         {
-            await ProcessFlushResultAsync(await UnsynchronizedWriteMessage(message, _defaultMessageWriter, cancellationToken)).ConfigureAwait(false);
+            await UnsynchronizedWriteMessage(message, cancellationToken);
+            if (!_writerCompleted)
+            {
+                _defaultMessageWriter.Writer.Commit();
+                await _flushControl.FlushAsync(observeFlushThreshold: false, cancellationToken).ConfigureAwait(false);
+            }
+
         }
         catch (Exception ex) when (ex is not TimeoutException && ex is not OperationCanceledException)
         {
@@ -114,8 +121,9 @@ class PgV3Protocol : IDisposable
 
         public async ValueTask WriteMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IFrontendMessage
         {
-            var flushResult = await _protocol.UnsynchronizedWriteMessage(message, _protocol._defaultMessageWriter, cancellationToken);
-            await _protocol.ProcessFlushResultAsync(flushResult);
+            await _protocol.UnsynchronizedWriteMessage(message, cancellationToken).ConfigureAwait(false);
+            if (!_protocol._writerCompleted)
+                await _protocol._defaultMessageWriter.FlushAsync(cancellationToken);
         }
     }
 
@@ -137,6 +145,7 @@ class PgV3Protocol : IDisposable
         try
         {
             await batchWriter.Invoke(new BatchWriter(this), state, cancellationToken);
+
             // Disable extraneous flush suppression and truly flush all data.
             if (!moreToCome)
             {
@@ -184,10 +193,15 @@ class PgV3Protocol : IDisposable
         if (!_messageWriteLock.Wait(timeout))
             throw new TimeoutException("The operation has timed out.");
 
-        _flushControl.Initialize(timeout);
+        _flushControl.InitializeAsBlocking(timeout);
         try
         {
-            ProcessFlushResult(UnsynchronizedWriteMessage(message, _defaultMessageWriter).GetAwaiter().GetResult());
+            UnsynchronizedWriteMessage(message).GetAwaiter().GetResult();
+            if (!_writerCompleted)
+            {
+                _defaultMessageWriter.Writer.Commit();
+                _flushControl.FlushAsync(observeFlushThreshold: false).GetAwaiter().GetResult();
+            }
         }
         catch (Exception ex) when (ex is not TimeoutException)
         {
@@ -204,18 +218,15 @@ class PgV3Protocol : IDisposable
 
     }
 
-    ValueTask ProcessFlushResultAsync(FlushResult flushResult)
+    async ValueTask ProcessFlushResult(ValueTask<FlushResult> flushResult, bool isBlocking)
     {
-        if (flushResult.IsCompleted)
-            return CompletePipeWriterAsync();
-
-        return new ValueTask();
-    }
-
-    void ProcessFlushResult(FlushResult flushResult)
-    {
-        if (flushResult.IsCompleted)
-            CompletePipeWriter();
+        if ((await flushResult.ConfigureAwait(false)).IsCompleted)
+        {
+            if (isBlocking)
+                CompletePipeWriter();
+            else
+                await CompletePipeWriterAsync();
+        }
     }
 
     void CompletePipeWriter(Exception? exception = null)
@@ -230,49 +241,45 @@ class PgV3Protocol : IDisposable
         return _pipeWriter.CompleteAsync(exception);
     }
 
-    async ValueTask<FlushResult> UnsynchronizedWriteMessage<T, TWriter>(T message, MessageWriter<TWriter> writer, CancellationToken cancellationToken = default)
-        where T : IFrontendMessage where TWriter : IBufferWriter<byte>
+    ValueTask UnsynchronizedWriteMessage<T>(T message, CancellationToken cancellationToken = default)
+        where T : IFrontendMessage
     {
+        var writer = _defaultMessageWriter;
         if (message.TryPrecomputeLength(out var precomputedLength))
         {
-            if (precomputedLength < 0)
+            if (FrontendMessage.DebugEnabled && precomputedLength < 0)
                 throw new InvalidOperationException("TryPrecomputeLength out value \"length\" cannot be negative.");
 
             precomputedLength += MessageWriter.IntByteCount;
             writer.WriteByte((byte)message.FrontendCode);
             writer.WriteInt(precomputedLength);
-            message.Write(writer);
-            writer.Commit();
+            message.Write(ref writer.Writer);
         }
         else if (message is IStreamingFrontendMessage streamingMessage)
         {
-            var result = await streamingMessage.WriteWithHeaderAsync(writer, cancellationToken: cancellationToken).ConfigureAwait(false);
-            if (result.IsCompleted)
-                return result;
+            return ProcessFlushResult(streamingMessage.WriteWithHeaderAsync(writer, cancellationToken: cancellationToken), _flushControl.IsFlushBlocking);
         }
         else
         {
+            WriteBufferedMessage(message, _headerBufferWriter ??= new HeaderBufferWriter(), writer);
+        }
+
+        return new ValueTask();
+
+        static void WriteBufferedMessage(T message, HeaderBufferWriter headerBufferWriter, MessageWriter<IPipeWriterSyncSupport> writer)
+        {
             try
             {
-                _headerBufferWriter ??= new MessageWriter<HeaderBufferWriter>(new HeaderBufferWriter());
-                message.Write(_headerBufferWriter);
-                _headerBufferWriter.Commit();
-                // Completed then do something.
-                _headerBufferWriter.Output.SetCode((byte)message.FrontendCode);
-                _headerBufferWriter.Output.CopyTo(writer.Output);
-                writer.AdvanceCommitted(_headerBufferWriter.BytesCommitted);
+                var bufferWriter = new BufferWriter<HeaderBufferWriter>(headerBufferWriter);
+                message.Write(ref bufferWriter);
+                bufferWriter.Output.SetCode((byte)message.FrontendCode);
+                bufferWriter.CopyTo(ref writer.Writer);
             }
             finally
             {
-                _headerBufferWriter!.Reset();
+                headerBufferWriter.Reset();
             }
         }
-
-        // Flush all remaining data.
-        if (writer.CanFlush)
-            return await writer.ForceFlushAsync(cancellationToken).ConfigureAwait(false);
-
-        return new FlushResult(isCanceled: false, isCompleted: false, isIgnored: false);
     }
 
     public ValueTask<T> ReadMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IBackendMessage =>
@@ -482,8 +489,6 @@ class PgV3Protocol : IDisposable
             return buffer;
         }
     }
-
-    CancellationTokenSource? _readTimeoutSource;
 
     static async ValueTask<PgV3Protocol> StartAsyncCore(PgV3Protocol conn, PgOptions options)
     {

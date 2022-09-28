@@ -12,7 +12,7 @@ using System.Threading.Tasks;
 
 namespace Microsoft.AspNetCore.Internal;
 
-internal sealed class MemoryBufferWriter : Stream, IBufferWriter<byte>
+internal sealed class MemoryBufferWriter : Stream, ICopyableBufferWriter<byte>
 {
     [ThreadStatic]
     private static MemoryBufferWriter? _cachedInstance;

@@ -6,8 +6,27 @@ using Npgsql.Pipelines;
 
 namespace System.Buffers;
 
-internal static class BufferExtensions
+static class BufferWriter
 {
+    // About the default MTU payload size, not sure how much, if any, it helps.
+    public const int DefaultCommitThreshold = 1450;
+}
+
+interface ICopyableBufferWriter<T> : IBufferWriter<T>
+{
+    void CopyTo(IBufferWriter<T> destination);
+}
+
+static class BufferExtensions
+{
+    public static void CopyTo<T, TWriter>(ref this BufferWriter<T> buffer, ref BufferWriter<TWriter> otherBuffer) where T : ICopyableBufferWriter<byte> where TWriter : IBufferWriter<byte>
+    {
+        buffer.Commit();
+        otherBuffer.Commit();
+        buffer.Output.CopyTo(otherBuffer.Output);
+        otherBuffer.AdvanceCommitted(buffer.BytesCommitted);
+    }
+
     public static void WriteRaw<T>(ref this BufferWriter<T> buffer, ReadOnlySpan<byte> value) where T : IBufferWriter<byte>
     {
         buffer.Write(value);

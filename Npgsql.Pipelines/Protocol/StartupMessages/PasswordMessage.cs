@@ -16,9 +16,9 @@ class PasswordMessage : IFrontendMessage
 
     public FrontendCode FrontendCode => FrontendCode.Password;
 
-    public void Write<T>(MessageWriter<T> writer) where T : IBufferWriter<byte>
+    public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
     {
-        writer.WriteCString(_hashedPassword);
+        buffer.WriteCString(_hashedPassword);
     }
 
     public bool TryPrecomputeLength(out int length)

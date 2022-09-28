@@ -5,7 +5,7 @@ namespace Npgsql.Pipelines.MiscMessages;
 readonly struct Sync : IFrontendMessage
 {
     public FrontendCode FrontendCode => FrontendCode.Sync;
-    public void Write<T>(MessageWriter<T> writer) where T : IBufferWriter<byte>
+    public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
     {
     }
 

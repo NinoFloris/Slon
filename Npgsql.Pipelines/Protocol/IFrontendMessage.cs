@@ -6,8 +6,15 @@ using Npgsql.Pipelines.Buffers;
 
 namespace Npgsql.Pipelines;
 
-static class FrontendMessageDebug {
-    public static bool Enabled { get; } = false;
+static class FrontendMessage {
+    public static bool DebugEnabled { get; } = false;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool CannotPrecomputeLength(out int length)
+    {
+        length = default;
+        return false;
+    }
 }
 
 enum FrontendCode: byte
@@ -26,21 +33,11 @@ enum FrontendCode: byte
     Password = (byte) 'p',
 }
 
-static class FrontendMessage
-{
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool CannotPrecomputeLength(out int length)
-    {
-        length = default;
-        return false;
-    }
-}
-
 interface IFrontendMessage
 {
     FrontendCode FrontendCode { get; }
-    void Write<T>(MessageWriter<T> writer) where T : IBufferWriter<byte>;
     bool TryPrecomputeLength(out int length);
+    void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>;
 }
 
 interface IStreamingFrontendMessage: IFrontendMessage

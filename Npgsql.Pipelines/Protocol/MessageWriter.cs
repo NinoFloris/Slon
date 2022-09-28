@@ -1,6 +1,5 @@
 using System;
 using System.Buffers;
-using System.Buffers.Binary;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Threading;
@@ -22,32 +21,21 @@ static class MessageWriter
     public const int IntByteCount = sizeof(int);
     public const int ShortByteCount = sizeof(short);
     public const int ByteByteCount = sizeof(byte);
-    public const int DefaultCommitThreshold = 1450;
 }
 
 class MessageWriter<T> where T : IBufferWriter<byte>
 {
     BufferWriter<T> _writer;
-    readonly FlushControl? _flushControl;
-
-    public MessageWriter(T writer)
-    {
-        _writer = new BufferWriter<T>(writer);
-        // About the default MTU payload size.
-        CommitThreshold = MessageWriter.DefaultCommitThreshold;
-    }
+    readonly FlushControl _flushControl;
 
     public MessageWriter(T writer, FlushControl flushFlushControl)
-        :this(writer)
     {
+        _writer = new BufferWriter<T>(writer);
         _flushControl = flushFlushControl;
-        if (_flushControl.BytesThreshold < CommitThreshold)
-            CommitThreshold = _flushControl.BytesThreshold;
+        AdvisoryFlushThreshold = _flushControl.FlushThreshold < AdvisoryFlushThreshold ? _flushControl.FlushThreshold : BufferWriter.DefaultCommitThreshold;
     }
 
-    public int CommitThreshold { get; }
-
-    public T Output => _writer.Output;
+    public int AdvisoryFlushThreshold { get; }
 
     public void WriteRaw(ReadOnlySpan<byte> value) => _writer.Write(value);
     public void WriteByte(byte value) => _writer.WriteByte(value);
@@ -59,7 +47,7 @@ class MessageWriter<T> where T : IBufferWriter<byte>
     {
         var offset = 0;
         Encoder? encoder = null;
-        var writer = _writer;
+        var writer = Writer;
         while (offset < value.Length)
         {
             WriteChunk();
@@ -76,37 +64,15 @@ class MessageWriter<T> where T : IBufferWriter<byte>
         }
     }
 
-    /// <summary>
-    /// Calls <see cref="IBufferWriter{T}.Advance(int)"/> on the underlying writer
-    /// with the number of uncommitted bytes.
-    /// </summary>
-    public void Commit()
-    {
-        _writer.Commit();
-    }
+    public long BufferedBytes => Writer.BufferedBytes;
+    public long BytesCommitted => Writer.BytesCommitted;
+    public long? UnflushedBytes => _flushControl?.UnflushedBytes + Writer.BufferedBytes;
 
-    /// <summary>
-    /// To be called when the Writer was writen to outside of MessageWriter apis
-    /// This will bring the MessageWriter in sync again with the underlying writer so it can be called for further use.
-    /// </summary>
-    /// <param name="count"></param>
-    public void AdvanceCommitted(long count)
-    {
-        _writer.AdvanceCommitted(count);
-    }
-
-    public long BufferedBytes => _writer.BufferedBytes;
-    public long BytesCommitted => _writer.BytesCommitted;
-
-    [MemberNotNullWhen(true, "_flushControl")]
-    public bool CanFlush => _flushControl is not null;
+    internal ref BufferWriter<T> Writer => ref _writer;
 
     async ValueTask<FlushResult> FlushAsyncCore(bool observeFlushThreshold, CancellationToken cancellationToken)
     {
-        if (!CanFlush)
-            throw new NotSupportedException("This instance is not flushable.");
-
-        Commit();
+        _writer.Commit();
         var result = await _flushControl.FlushAsync(observeFlushThreshold, cancellationToken);
         if (!result.IsCompleted && !result.IsCanceled && !result.IsIgnored)
             Reset();
@@ -117,16 +83,11 @@ class MessageWriter<T> where T : IBufferWriter<byte>
     /// Commit is always executed, independent of the flush threshold being reached.
     public ValueTask<FlushResult> FlushAsync(CancellationToken cancellationToken = default) => FlushAsyncCore(observeFlushThreshold: true, cancellationToken);
 
-    /// Only to be used by the protocol (and even then flush control can still decide not to flush).
-    /// Commit and Flush on the underlying writer if threshold is reached.
-    /// Commit is always executed, independent of the flush threshold being reached.
-    internal ValueTask<FlushResult> ForceFlushAsync(CancellationToken cancellationToken = default) => FlushAsyncCore(observeFlushThreshold: false, cancellationToken);
-
-    public void Reset()
+    internal void Reset()
     {
-        if (_writer.BufferedBytes > 0)
+        if (Writer.BufferedBytes > 0)
             throw new InvalidOperationException("Resetting writer while there are still buffered bytes.");
 
-        _writer = new BufferWriter<T>(_writer.Output);
+        _writer = new BufferWriter<T>(Writer.Output);
     }
 }

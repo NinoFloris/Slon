@@ -9,7 +9,7 @@ namespace Npgsql.Pipelines;
 /// <summary>
 /// Buffer writer which backfills a PG header on copy.
 /// </summary>
-class HeaderBufferWriter: IBufferWriter<byte>
+class HeaderBufferWriter: ICopyableBufferWriter<byte>
 {
     readonly int _minimumSegmentSize;
     int _bytesWritten;

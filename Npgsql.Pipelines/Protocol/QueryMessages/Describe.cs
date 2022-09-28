@@ -30,10 +30,10 @@ readonly struct Describe: IFrontendMessage
     public Describe(DescribeName name) => _name = name;
 
     public FrontendCode FrontendCode => FrontendCode.Describe;
-    public void Write<T>(MessageWriter<T> writer) where T : IBufferWriter<byte>
+    public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
     {
-        writer.WriteByte((byte)(_name.IsPortalName ? StatementOrPortal.Portal : StatementOrPortal.Statement));
-        writer.WriteCString(_name.Name);
+        buffer.WriteByte((byte)(_name.IsPortalName ? StatementOrPortal.Portal : StatementOrPortal.Statement));
+        buffer.WriteCString(_name.Name);
     }
 
     public bool TryPrecomputeLength(out int length)

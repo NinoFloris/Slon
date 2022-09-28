@@ -12,7 +12,7 @@ readonly struct Parse: IFrontendMessage
 
     public Parse(string commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, string? preparedStatementName = null)
     {
-        if (FrontendMessageDebug.Enabled && _parameters.Count > short.MaxValue)
+        if (FrontendMessage.DebugEnabled && _parameters.Count > short.MaxValue)
             throw new InvalidOperationException($"Cannot accept more than short.MaxValue ({short.MaxValue} parameters.");
 
         _commandText = commandText;
@@ -22,16 +22,16 @@ readonly struct Parse: IFrontendMessage
 
     public FrontendCode FrontendCode => FrontendCode.Parse;
 
-    public void Write<T>(MessageWriter<T> writer) where T : IBufferWriter<byte>
+    public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
     {
-        writer.WriteCString(_preparedStatementName);
-        writer.WriteCString(_commandText);
-        writer.WriteShort((short)_parameters.Count);
+        buffer.WriteCString(_preparedStatementName);
+        buffer.WriteCString(_commandText);
+        buffer.WriteShort((short)_parameters.Count);
 
         for (var i = _parameters.Offset; i < _parameters.Count; i++)
         {
             var p = _parameters.Array![i];
-            writer.WriteInt(p.Key.Oid.Value);
+            buffer.WriteInt(p.Key.Oid.Value);
         }
     }
 
