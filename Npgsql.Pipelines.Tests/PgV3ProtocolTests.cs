@@ -83,18 +83,22 @@ public class PgV3ProtocolTests
         var socket = await PgStreamConnection.ConnectAsync(IPEndPoint.Parse(EndPoint));
         var conn = await PgV3Protocol.StartAsync(socket.Writer, socket.Reader, PgOptions, Options);
         var NumRows = 1;
-        var Pipelined = 1000;
+        const int Pipelined = 1000;
         var outer = 10;
 
         for (int j = 0; j < outer; j++)
         {
+            var activations = new ReadActivation[Pipelined];
+
             for (int i = 0; i < Pipelined; i++)
             {
-                await conn.ExecuteQueryAsync($"SELECT generate_series(1, {NumRows})", ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>>.Empty);
+                activations[i] = await conn.ExecuteQueryAsync($"SELECT generate_series(1, {NumRows})", ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>>.Empty);
             }
 
             for (int i = 0; i < Pipelined; i++)
             {
+                var activation = activations[i];
+                await activation.Task.ConfigureAwait(false);
                 await conn.ReadMessageAsync<ParseComplete>(CancellationToken.None).ConfigureAwait(false);
                 await conn.ReadMessageAsync<BindComplete>().ConfigureAwait(false);
                 using var description = await conn.ReadMessageAsync(new RowDescription(conn._fieldDescriptionPool)).ConfigureAwait(false);
@@ -105,6 +109,7 @@ public class PgV3ProtocolTests
                     // i = i;
                 }
                 await conn.ReadMessageAsync<ReadyForQuery>().ConfigureAwait(false);
+                activation.Complete();
             }
         }
     }

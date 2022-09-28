@@ -50,6 +50,11 @@ class PgV3Protocol : IDisposable
     readonly MessageWriter<IPipeWriterSyncSupport> _defaultMessageWriter;
     bool _writerCompleted;
 
+    readonly Queue<ReadActivation> _pending = new();
+
+    readonly Action<ReadActivation> _completeActivationAction;
+    readonly ReadActivation _readyReadActivation;
+
     PgV3Protocol(IPipeWriterSyncSupport writer, IPipeReaderSyncSupport reader, ProtocolOptions? protocolOptions = null)
     {
         _protocolOptions = protocolOptions ?? DefaultPipeOptions;
@@ -57,16 +62,26 @@ class PgV3Protocol : IDisposable
         _flushControl = new ResettableFlushControl(writer, _protocolOptions.WriteTimeout, _protocolOptions.WriterSegmentSize);
         _defaultMessageWriter = new MessageWriter<IPipeWriterSyncSupport>(writer, _flushControl);
         _reader = new SimplePipeReader(reader);
+        _completeActivationAction = activation => CompleteReadActivation(activation);
+        _readyReadActivation = new ReadActivation(_completeActivationAction, activated: true);
     }
 
     PgV3Protocol(PipeWriter writer, PipeReader reader, ProtocolOptions protocolOptions)
         : this(new AsyncOnlyPipeWriter(writer), new AsyncOnlyPipeReader(reader), protocolOptions)
     { }
 
-    public async ValueTask WriteMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IFrontendMessage
+    public async ValueTask<ReadActivation> WriteMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IFrontendMessage
     {
         if (!_messageWriteLock.Wait(0))
             await _messageWriteLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        ReadActivation readActivation;
+        lock (_pending)
+        {
+            var emptyQueue = _pending.Count == 0;
+            readActivation = emptyQueue ? _readyReadActivation : new ReadActivation(_completeActivationAction, activated: false);
+            _pending.Enqueue(readActivation);
+        }
         _flushControl.Initialize();
         try
         {
@@ -85,6 +100,78 @@ class PgV3Protocol : IDisposable
             _messageWriteLock.Release();
         }
 
+        return readActivation;
+    }
+
+    public class BatchWriter
+    {
+        readonly PgV3Protocol _protocol;
+
+        public BatchWriter(PgV3Protocol protocol)
+        {
+            _protocol = protocol;
+        }
+
+        public async ValueTask WriteMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IFrontendMessage
+        {
+            var flushResult = await _protocol.UnsynchronizedWriteMessage(message, _protocol._defaultMessageWriter, cancellationToken);
+            await _protocol.ProcessFlushResultAsync(flushResult);
+        }
+    }
+
+    public async ValueTask<ReadActivation> WriteMessageBatchAsync<TState>(Func<BatchWriter, TState, CancellationToken, ValueTask> batchWriter, TState state, CancellationToken cancellationToken = default)
+    {
+        if (!_messageWriteLock.Wait(0))
+            await _messageWriteLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        ReadActivation readActivation;
+        lock (_pending)
+        {
+            var emptyQueue = _pending.Count == 0;
+            readActivation = emptyQueue ? _readyReadActivation : new ReadActivation(_completeActivationAction, activated: false);
+            _pending.Enqueue(readActivation);
+        }
+        _flushControl.Initialize();
+        _flushControl.AlwaysObserveFlushThreshold = true;
+        try
+        {
+            await batchWriter.Invoke(new BatchWriter(this), state, cancellationToken);
+            // Disable extraneous flush suppression and truly flush all data.
+            _flushControl.AlwaysObserveFlushThreshold = false;
+            await _flushControl.FlushAsync(observeFlushThreshold: false, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not TimeoutException && (ex is not OperationCanceledException || ex is OperationCanceledException oce && oce.CancellationToken != cancellationToken))
+        {
+            await CompletePipeWriterAsync(ex).ConfigureAwait(false);
+            throw;
+        }
+        finally
+        {
+            if (!_writerCompleted)
+                _defaultMessageWriter.Reset();
+            _flushControl.Reset();
+            _messageWriteLock.Release();
+        }
+
+        return readActivation;
+    }
+
+    void CompleteReadActivation(ReadActivation activation)
+    {
+        ReadActivation? queuedActivation;
+        bool hasNext;
+        lock (_pending)
+        {
+            if (!_pending.TryPeek(out queuedActivation) || queuedActivation != activation)
+                throw new InvalidOperationException("Cannot complete an activation that isn't at the front of the queue.");
+            _pending.Dequeue();
+
+            hasNext = _pending.TryPeek(out queuedActivation);
+        }
+
+        // Activate the next one, outside the lock.
+        if (hasNext)
+            queuedActivation!.Activate();
     }
 
     public void WriteMessage<T>(T message, TimeSpan timeout = default) where T : IFrontendMessage
@@ -359,7 +446,7 @@ class PgV3Protocol : IDisposable
                 if (!cancellationToken.CanBeCanceled)
                 {
                     timeoutSource = _readTimeoutSource ??= new CancellationTokenSource();
-                    timeoutSource.CancelAfter(_protocolOptions.ReadTimeout);
+                    timeoutSource.CancelAfter(1000);
                     cancellationToken = timeoutSource.Token;
                 }
                 try
@@ -398,21 +485,26 @@ class PgV3Protocol : IDisposable
     {
         try
         {
-            await conn.WriteMessageAsync(new StartupRequest(options)).ConfigureAwait(false);
+            var activation = await conn.WriteMessageAsync(new StartupRequest(options)).ConfigureAwait(false);
+            await activation.Task;
             var msg = await conn.ReadMessageAsync(new AuthenticationResponse()).ConfigureAwait(false);
             switch (msg.AuthenticationType)
             {
                 case AuthenticationType.Ok:
                     await conn.ReadMessageAsync<StartupResponse>().ConfigureAwait(false);
+                    activation.Complete();
                     break;
                 case AuthenticationType.MD5Password:
+                    activation.Complete();
                     if (options.Password is null)
                         throw new InvalidOperationException("No password given, connection expects password.");
-                    await conn.WriteMessageAsync(new PasswordMessage(options.Username, options.Password, msg.MD5Salt)).ConfigureAwait(false);
+                    activation = await conn.WriteMessageAsync(new PasswordMessage(options.Username, options.Password, msg.MD5Salt)).ConfigureAwait(false);
+                    await activation.Task;
                     var expectOk = await conn.ReadMessageAsync(new AuthenticationResponse()).ConfigureAwait(false);
                     if (expectOk.AuthenticationType != AuthenticationType.Ok)
                         throw new Exception("Unexpected authentication response");
                     await conn.ReadMessageAsync<StartupResponse>().ConfigureAwait(false);
+                    activation.Complete();
                     break;
                 case AuthenticationType.CleartextPassword:
                 default:
@@ -476,46 +568,17 @@ class PgV3Protocol : IDisposable
         }
     }
 
-    public async ValueTask ExecuteQueryAsyncInline(string commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, string? preparedStatementName = null, CancellationToken cancellationToken = default)
-    {
-        if (!_messageWriteLock.Wait(0))
-            await _messageWriteLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-
-        var writer = _defaultMessageWriter;
-        _flushControl.Initialize();
-        _flushControl.AlwaysObserveFlushThreshold = true;
-        try
+    public ValueTask<ReadActivation> ExecuteQueryAsync(string commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, string? preparedStatementName = null, CancellationToken cancellationToken = default)
+        => WriteMessageBatchAsync(static async (writer, state, cancellationToken) =>
         {
+            var (commandText, parameters, preparedStatementName) = state;
             var portal = string.Empty;
-            await WriteMessageAsync(new Parse(commandText, parameters, preparedStatementName), cancellationToken).ConfigureAwait(false);
-            await WriteMessageAsync(new Bind(portal, parameters, ResultColumnCodes.CreateOverall(FormatCode.Binary)), cancellationToken).ConfigureAwait(false);
-            await WriteMessageAsync(new Describe(DescribeName.CreateForPortal(portal)), cancellationToken).ConfigureAwait(false);
-            await WriteMessageAsync(new Execute(portal), cancellationToken).ConfigureAwait(false);
-            await WriteMessageAsync(new Sync(), cancellationToken).ConfigureAwait(false);
-            // Disable extraneous flush suppression and truly flush all data.
-            _flushControl.AlwaysObserveFlushThreshold = false;
-            await _flushControl.FlushAsync(observeFlushThreshold: false, cancellationToken);
-        }
-        catch (Exception ex) when (ex is not TimeoutException && (ex is not OperationCanceledException || ex is OperationCanceledException oce && oce.CancellationToken != cancellationToken))
-        {
-            await CompletePipeWriterAsync(ex).ConfigureAwait(false);
-            throw;
-        }
-        finally
-        {
-            if (!_writerCompleted)
-                _defaultMessageWriter.Reset();
-            _flushControl.Reset();
-            _messageWriteLock.Release();
-        }
-
-        // TODO meh
-        async ValueTask WriteMessageAsync<T>(T message, CancellationToken cancellationToken) where T : IFrontendMessage
-        {
-            await ProcessFlushResultAsync(await UnsynchronizedWriteMessage(message, writer, cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
-        }
-
-    }
+            await writer.WriteMessageAsync(new Parse(commandText, parameters, preparedStatementName), cancellationToken).ConfigureAwait(false);
+            await writer.WriteMessageAsync(new Bind(portal, parameters, ResultColumnCodes.CreateOverall(FormatCode.Binary)), cancellationToken).ConfigureAwait(false);
+            await writer.WriteMessageAsync(new Describe(DescribeName.CreateForPortal(portal)), cancellationToken).ConfigureAwait(false);
+            await writer.WriteMessageAsync(new Execute(portal), cancellationToken).ConfigureAwait(false);
+            await writer.WriteMessageAsync(new Sync(), cancellationToken).ConfigureAwait(false);
+        }, (commandText, parameters, preparedStatementName), cancellationToken);
 
     public void ExecuteQuery(string commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, string? preparedStatementName = null, TimeSpan commandTimeout = default)
     {
@@ -546,4 +609,33 @@ class PgV3Protocol : IDisposable
     }
 }
 
+class ReadActivation
+{
+    readonly Action<ReadActivation> _completeAction;
+    readonly TaskCompletionSource<bool>? _tcs;
 
+    bool _completed;
+
+    [MemberNotNullWhen(false, "_tcs")]
+    bool Activated { get; set; }
+
+    public ReadActivation(Action<ReadActivation> completeAction, bool activated)
+    {
+        if (!activated)
+            _tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _completeAction = completeAction;
+        Activated = activated;
+    }
+
+    internal void Activate()
+    {
+        if (Activated)
+            return;
+
+        _tcs.TrySetResult(true);
+        Activated = true;
+    }
+
+    public void Complete() => _completeAction(this);
+    public ValueTask Task => Activated ? new ValueTask() : new ValueTask(_tcs.Task);
+}

@@ -33,7 +33,7 @@ namespace Npgsql.Pipelines.Benchmark
         [GlobalSetup(Targets = new[] { nameof(ReadPipelines) })]
         public async ValueTask SetupNpgsqlPipelines()
         {
-            var socket = await PgStreamConnection.ConnectAsync(IPEndPoint.Parse(EndPoint));
+            var socket = await PgPipeConnection.ConnectAsync(IPEndPoint.Parse(EndPoint));
             _protocol = await PgV3Protocol.StartAsync(socket.Writer, socket.Reader, PgOptions, Options);
             _commandText = $"SELECT generate_series(1, {NumRows})";
         }
@@ -46,7 +46,7 @@ namespace Npgsql.Pipelines.Benchmark
             Command = new NpgsqlCommand($"SELECT generate_series(1, {NumRows})", conn);
         }
 
-        [Benchmark(Baseline = true)]
+        // [Benchmark(Baseline = true)]
         public async ValueTask ReadNpgsql()
         {
             await using var reader = await Command.ExecuteReaderAsync();
@@ -56,31 +56,35 @@ namespace Npgsql.Pipelines.Benchmark
             }
         }
 
-        const int PipelinedCommands = 1;
+        const int PipelinedCommands = 1000;
+        readonly ReadActivation[] _readActivations = new ReadActivation[PipelinedCommands];
 
         [Benchmark(OperationsPerInvoke = PipelinedCommands)]
         public async ValueTask ReadPipelines()
         {
+            var activations = _readActivations;
             var conn = _protocol;
-            for (int i = 0; i < PipelinedCommands; i++)
+            for (int i = 0; i < activations.Length; i++)
             {
-                await conn.ExecuteQueryAsyncInline(_commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>>.Empty);
+                activations[i] = await conn.ExecuteQueryAsync(_commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>>.Empty);
             }
 
-            for (int i = 0; i < PipelinedCommands; i++)
+            for (int i = 0; i < activations.Length; i++)
             {
-                await conn.ReadMessageAsync<ParseComplete>(CancellationToken.None);
-                await conn.ReadMessageAsync<BindComplete>();
-                using var description = await conn.ReadMessageAsync(new RowDescription(conn._fieldDescriptionPool));
+                var activation = activations[i];
+                await activation.Task.ConfigureAwait(false);
+                await conn.ReadMessageAsync<ParseComplete>().ConfigureAwait(false);
+                await conn.ReadMessageAsync<BindComplete>().ConfigureAwait(false);
+                using var description = await conn.ReadMessageAsync(new RowDescription(conn._fieldDescriptionPool)).ConfigureAwait(false);
                 var dataReader = new DataReader(conn, description);
-                while (await dataReader.ReadAsync())
+                while (await dataReader.ReadAsync().ConfigureAwait(false))
                 {
                     // var i = await dataReader.GetFieldValueAsync<int>().ConfigureAwait(false);;
                     // i = i;
                 }
-                await conn.ReadMessageAsync<ReadyForQuery>();
+                await conn.ReadMessageAsync<ReadyForQuery>().ConfigureAwait(false);
+                activation.Complete();
             }
-
         }
 
     }
