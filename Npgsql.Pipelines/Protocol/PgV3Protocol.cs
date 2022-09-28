@@ -59,7 +59,7 @@ class PgV3Protocol : IDisposable
     {
         _protocolOptions = protocolOptions ?? DefaultPipeOptions;
         _pipeWriter = writer.PipeWriter;
-        _flushControl = new ResettableFlushControl(writer, _protocolOptions.WriteTimeout, _protocolOptions.WriterSegmentSize);
+        _flushControl = new ResettableFlushControl(writer, _protocolOptions.WriteTimeout, Math.Max(MessageWriter.DefaultCommitThreshold, _protocolOptions.WriterSegmentSize / 2));
         _defaultMessageWriter = new MessageWriter<IPipeWriterSyncSupport>(writer, _flushControl);
         _reader = new SimplePipeReader(reader);
         _completeActivationAction = activation => CompleteReadActivation(activation);
@@ -131,6 +131,7 @@ class PgV3Protocol : IDisposable
             readActivation = emptyQueue ? _readyReadActivation : new ReadActivation(_completeActivationAction, activated: false);
             _pending.Enqueue(readActivation);
         }
+
         _flushControl.Initialize();
         _flushControl.AlwaysObserveFlushThreshold = true;
         try
@@ -268,7 +269,7 @@ class PgV3Protocol : IDisposable
         if (writer.CanFlush)
             return await writer.ForceFlushAsync(cancellationToken).ConfigureAwait(false);
 
-        return FlushResult.Default;
+        return new FlushResult(isCanceled: false, isCompleted: false, isIgnored: false);
     }
 
     public ValueTask<T> ReadMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IBackendMessage =>

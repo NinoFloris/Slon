@@ -22,6 +22,7 @@ static class MessageWriter
     public const int IntByteCount = sizeof(int);
     public const int ShortByteCount = sizeof(short);
     public const int ByteByteCount = sizeof(byte);
+    public const int DefaultCommitThreshold = 1450;
 }
 
 class MessageWriter<T> where T : IBufferWriter<byte>
@@ -33,7 +34,7 @@ class MessageWriter<T> where T : IBufferWriter<byte>
     {
         _writer = new BufferWriter<T>(writer);
         // About the default MTU payload size.
-        CommitThreshold = 1450;
+        CommitThreshold = MessageWriter.DefaultCommitThreshold;
     }
 
     public MessageWriter(T writer, FlushControl flushFlushControl)
@@ -121,13 +122,16 @@ class MessageWriter<T> where T : IBufferWriter<byte>
     [MemberNotNullWhen(true, "_flushControl")]
     public bool CanFlush => _flushControl is not null;
 
-    ValueTask<FlushResult> FlushAsyncCore(bool observeFlushThreshold, CancellationToken cancellationToken)
+    async ValueTask<FlushResult> FlushAsyncCore(bool observeFlushThreshold, CancellationToken cancellationToken)
     {
         if (!CanFlush)
             throw new NotSupportedException("This instance is not flushable.");
 
         Commit();
-        return _flushControl.FlushAsync(observeFlushThreshold, cancellationToken);
+        var result = await _flushControl.FlushAsync(observeFlushThreshold, cancellationToken);
+        if (!result.IsCompleted && !result.IsCanceled && !result.IsIgnored)
+            Reset();
+        return result;
     }
 
     /// Commit and Flush on the underlying writer if threshold is reached.

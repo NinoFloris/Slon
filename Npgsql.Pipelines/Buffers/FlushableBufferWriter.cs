@@ -10,12 +10,13 @@ readonly struct FlushResult
     {
         None = 0,
         Canceled = 1,
-        Completed = 2
+        Completed = 2,
+        Ignored = 4
     }
 
     readonly ResultFlags _resultFlags;
 
-    public FlushResult(bool isCanceled, bool isCompleted)
+    public FlushResult(bool isCanceled, bool isCompleted, bool isIgnored)
     {
         _resultFlags = ResultFlags.None;
 
@@ -28,11 +29,16 @@ readonly struct FlushResult
         {
             _resultFlags |= ResultFlags.Completed;
         }
+
+        if (isIgnored)
+        {
+            _resultFlags |= ResultFlags.Ignored;
+        }
     }
 
+    public bool IsIgnored => (_resultFlags & ResultFlags.Ignored) != 0;
     public bool IsCanceled => (_resultFlags & ResultFlags.Canceled) != 0;
     public bool IsCompleted => (_resultFlags & ResultFlags.Completed) != 0;
-    public static FlushResult Default { get; } = new(isCanceled: false, isCompleted: false);
 }
 
 readonly struct CancellationTokenOrTimeout

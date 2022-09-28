@@ -11,6 +11,7 @@ abstract class FlushControl: IDisposable
     public abstract int BytesThreshold { get; }
     public abstract CancellationToken TimeoutCancellationToken { get; }
     public abstract bool IsFlushBlocking { get; }
+    public abstract long UnflushedBytes { get; }
     public abstract ValueTask<FlushResult> FlushAsync(bool observeFlushThreshold = true, CancellationToken cancellationToken = default);
     protected bool _disposed;
 
@@ -71,6 +72,7 @@ class ResettableFlushControl: FlushControl
     public override int BytesThreshold { get; }
     public override CancellationToken TimeoutCancellationToken => _timeoutSource?.Token ?? CancellationToken.None;
     public override bool IsFlushBlocking => _timeoutSource is null;
+    public override long UnflushedBytes => _pipeWriter.UnflushedBytes;
 
     TimeSpan GetTimeout()
     {
@@ -110,11 +112,11 @@ class ResettableFlushControl: FlushControl
         if (AlwaysObserveFlushThreshold || observeFlushThreshold)
         {
             if (BytesThreshold != -1 && BytesThreshold > _pipeWriter.UnflushedBytes)
-                return new ValueTask<FlushResult>(FlushResult.Default);
+                return new ValueTask<FlushResult>(new FlushResult(isCanceled: false, isCompleted: false, isIgnored: true));
         }
 
         if (_pipeWriter.UnflushedBytes == 0)
-            return new ValueTask<FlushResult>(FlushResult.Default);
+            return new ValueTask<FlushResult>(new FlushResult(isCanceled: false, isCompleted: false, isIgnored: true));
 
         return FlushAsyncCore();
 
@@ -139,7 +141,7 @@ class ResettableFlushControl: FlushControl
                     }
                 }
 
-                return new FlushResult(isCanceled: result.IsCanceled, isCompleted: result.IsCompleted);
+                return new FlushResult(isCanceled: result.IsCanceled, isCompleted: result.IsCompleted, isIgnored: false);
             }
             finally
             {

@@ -17,8 +17,8 @@ abstract class PgSocketConnection
     public abstract IPipeReaderSyncSupport Reader { get; }
     public abstract IPipeWriterSyncSupport Writer { get; }
 
-    protected const int DefaultWriterSegmentSize = 8096;
-    protected const int DefaultReaderSegmentSize = 8096;
+    protected const int DefaultWriterSegmentSize = 8192;
+    protected const int DefaultReaderSegmentSize = 8192;
 
     protected static Socket CreateUnconnectedSocket(EndPoint endPoint)
     {

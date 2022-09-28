@@ -19,7 +19,7 @@ interface IPipeWriterSyncSupport: IBufferWriter<byte>
     FlushResult Flush(TimeSpan timeout = default);
 }
 
-class PipeWriterUnflushedBytes: PipeWriter
+sealed class PipeWriterUnflushedBytes: PipeWriter
 {
     readonly PipeWriter _pipeWriter;
     long _bytesBuffered;

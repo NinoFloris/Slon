@@ -576,17 +576,17 @@ namespace System.IO.Pipelines
                 reg = cancellationToken.UnsafeRegister(state => ((StreamPipeWriter)state!).Cancel(), this);
             }
 
-            if (_tailBytesBuffered > 0)
-            {
-                Debug.Assert(_tail != null);
-
-                // Update any buffered data
-                _tail.End += _tailBytesBuffered;
-                _tailBytesBuffered = 0;
-            }
-
             using (reg)
             {
+                if (_tailBytesBuffered > 0)
+                {
+                    Debug.Assert(_tail != null);
+
+                    // Update any buffered data
+                    _tail.End += _tailBytesBuffered;
+                    _tailBytesBuffered = 0;
+                }
+
                 CancellationToken localToken = InternalTokenSource.Token;
                 try
                 {

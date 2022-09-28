@@ -75,9 +75,10 @@ internal struct BufferWriter<T> where T : IBufferWriter<byte>
         var buffered = BufferedBytes;
         if (buffered > 0)
         {
+            _output.Advance(buffered);
             _bytesCommitted += buffered;
             BufferedBytes = 0;
-            _output.Advance(buffered);
+            _memory = _output.GetMemory();
         }
     }
 
