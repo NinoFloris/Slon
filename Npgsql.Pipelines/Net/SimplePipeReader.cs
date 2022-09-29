@@ -18,7 +18,6 @@ sealed class SimplePipeReader
     long _bufferLength;
     readonly IPipeReaderSyncSupport _readerSync;
     readonly PipeReader _reader;
-    bool _completed;
 
     public SimplePipeReader(IPipeReaderSyncSupport reader)
     {
@@ -27,54 +26,49 @@ sealed class SimplePipeReader
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void Advance(long count)
+    {
+        var readPos = _readPosition + count;
+        if (readPos > _bufferLength)
+            ThrowAdvanceOutOfBounds();
+
+        _readPosition = readPos;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryRead(int minimumSize, out ReadOnlySequence<byte> buffer)
     {
-        var bufferLength = _bufferLength;
-        var readPosition = _readPosition;
-        if (bufferLength - readPosition >= minimumSize)
+        if (_bufferLength != 0)
         {
-            if (readPosition == 0)
+            if (_readPosition == 0)
             {
                 buffer = _buffer;
                 return true;
             }
 
-            _buffer = buffer = _buffer.Slice(readPosition);
-            _bufferLength = buffer.Length;
-            _readPosition = 0;
-            return true;
+            _reader.AdvanceTo(_buffer.GetPosition(_readPosition));
         }
 
-        return TryReadSlow(out buffer);
-
-        bool TryReadSlow(out ReadOnlySequence<byte> buffer)
+        if (_reader.TryRead(out var result))
         {
-            if (!_completed && _bufferLength != 0)
+            var buf = result.Buffer;
+            var bufferLength = buf.Length;
+            if (bufferLength >= minimumSize)
             {
-                _reader.AdvanceTo(_buffer.GetPosition(_readPosition), _buffer.GetPosition(Math.Max(_readPosition, _bufferLength - 1)));
+                buffer =_buffer = buf;
+                _bufferLength = bufferLength;
                 _readPosition = 0;
-                _buffer = ReadOnlySequence<byte>.Empty;
-                _bufferLength = 0;
+                return true;
             }
 
-            if (!_completed && _reader.TryRead(out var result))
-            {
-                var buf = result.Buffer;
-                var bufferLength = buf.Length;
-
-                if (bufferLength >= minimumSize)
-                {
-                    buffer =_buffer = buf;
-                    _bufferLength = bufferLength;
-                    return true;
-                }
-
-                _reader.AdvanceTo(buf.Start, buf.End);
-            }
-
-            buffer = ReadOnlySequence<byte>.Empty;
-            return false;
+            // We didn't get enough data, fully consume so ReadAsync will wait.
+            _reader.AdvanceTo(buf.Start, buf.End);
         }
+
+        buffer = ReadOnlySequence<byte>.Empty;
+        _readPosition = 0;
+        _bufferLength = 0;
+        return false;
     }
 
     /// <summary>Asynchronously reads a sequence of bytes from the current <see cref="System.IO.Pipelines.PipeReader" />.</summary>
@@ -97,16 +91,6 @@ sealed class SimplePipeReader
         return result.Buffer;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void Advance(long count)
-    {
-        var readPos = _readPosition + count;
-        if (_readPosition > _bufferLength)
-            ThrowAdvanceOutOfBounds();
-
-        _readPosition = readPos;
-    }
-
     public ReadOnlySequence<byte> ReadAtLeast(int minimumSize, TimeSpan timeout)
     {
         var result = _readerSync.ReadAtLeast(minimumSize, timeout);
@@ -118,7 +102,6 @@ sealed class SimplePipeReader
     {
         if (result.IsCompleted)
         {
-            _completed = true;
             throw new ObjectDisposedException("Pipe was completed while waiting for more data.");
         }
 
@@ -136,13 +119,11 @@ sealed class SimplePipeReader
 
     public ValueTask CompleteAsync(Exception? exception = null)
     {
-        _completed = true;
         return _reader.CompleteAsync(exception);
     }
 
     public void Complete(Exception? exception = null)
     {
-        _completed = true;
         _reader.Complete(exception);
     }
 }

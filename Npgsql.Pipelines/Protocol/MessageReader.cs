@@ -57,20 +57,20 @@ readonly struct MessageHeader
 
     public static bool TryParse(ref SequenceReader<byte> reader, out BackendCode code, out uint messageLength)
     {
-        Span<byte> header = stackalloc byte[MessageHeader.CodeAndLengthByteCount];
+        Span<byte> header = stackalloc byte[CodeAndLengthByteCount];
         if (!reader.TryCopyTo(header))
         {
             code = default;
             messageLength = default;
             return false;
         }
-
         code = (BackendCode)header[0];
-        messageLength = (uint)BinaryPrimitives.ReadInt32BigEndian(header.Slice(1)) + 1;
+        messageLength = BinaryPrimitives.ReadUInt32BigEndian(header.Slice(1)) + 1;
 
         if (BackendMessageDebug.Enabled && !EnumShim.IsDefined(code))
             throw new Exception("Unknown backend code: " + code);
 
+        reader.Advance(CodeAndLengthByteCount);
         return true;
     }
 }
@@ -176,9 +176,8 @@ ref struct MessageReader
             return false;
         }
 
-        CurrentStart = new MessageStartOffset((uint)Reader.Consumed);
+        CurrentStart = new MessageStartOffset((uint)Reader.Consumed - MessageHeader.CodeAndLengthByteCount);
         Current = new MessageHeader(code, length);
-        Reader.Advance(MessageHeader.CodeAndLengthByteCount);
         return true;
     }
 

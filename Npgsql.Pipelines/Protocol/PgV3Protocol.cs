@@ -189,7 +189,7 @@ class PgV3Protocol : IDisposable
 
     public void WriteMessage<T>(T message, TimeSpan timeout = default) where T : IFrontendMessage
     {
-        // TODO probably want to pass the remaining timeout to Unsynchronized.
+        // TODO probably want to pass the remaining timeout to flush control.
         if (!_messageWriteLock.Wait(timeout))
             throw new TimeoutException("The operation has timed out.");
 
@@ -449,38 +449,6 @@ class PgV3Protocol : IDisposable
             throw new NotImplementedException();
         }
 
-        async ValueTask<ReadOnlySequence<byte>> ReadAsync(int minimumSize, CancellationToken cancellationToken)
-        {
-            if (!_reader.TryRead(minimumSize, out var buffer))
-            {
-                CancellationTokenSource? timeoutSource = null;
-                if (!cancellationToken.CanBeCanceled)
-                {
-                    timeoutSource = _readTimeoutSource ??= new CancellationTokenSource();
-                    timeoutSource.CancelAfter(1000);
-                    cancellationToken = timeoutSource.Token;
-                }
-                try
-                {
-                    return await _reader.ReadAtLeastAsync(minimumSize, cancellationToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException ex) when (timeoutSource?.Token.IsCancellationRequested == true && !cancellationToken.IsCancellationRequested)
-                {
-                    throw new TimeoutException("The operation has timed out.", ex);
-                }
-                finally
-                {
-                    if (timeoutSource is not null && _readTimeoutSource?.TryReset() == false)
-                    {
-                        _readTimeoutSource.Dispose();
-                        _readTimeoutSource = null;
-                    }
-                }
-            }
-
-            return buffer;
-        }
-
         ReadOnlySequence<byte> Read(int minimumSize, TimeSpan timeout)
         {
             if (!_reader.TryRead(minimumSize, out var buffer))
@@ -489,6 +457,47 @@ class PgV3Protocol : IDisposable
             return buffer;
         }
     }
+
+    ValueTask<ReadOnlySequence<byte>> ReadAsync(int minimumSize, CancellationToken cancellationToken)
+    {
+        if (_reader.TryRead(minimumSize, out var buffer))
+            return new ValueTask<ReadOnlySequence<byte>>(buffer);
+
+        return ReadAsyncCore(this, minimumSize, cancellationToken);
+
+        static async ValueTask<ReadOnlySequence<byte>> ReadAsyncCore(PgV3Protocol protocol, int minimumSize, CancellationToken cancellationToken)
+        {
+            CancellationTokenSource? timeoutSource = null;
+            if (!cancellationToken.CanBeCanceled)
+            {
+                timeoutSource = protocol._readTimeoutSource ??= new CancellationTokenSource();
+                timeoutSource.CancelAfter(protocol._protocolOptions.ReadTimeout);
+                cancellationToken = timeoutSource.Token;
+            }
+            try
+            {
+                return await protocol._reader.ReadAtLeastAsync(minimumSize, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException ex) when (timeoutSource?.Token.IsCancellationRequested == true && !cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException("The operation has timed out.", ex);
+            }
+            finally
+            {
+                if (timeoutSource is not null && protocol._readTimeoutSource?.TryReset() == false)
+                {
+                    protocol._readTimeoutSource.Dispose();
+                    protocol._readTimeoutSource = null;
+                }
+            }
+        }
+    }
+
+    public async ValueTask WaitForDataAsync(int minimumSize, CancellationToken cancellationToken = default)
+    {
+        await ReadAsync(minimumSize, cancellationToken);
+    }
+
 
     static async ValueTask<PgV3Protocol> StartAsyncCore(PgV3Protocol conn, PgOptions options)
     {

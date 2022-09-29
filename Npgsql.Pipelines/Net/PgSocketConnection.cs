@@ -127,7 +127,7 @@ sealed class PgStreamConnection : PgSocketConnection, IDisposable, IAsyncDisposa
     PgStreamConnection(NetworkStream stream)
     {
         _stream = stream;
-        Reader = new StreamPipeReader(stream, new StreamPipeReaderOptions(bufferSize: DefaultReaderSegmentSize, useZeroByteReads: true));
+        Reader = new StreamPipeReader(stream, new StreamPipeReaderOptions(bufferSize: DefaultReaderSegmentSize, useZeroByteReads: false));
         var writer = new StreamPipeWriter(stream, new StreamPipeWriterOptions(minimumBufferSize: DefaultWriterSegmentSize));
         Writer = writer;
     }
