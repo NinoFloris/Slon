@@ -21,8 +21,8 @@ class HeaderBufferWriter: ICopyableBufferWriter<byte>
     public HeaderBufferWriter(int minimumSegmentSize = 4096)
     {
         _minimumSegmentSize = minimumSegmentSize;
-        _bytesWritten = MessageHeader.CodeAndLengthByteCount;
-        _position = MessageHeader.CodeAndLengthByteCount;
+        _bytesWritten = MessageHeader.ByteCount;
+        _position = MessageHeader.ByteCount;
     }
 
     byte _code;
@@ -47,8 +47,8 @@ class HeaderBufferWriter: ICopyableBufferWriter<byte>
             _currentSegment = null;
         }
 
-        _bytesWritten = MessageHeader.CodeAndLengthByteCount;
-        _position = MessageHeader.CodeAndLengthByteCount;
+        _bytesWritten = MessageHeader.ByteCount;
+        _position = MessageHeader.ByteCount;
         _code = 0;
     }
 
@@ -142,7 +142,7 @@ class HeaderBufferWriter: ICopyableBufferWriter<byte>
             if (_code == 0)
                 throw new InvalidOperationException("Missing code, code should be set before copying out data.");
             span[0] = _code;
-            BinaryPrimitives.WriteInt32BigEndian(span.Slice(1), _bytesWritten - (MessageHeader.CodeAndLengthByteCount - MessageWriter.IntByteCount));
+            BinaryPrimitives.WriteInt32BigEndian(span.Slice(1), _bytesWritten - (MessageHeader.ByteCount - MessageWriter.IntByteCount));
         }
 
     }

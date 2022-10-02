@@ -17,7 +17,7 @@ public class PgV3ProtocolTests
     const string Database = "postgres";
 
     static PgOptions PgOptions { get; } = new() { Username = Username, Password = Password, Database = Database };
-    static ProtocolOptions Options { get; } = new() { ReadTimeout = TimeSpan.FromSeconds(5) };
+    static ProtocolOptions Options { get; } = new() { ReadTimeout = TimeSpan.FromSeconds(5), ReaderSegmentSize = 1024};
 
     [Test]
     public async Task PipeSimpleQueryAsync()
@@ -27,18 +27,11 @@ public class PgV3ProtocolTests
             var socket = await PgPipeConnection.ConnectAsync(IPEndPoint.Parse(EndPoint));
             var conn = await PgV3Protocol.StartAsync(socket.Writer, socket.Reader, PgOptions, Options);
             await conn.ExecuteQueryAsync("SELECT pg_sleep(2)", ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>>.Empty);
-
-            await conn.ReadMessageAsync<ParseComplete>(CancellationToken.None).ConfigureAwait(false);
-            await conn.ReadMessageAsync<BindComplete>().ConfigureAwait(false);
-            using var description = await conn.ReadMessageAsync(new RowDescription(conn._fieldDescriptionPool)).ConfigureAwait(false);
-            var dataReader = new DataReader(conn, description);
+            var dataReader = new DataReader(conn);
             while (await dataReader.ReadAsync().ConfigureAwait(false))
             {
-                // var i = await dataReader.GetFieldValueAsync<int>().ConfigureAwait(false);;
-                // i = i;
             }
             await conn.ReadMessageAsync<ReadyForQuery>().ConfigureAwait(false);
-
         }
         catch(Exception ex)
         {
@@ -79,12 +72,13 @@ public class PgV3ProtocolTests
     [Test]
     public async ValueTask PipeliningTest()
     {
-        // await Task.Delay(10000);
         var socket = await PgStreamConnection.ConnectAsync(IPEndPoint.Parse(EndPoint));
         var conn = await PgV3Protocol.StartAsync(socket.Writer, socket.Reader, PgOptions, Options);
-        var NumRows = 1;
+        var NumRows = 1000;
         const int Pipelined = 1000;
-        var outer = 10;
+        var outer = 1;
+
+        var dataReader = new DataReader(conn);
 
         for (int j = 0; j < outer; j++)
         {
@@ -97,19 +91,14 @@ public class PgV3ProtocolTests
 
             for (int i = 0; i < Pipelined; i++)
             {
-                var activation = activations[i];
-                await activation.Task.ConfigureAwait(false);
-                await conn.ReadMessageAsync<ParseComplete>(CancellationToken.None).ConfigureAwait(false);
-                await conn.ReadMessageAsync<BindComplete>().ConfigureAwait(false);
-                using var description = await conn.ReadMessageAsync(new RowDescription(conn._fieldDescriptionPool)).ConfigureAwait(false);
-                var dataReader = new DataReader(conn, description);
+                await dataReader.IntializeAsync(activations[i]);
                 while (await dataReader.ReadAsync().ConfigureAwait(false))
                 {
                     // var i = await dataReader.GetFieldValueAsync<int>().ConfigureAwait(false);;
                     // i = i;
                 }
                 await conn.ReadMessageAsync<ReadyForQuery>().ConfigureAwait(false);
-                activation.Complete();
+                dataReader.Dispose();
             }
         }
     }

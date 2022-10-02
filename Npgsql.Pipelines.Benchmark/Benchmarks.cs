@@ -37,6 +37,7 @@ namespace Npgsql.Pipelines.Benchmark
             _protocol = await PgV3Protocol.StartAsync(socket.Writer, socket.Reader, PgOptions, Options);
             _commandText = $"SELECT generate_series(1, {NumRows})";
             _channel = Channel.CreateUnbounded<bool>();
+            _dataReader = new DataReader(_protocol);
 
             var _ = Task.Run(async () =>
             {
@@ -89,9 +90,8 @@ namespace Npgsql.Pipelines.Benchmark
             for (var i = 0; i < readerTasks.Length; i++)
             {
                 await using var reader = await readerTasks[i];
-                while (await reader.ReadAsync()) // put a breakpoint here and run test in the debugger
+                while (await reader.ReadAsync())
                 {
-
                 }
             }
         }
@@ -102,15 +102,10 @@ namespace Npgsql.Pipelines.Benchmark
             var conn = _protocol;
             var activation = await conn.ExecuteQueryAsync(_commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>>.Empty);
             await activation.Task;
-            await conn.ReadMessageAsync<ParseComplete>();
-            await conn.ReadMessageAsync<BindComplete>();
-            using var description = await conn.ReadMessageAsync(new RowDescription(conn._fieldDescriptionPool));
-
-            var dataReader = new DataReader(conn, description);
+            var dataReader = new DataReader(conn);
+            await dataReader.IntializeAsync(activation);
             while (await dataReader.ReadAsync())
             {
-                // var i = await dataReader.GetFieldValueAsync<int>().ConfigureAwait(false);;
-                // i = i;
             }
             await conn.ReadMessageAsync<ReadyForQuery>();
             activation.Complete();
@@ -121,86 +116,28 @@ namespace Npgsql.Pipelines.Benchmark
         readonly ReadActivation[] _readActivations = new ReadActivation[PipelinedCommands];
         NpgsqlConnection _conn;
         Channel<bool> _channel;
+        DataReader _dataReader;
 
         [Benchmark(OperationsPerInvoke = PipelinedCommands)]
         public async ValueTask PipelinesPipelined()
         {
-        var activations = _readActivations;
-        var conn = _protocol;
-        var writer = _channel.Writer;
-        for (var i = 0; i < activations.Length; i++)
-        {
-            writer.TryWrite(true);
-            // conn.ExecuteQueryAsync(_commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>>.Empty, i < activations.Length - 1);
-        }
-
-        for (var i = 0; i < activations.Length; i++)
-        {
-            // var activation = activations[i];
-            // await activation.Task;
-            await conn.WaitForDataAsync(50);
-            await conn.ReadMessageAsync<InlinedReader>();
-            // await conn.ReadMessageAsync<ParseComplete>();
-            // await conn.ReadMessageAsync<BindComplete>();
-            // using var description = await conn.ReadMessageAsync(new RowDescription(conn._fieldDescriptionPool));
-            // var dataReader = new DataReader(conn, description);
-            // while (await dataReader.ReadAsync())
-            // {
-            //     // var i = await dataReader.GetFieldValueAsync<int>().ConfigureAwait(false);;
-            //     // i = i;
-            // }
-            // await conn.ReadMessageAsync<ReadyForQuery>();
-            // activation.Complete();
-        }
-        }
-
-        struct InlinedReader: IBackendMessage
-        {
-            int _state;
-            public ReadStatus Read(ref MessageReader reader)
+            var activations = _readActivations;
+            var dataReader = _dataReader;
+            var conn = _protocol;
+            var writer = _channel.Writer;
+            for (var i = 0; i < activations.Length; i++)
             {
-                switch (_state)
+                writer.TryWrite(true);
+                // conn.ExecuteQueryAsync(_commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>>.Empty, i < activations.Length - 1);
+            }
+
+            foreach (var activation in activations)
+            {
+                await dataReader.IntializeAsync(activation);
+                while (await dataReader.ReadAsync())
                 {
-                    case 1: goto state1;
-                    case 2: goto state2;
-                    case 3: goto state3;
-                    case 4: goto state4;
                 }
-
-                if (!reader.MoveNextAndIsExpected(BackendCode.ParseComplete, out var status, ensureBuffered: true))
-                    return status;
-
-                _state = 1;
-                state1:
-                if (!reader.MoveNextAndIsExpected(BackendCode.BindComplete, out status, ensureBuffered: true))
-                    return status;
-
-                _state = 2;
-                state2:
-                status = new RowDescription().Read(ref reader);
-                if (status != ReadStatus.Done)
-                    return status;
-
-                _state = 3;
-                state3:
-
-                if (!reader.MoveNext())
-                    return ReadStatus.NeedMoreData;
-
-                if (!reader.SkipSimilar(BackendCode.DataRow, out status))
-                    return status;
-
-                if (!reader.IsExpected(BackendCode.CommandComplete, out status, ensureBuffered: true))
-                    return status;
-
-                _state = 4;
-                state4:
-
-                if (!reader.MoveNextAndIsExpected(BackendCode.ReadyForQuery, out status, ensureBuffered: true))
-                    return status;
-
-                reader.ConsumeCurrent();
-                return ReadStatus.Done;
+                await conn.ReadMessageAsync<ReadyForQuery>();
             }
         }
     }

@@ -4,7 +4,7 @@ using Npgsql.Pipelines;
 
 namespace System.IO.Pipelines;
 
-class StreamPipeReader: PipeReader, IPipeReaderSyncSupport
+sealed class StreamPipeReader: PipeReader, IPipeReaderSyncSupport
 {
     readonly Stream _stream;
     readonly bool _canTimeout;

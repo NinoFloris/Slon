@@ -14,7 +14,7 @@ readonly struct MessageHeader
 {
     // byte - code
     // int4 - length
-    public const int CodeAndLengthByteCount = 5;
+    public const int ByteCount = 5;
 
     readonly BackendCode _code;
     // We use uint because technically the max length for a postgres message is one more byte than we would be able to store
@@ -50,14 +50,69 @@ readonly struct MessageHeader
         }
     }
 
-    public uint PayloadLength => Length - CodeAndLengthByteCount;
+    public uint PayloadLength => Length - ByteCount;
 
     // Length can never be less than CodeAndLengthByteCount.
     public bool IsDefault => _length == 0;
 
+    public static bool TryParse(ref ReadOnlySequence<byte> buffer, out BackendCode code, out uint messageLength)
+    {
+        Span<byte> header = stackalloc byte[ByteCount];
+
+        var firstSpan = buffer.First.Span;
+        if (firstSpan.Length >= header.Length)
+            firstSpan.Slice(0, header.Length).CopyTo(header);
+        else
+        {
+            if (!TryCopySlow(ref buffer, header))
+            {
+                code = default;
+                messageLength = default;
+                return false;
+            }
+        }
+
+        code = (BackendCode)header[0];
+        messageLength = BinaryPrimitives.ReadUInt32BigEndian(header.Slice(1)) + 1;
+
+        if (BackendMessageDebug.Enabled && !EnumShim.IsDefined(code))
+            throw new Exception("Unknown backend code: " + code);
+
+        return true;
+
+        static bool TryCopySlow(ref ReadOnlySequence<byte> buffer, Span<byte> destination)
+        {
+            if (buffer.Length < destination.Length)
+                return false;
+
+            var firstSpan = buffer.First.Span;
+            Debug.Assert(firstSpan.Length < destination.Length);
+            firstSpan.CopyTo(destination);
+            int copied = firstSpan.Length;
+
+            SequencePosition next = buffer.GetPosition(firstSpan.Length);
+            while (buffer.TryGet(ref next, out ReadOnlyMemory<byte> nextSegment, true))
+            {
+                if (nextSegment.Length > 0)
+                {
+                    var nextSpan = nextSegment.Span;
+                    int toCopy = Math.Min(nextSpan.Length, destination.Length - copied);
+                    nextSpan.Slice(0, toCopy).CopyTo(destination.Slice(copied));
+                    copied += toCopy;
+                    if (copied >= destination.Length)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            return true;
+        }
+    }
+
     public static bool TryParse(ref SequenceReader<byte> reader, out BackendCode code, out uint messageLength)
     {
-        Span<byte> header = stackalloc byte[CodeAndLengthByteCount];
+        Span<byte> header = stackalloc byte[ByteCount];
         if (!reader.TryCopyTo(header))
         {
             code = default;
@@ -70,7 +125,7 @@ readonly struct MessageHeader
         if (BackendMessageDebug.Enabled && !EnumShim.IsDefined(code))
             throw new Exception("Unknown backend code: " + code);
 
-        reader.Advance(CodeAndLengthByteCount);
+        reader.Advance(ByteCount);
         return true;
     }
 }
@@ -102,7 +157,7 @@ readonly struct MessageStartOffset
 
     public static MessageStartOffset Recreate(uint offset) => new(offset, MessageStartOffsetFlags.BeforeFirstMove);
     public static MessageStartOffset Resume(uint offset) => new(offset, MessageStartOffsetFlags.ResumptionOffset | MessageStartOffsetFlags.BeforeFirstMove);
-    public MessageStartOffset MovedNext() => new(_offset, MessageStartOffsetFlags.ResumptionOffset);
+    public MessageStartOffset MovedNext() => new(_offset, _flags & ~MessageStartOffsetFlags.BeforeFirstMove);
 }
 
 [DebuggerDisplay("Code = {Current.Code}, Length = {Current.Length}")]
@@ -124,7 +179,7 @@ ref struct MessageReader
     public readonly uint CurrentConsumed => (uint)(Consumed - CurrentStart.GetOffset());
     public readonly bool IsCurrentBuffered => Reader.Length >= CurrentStart.GetOffset() + Current.Length;
 
-    public static MessageReader Create(in ReadOnlySequence<byte> sequence) => new(sequence, new MessageStartOffset(0));
+    public static MessageReader Create(scoped in ReadOnlySequence<byte> sequence) => new(sequence, new MessageStartOffset(0));
 
     /// <summary>
     /// Recreate a reader over the same (or the same starting point) sequence with resumption data.
@@ -135,7 +190,10 @@ ref struct MessageReader
     /// <returns></returns>
     public static MessageReader Create(scoped in ReadOnlySequence<byte> sequence, scoped in ResumptionData resumptionData, long consumed)
     {
-        var reader = new MessageReader(sequence, MessageStartOffset.Recreate(resumptionData.MessageIndex));
+        if (consumed - resumptionData.MessageIndex < 0)
+            throw new ArgumentOutOfRangeException(nameof(resumptionData), "Resumption data carries an invalid MessageIndex for the given consumed value, as its larger than the value of consumed.");
+
+        var reader = new MessageReader(sequence, MessageStartOffset.Recreate((uint)consumed - resumptionData.MessageIndex));
         reader.Current = resumptionData.Header;
         reader.Reader.Advance(consumed);
         return reader;
@@ -176,7 +234,7 @@ ref struct MessageReader
             return false;
         }
 
-        CurrentStart = new MessageStartOffset((uint)Reader.Consumed - MessageHeader.CodeAndLengthByteCount);
+        CurrentStart = new MessageStartOffset((uint)Reader.Consumed - MessageHeader.ByteCount);
         Current = new MessageHeader(code, length);
         return true;
     }
@@ -187,17 +245,14 @@ ref struct MessageReader
     /// <returns>A bool signalling whether the reader advanced past the current message, this may leave an empty reader.</returns>
     public bool ConsumeCurrent()
     {
-        if (!IsCurrentBuffered)
+        if (!IsCurrentBuffered || CurrentStart.IsBeforeFirstMove)
             return false;
-        if (CurrentStart.GetOffset() + MessageHeader.CodeAndLengthByteCount == Consumed)
-            Reader.Advance(Current.PayloadLength);
-        else
-        {
-            // Friendly error, otherwise ArgumentOutOfRange is thrown from Advance.
-            if (BackendMessageDebug.Enabled && CurrentStart.GetOffset() + Current.Length < Reader.Consumed)
-                throw new InvalidOperationException("Can't consume current message as the reader already advanced past this message boundary.");
-            Reader.Advance(CurrentStart.GetOffset() + Current.Length - Reader.Consumed);
-        }
+
+        // Friendly error, otherwise ArgumentOutOfRange is thrown from Advance.
+        if (BackendMessageDebug.Enabled && Reader.Consumed > CurrentStart.GetOffset() + Current.Length)
+            throw new InvalidOperationException("Can't consume current message as the reader already advanced past this message boundary.");
+
+        Reader.Advance(CurrentStart.GetOffset() + Current.Length - Reader.Consumed);
 
         return true;
     }

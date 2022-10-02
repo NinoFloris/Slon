@@ -40,12 +40,11 @@ sealed class SimplePipeReader
     {
         if (_bufferLength != 0)
         {
-            if (_readPosition == 0)
+            if (_readPosition == 0 && _bufferLength >= minimumSize)
             {
                 buffer = _buffer;
                 return true;
             }
-
             _reader.AdvanceTo(_buffer.GetPosition(_readPosition));
         }
 

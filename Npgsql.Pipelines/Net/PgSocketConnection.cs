@@ -122,9 +122,9 @@ sealed class PgPipeConnection: PgSocketConnection, IDisposable
 
 sealed class PgStreamConnection : PgSocketConnection, IDisposable, IAsyncDisposable
 {
-    readonly NetworkStream _stream;
+    readonly SealedNetworkStream _stream;
 
-    PgStreamConnection(NetworkStream stream)
+    PgStreamConnection(SealedNetworkStream stream)
     {
         _stream = stream;
         Reader = new StreamPipeReader(stream, new StreamPipeReaderOptions(bufferSize: DefaultReaderSegmentSize, useZeroByteReads: false));
@@ -140,7 +140,7 @@ sealed class PgStreamConnection : PgSocketConnection, IDisposable, IAsyncDisposa
     {
         var socket = CreateUnconnectedSocket(endPoint);
         await socket.ConnectAsync(endPoint, cancellationToken);
-        var stream = new NetworkStream(socket, ownsSocket: true);
+        var stream = new SealedNetworkStream(socket, ownsSocket: true);
         return new PgStreamConnection(stream);
     }
 
@@ -148,7 +148,7 @@ sealed class PgStreamConnection : PgSocketConnection, IDisposable, IAsyncDisposa
     {
         var socket = CreateUnconnectedSocket(endPoint);
         ConnectWithTimeout();
-        var stream = new NetworkStream(socket, ownsSocket: true);
+        var stream = new SealedNetworkStream(socket, ownsSocket: true);
         return new PgStreamConnection(stream);
 
         void ConnectWithTimeout()
@@ -191,5 +191,24 @@ sealed class PgStreamConnection : PgSocketConnection, IDisposable, IAsyncDisposa
 #else
         _stream.Dispose();
 #endif
+    }
+
+    sealed class SealedNetworkStream : NetworkStream
+    {
+        public SealedNetworkStream(Socket socket) : base(socket)
+        {
+        }
+
+        public SealedNetworkStream(Socket socket, bool ownsSocket) : base(socket, ownsSocket)
+        {
+        }
+
+        public SealedNetworkStream(Socket socket, FileAccess access) : base(socket, access)
+        {
+        }
+
+        public SealedNetworkStream(Socket socket, FileAccess access, bool ownsSocket) : base(socket, access, ownsSocket)
+        {
+        }
     }
 }

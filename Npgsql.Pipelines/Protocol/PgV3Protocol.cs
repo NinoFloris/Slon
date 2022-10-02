@@ -285,8 +285,8 @@ class PgV3Protocol : IDisposable
     public ValueTask<T> ReadMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IBackendMessage =>
         ReadMessageCore(message, CancellationTokenOrTimeout.CreateCancellationToken(cancellationToken));
 
-    public ValueTask<T> ReadMessageAsync<T>(CancellationToken cancellationToken = default) where T : IBackendMessage, new()
-        => ReadMessageCore(new T(), CancellationTokenOrTimeout.CreateCancellationToken(cancellationToken));
+    public ValueTask<T> ReadMessageAsync<T>(CancellationToken cancellationToken = default) where T : IBackendMessage, new() =>
+        ReadMessageCore(new T(), CancellationTokenOrTimeout.CreateCancellationToken(cancellationToken));
 
     public T ReadMessage<T>(T message, TimeSpan timeout = default) where T : IBackendMessage =>
         ReadMessageCore(message, CancellationTokenOrTimeout.CreateTimeout(timeout)).GetAwaiter().GetResult();
@@ -307,8 +307,8 @@ class PgV3Protocol : IDisposable
         do
         {
             var buffer = isAsync
-                ? await ReadAsync(ComputeMinimumSize(resumptionData), cancellationToken.CancellationToken).ConfigureAwait(false)
-                : Read(ComputeMinimumSize(resumptionData), readTimeout);
+                ? await ReadAsync((int)consumed + ComputeMinimumSize(resumptionData), cancellationToken.CancellationToken).ConfigureAwait(false)
+                : Read((int)consumed + ComputeMinimumSize(resumptionData), readTimeout);
 
             try
             {
@@ -324,9 +324,9 @@ class PgV3Protocol : IDisposable
             switch (status)
             {
                 case ReadStatus.Done:
-                case ReadStatus.NeedMoreData:
                     _reader.Advance(consumed);
-                    consumed = 0;
+                    break;
+                case ReadStatus.NeedMoreData:
                     break;
                 case ReadStatus.InvalidData:
                     var exception = CreateUnexpectedError(buffer, resumptionData, consumed, readerExn);
@@ -402,15 +402,15 @@ class PgV3Protocol : IDisposable
         {
             if (resumptionData.IsDefault)
                 // TODO does this assumption always hold?
-                return MessageHeader.CodeAndLengthByteCount;
+                return MessageHeader.ByteCount;
 
             var remainingMessage = (int)(resumptionData.Header.Length - resumptionData.MessageIndex);
 
-            // TODO move this into a throw helper.
+            // Must be a composite handler.
             if (remainingMessage == 0)
-                throw new InvalidOperationException("Message reader asked for more data yet we're on a message that is fully consumed.");
+                return MessageHeader.ByteCount;
 
-            if (remainingMessage < MessageHeader.CodeAndLengthByteCount)
+            if (remainingMessage < MessageHeader.ByteCount)
                 return remainingMessage;
 
             // Don't ask for the full message given the reader may want to stream it, just ask for more data.
@@ -495,7 +495,7 @@ class PgV3Protocol : IDisposable
 
     public async ValueTask WaitForDataAsync(int minimumSize, CancellationToken cancellationToken = default)
     {
-        await ReadAsync(minimumSize, cancellationToken);
+        await ReadAsync(minimumSize, cancellationToken).ConfigureAwait(false);
     }
 
 

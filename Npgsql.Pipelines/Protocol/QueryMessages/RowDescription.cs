@@ -19,6 +19,8 @@ struct RowDescription: IBackendMessage, IDisposable
         _pool = pool;
     }
 
+    public ArraySegment<FieldDescription> Fields => _fields;
+
     public ReadStatus Read(ref MessageReader reader)
     {
         if (!reader.MoveNextAndIsExpected(BackendCode.RowDescription, out var status, ensureBuffered: true))
