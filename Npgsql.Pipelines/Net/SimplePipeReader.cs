@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Buffers;
-using System.Diagnostics.CodeAnalysis;
 using System.IO.Pipelines;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -33,6 +32,8 @@ sealed class SimplePipeReader
             ThrowAdvanceOutOfBounds();
 
         _readPosition = readPos;
+
+        static void ThrowAdvanceOutOfBounds() => throw new ArgumentOutOfRangeException(nameof(count), "Cannot read past buffer length");
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -112,9 +113,6 @@ sealed class SimplePipeReader
         _buffer = result.Buffer;
         _bufferLength = result.Buffer.Length;
     }
-
-    [DoesNotReturn]
-    void ThrowAdvanceOutOfBounds() => throw new ArgumentOutOfRangeException("count", "Cannot read past buffer length");
 
     public ValueTask CompleteAsync(Exception? exception = null)
     {

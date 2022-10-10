@@ -193,7 +193,7 @@ class CommandReader
 
             ResumptionData = reader.GetResumptionData();
             // Rewind the sequence to mark everything the row reader could want to use as unconsumed.
-            reader.Reader.Rewind(reader.CurrentConsumed);
+            reader.Rewind(reader.CurrentConsumed);
             Buffer = reader.Sequence.Slice(reader.Consumed);
             return ReadStatus.Done;
         }
@@ -210,7 +210,7 @@ class CommandReader
 
         public ReadStatus Read(ref MessageReader reader)
         {
-            reader.Reader.Advance(_consumed);
+            reader.Advance(_consumed);
             return ReadStatus.Done;
         }
     }

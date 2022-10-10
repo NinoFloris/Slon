@@ -5,7 +5,6 @@ using System.Threading.Channels;
 using System.Threading.Tasks;
 using BenchmarkDotNet.Attributes;
 using Npgsql.Pipelines.MiscMessages;
-using Npgsql.Pipelines.QueryMessages;
 
 namespace Npgsql.Pipelines.Benchmark
 {
@@ -78,7 +77,7 @@ namespace Npgsql.Pipelines.Benchmark
             }
         }
 
-        [Benchmark(OperationsPerInvoke = PipelinedCommands)]
+        [Benchmark(OperationsPerInvoke = PipelinedCommands, Baseline = true)]
         public async ValueTask NpgsqlPipelined()
         {
             var readerTasks = new Task<NpgsqlDataReader>[PipelinedCommands];

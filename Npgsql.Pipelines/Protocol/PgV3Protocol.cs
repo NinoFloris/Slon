@@ -67,7 +67,7 @@ class PgV3Protocol : IDisposable
         _readyReadActivation = new ReadActivation(_completeActivationAction, activated: true);
     }
 
-    PgV3Protocol(PipeWriter writer, PipeReader reader, ProtocolOptions protocolOptions)
+    PgV3Protocol(PipeWriter writer, PipeReader reader, ProtocolOptions? protocolOptions = null)
         : this(new AsyncOnlyPipeWriter(writer), new AsyncOnlyPipeReader(reader), protocolOptions)
     { }
 
@@ -110,7 +110,7 @@ class PgV3Protocol : IDisposable
         return readActivation;
     }
 
-    public class BatchWriter
+    public readonly struct BatchWriter
     {
         readonly PgV3Protocol _protocol;
 
@@ -307,8 +307,8 @@ class PgV3Protocol : IDisposable
         do
         {
             var buffer = isAsync
-                ? await ReadAsync((int)consumed + ComputeMinimumSize(resumptionData), cancellationToken.CancellationToken).ConfigureAwait(false)
-                : Read((int)consumed + ComputeMinimumSize(resumptionData), readTimeout);
+                ? await ReadAsync(checked((int)consumed + ComputeMinimumSize(resumptionData)), cancellationToken.CancellationToken).ConfigureAwait(false)
+                : Read(checked((int)consumed + ComputeMinimumSize(resumptionData)), readTimeout);
 
             try
             {
@@ -370,12 +370,12 @@ class PgV3Protocol : IDisposable
         // As MessageReader is a ref struct we need a small method to create it and pass a reference.
         static ReadStatus ReadCore<TMessage>(ref TMessage message, in ReadOnlySequence<byte> sequence, ref MessageReader.ResumptionData resumptionData, ref long consumed) where TMessage: IBackendMessage
         {
-            MessageReader reader;
+            scoped MessageReader reader;
             if (resumptionData.IsDefault)
             {
                 reader = MessageReader.Create(sequence);
                 if (consumed != 0)
-                    reader.Reader.Advance(consumed);
+                    reader.Advance(consumed);
             }
             else if (consumed == 0)
                 reader = MessageReader.Resume(sequence, resumptionData);
@@ -401,23 +401,22 @@ class PgV3Protocol : IDisposable
         int ComputeMinimumSize(in MessageReader.ResumptionData resumptionData)
         {
             if (resumptionData.IsDefault)
-                // TODO does this assumption always hold?
                 return MessageHeader.ByteCount;
 
-            var remainingMessage = (int)(resumptionData.Header.Length - resumptionData.MessageIndex);
-
-            // Must be a composite handler.
-            if (remainingMessage == 0)
-                return MessageHeader.ByteCount;
-
-            if (remainingMessage < MessageHeader.ByteCount)
-                return remainingMessage;
-
-            // Don't ask for the full message given the reader may want to stream it, just ask for more data.
-            return remainingMessage < _protocolOptions.ReaderSegmentSize ? remainingMessage : _protocolOptions.ReaderSegmentSize;
+            var remainingMessage = resumptionData.Header.Length - resumptionData.MessageIndex;
+            return (int)Math.Min(Int32.MaxValue, remainingMessage switch
+            {
+                // Must be a composite handler.
+                0 => MessageHeader.ByteCount,
+                // Try remaining if its less than ByteCount/ReaderSegmentSize.
+                _ when remainingMessage < Math.Max(MessageHeader.ByteCount, _protocolOptions.ReaderSegmentSize) => remainingMessage,
+                // Don't ask for the full message given the reader may want to stream it, just ask for more data.
+                // TODO This is a bit of a heuristic, we may want to introduce examined bytes into the reader (that way you can ask for more without having to consume it)
+                // TODO There is a workaround by moving Consumed forward, asking for more data, and again until there is enough, not ideal, not the worst.
+                _ => _protocolOptions.ReaderSegmentSize
+            });
         }
 
-        [DoesNotReturn]
         static Exception CreateUnexpectedError(ReadOnlySequence<byte> buffer, scoped in MessageReader.ResumptionData resumptionData, long consumed, Exception? readerException = null)
         {
             // Try to read error response.
@@ -586,6 +585,7 @@ class PgV3Protocol : IDisposable
         }
     }
 
+    // TODO move this up into the ado? layer
     public ValueTask<ReadActivation> ExecuteQueryAsync(string commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, bool moreToCome = false, string? preparedStatementName = null, CancellationToken cancellationToken = default)
         => WriteMessageBatchAsync(static async (writer, state, cancellationToken) =>
         {

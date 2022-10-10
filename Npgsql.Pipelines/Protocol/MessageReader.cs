@@ -9,14 +9,13 @@ using System.Runtime.InteropServices;
 
 namespace Npgsql.Pipelines;
 
-[StructLayout(LayoutKind.Auto)]
 readonly struct MessageHeader
 {
     // code + length
     public const int ByteCount = sizeof(byte) + sizeof(int);
 
-    readonly BackendCode _code;
     readonly uint _length;
+    readonly BackendCode _code;
 
     public MessageHeader(BackendCode code, uint length)
     {
@@ -102,7 +101,6 @@ readonly struct MessageHeader
 }
 
 // Could be optimized like SequencePosition where the flags are in the top bits of the integer.
-[StructLayout(LayoutKind.Auto)]
 readonly struct MessageStartOffset
 {
     [Flags]
@@ -113,8 +111,8 @@ readonly struct MessageStartOffset
         BeforeFirstMove = 2
     }
 
-    readonly MessageStartOffsetFlags _flags;
     readonly long _offset;
+    readonly MessageStartOffsetFlags _flags;
 
     MessageStartOffset(long offset, MessageStartOffsetFlags flags)
         : this(offset)
@@ -136,11 +134,11 @@ readonly struct MessageStartOffset
 [DebuggerDisplay("Code = {_current.Code}, Length = {_current.Length}")]
 ref struct MessageReader
 {
-    public SequenceReader<byte> Reader;
+    SequenceReader<byte> _reader;
     MessageStartOffset _currentStart;
     MessageHeader _current;
 
-    MessageReader(ReadOnlySequence<byte> sequence) => Reader = new SequenceReader<byte>(sequence);
+    MessageReader(ReadOnlySequence<byte> sequence) => _reader = new SequenceReader<byte>(sequence);
     MessageReader(ReadOnlySequence<byte> sequence, MessageHeader current, MessageStartOffset currentStart)
         : this(sequence)
     {
@@ -148,9 +146,10 @@ ref struct MessageReader
         _currentStart = currentStart;
     }
 
+    readonly long GetUnvalidatedCurrentConsumed() => _reader.Consumed - _currentStart.GetOffset();
 
-    public readonly ReadOnlySequence<byte> Sequence => Reader.Sequence;
-    public readonly long Consumed => Reader.Consumed;
+    public readonly ReadOnlySequence<byte> Sequence => _reader.Sequence;
+    public readonly long Consumed => _reader.Consumed;
 
     public readonly MessageHeader Current
     {
@@ -163,7 +162,16 @@ ref struct MessageReader
         }
     }
 
-    readonly uint CurrentConsumedCore => (uint)(Reader.Consumed - _currentStart.GetOffset());
+    public readonly MessageStartOffset CurrentStartOffset
+    {
+        get
+        {
+            if (_currentStart.IsBeforeFirstMove || _current.IsDefault)
+                ThrowEnumOpCantHappen();
+
+            return _currentStart;
+        }
+    }
 
     public readonly uint CurrentConsumed
     {
@@ -172,7 +180,30 @@ ref struct MessageReader
             if (_currentStart.IsBeforeFirstMove || _current.IsDefault)
                 ThrowEnumOpCantHappen();
 
-            return CurrentConsumedCore;
+            var consumed = GetUnvalidatedCurrentConsumed();
+            if (consumed < 0)
+                ThrowOutOfRange();
+
+            return (uint)consumed;
+
+            static void ThrowOutOfRange() => throw new IndexOutOfRangeException("The current message offset lies past what the reader has consumed.");
+        }
+    }
+
+    public readonly uint CurrentRemaining
+    {
+        get
+        {
+            if (_currentStart.IsBeforeFirstMove || _current.IsDefault)
+                ThrowEnumOpCantHappen();
+
+            var remaining = _current.Length - GetUnvalidatedCurrentConsumed();
+            if (remaining < 0)
+                ThrowOutOfRange();
+
+            return (uint)remaining;
+
+            static void ThrowOutOfRange() => throw new IndexOutOfRangeException("The reader has consumed past the end of the current message.");
         }
     }
 
@@ -183,7 +214,7 @@ ref struct MessageReader
             if (_currentStart.IsBeforeFirstMove || _current.IsDefault)
                 ThrowEnumOpCantHappen();
 
-            return Reader.Length >= _currentStart.GetOffset() + _current.Length;
+            return _reader.Length >= _currentStart.GetOffset() + _current.Length;
         }
     }
 
@@ -202,10 +233,9 @@ ref struct MessageReader
             ThrowArgumentOutOfRangeException();
 
         var reader = new MessageReader(sequence, resumptionData.Header, MessageStartOffset.Recreate((uint)(consumed - resumptionData.MessageIndex)));
-        reader.Reader.Advance(consumed);
+        reader._reader.Advance(consumed);
         return reader;
 
-        [DoesNotReturn]
         static void ThrowArgumentOutOfRangeException() =>
             throw new ArgumentOutOfRangeException(nameof(resumptionData), "Resumption data carries an invalid MessageIndex for the given consumed value, as its larger than the value of consumed.");
     }
@@ -219,7 +249,7 @@ ref struct MessageReader
     public static MessageReader Resume(scoped in ReadOnlySequence<byte> sequence, scoped in ResumptionData resumptionData) =>
         new(sequence, resumptionData.Header, MessageStartOffset.Resume(resumptionData.MessageIndex));
 
-    public readonly ResumptionData GetResumptionData() => _current.IsDefault ? default : new(_current, CurrentConsumedCore);
+    public readonly ResumptionData GetResumptionData() => _current.IsDefault ? default : new(_current, (uint)GetUnvalidatedCurrentConsumed());
 
     public bool MoveNext()
     {
@@ -232,8 +262,8 @@ ref struct MessageReader
         if (!_current.IsDefault && !ConsumeCurrent())
             return false;
 
-        _currentStart = new MessageStartOffset(Reader.Consumed);
-        if (!MessageHeader.TryParse(ref Reader, out _current))
+        _currentStart = new MessageStartOffset(_reader.Consumed);
+        if (!MessageHeader.TryParse(ref _reader, out _current))
         {
             // We couldn't fully parse the next header, reset all 'current' state, specifically important for resumption data.
             _current = default;
@@ -250,31 +280,45 @@ ref struct MessageReader
     /// <returns>A bool signalling whether the reader advanced past the current message, this may leave an empty reader.</returns>
     public bool ConsumeCurrent()
     {
-        if (!IsCurrentBuffered)
+        if (_currentStart.IsBeforeFirstMove)
+            return true;
+
+        var remaining = CurrentRemaining;
+        if (remaining == 0)
+            return true;
+
+        if (_reader.Remaining < remaining)
             return false;
 
-        // Friendly error, otherwise ArgumentOutOfRange is thrown from Advance.
-        if (BackendMessage.DebugEnabled && Reader.Consumed > _currentStart.GetOffset() + _current.Length)
-            throw new InvalidOperationException("Can't consume current message as the reader already advanced past this message boundary.");
-
-        Reader.Advance(_currentStart.GetOffset() + _current.Length - Reader.Consumed);
-
+        _reader.Advance(remaining);
         return true;
     }
 
-    public void MoveTo(MessageStartOffset offset)
+    public bool TryReadCString([NotNullWhen(true)]out string? value)
     {
-        // Make sure to work around https://github.com/dotnet/runtime/issues/68774
-        var move = Consumed - offset.GetOffset();
-        if (move > 0)
-            Reader.Rewind(move);
-        else
-            Reader.Advance(move);
+        if (_reader.TryReadTo(out ReadOnlySequence<byte> strBytes, 0))
+        {
+            value = PgEncoding.RelaxedUTF8.GetString(strBytes);
+            return true;
+        }
 
-        if (!MessageHeader.TryParse(ref Reader, out var header))
-            throw new ArgumentOutOfRangeException(nameof(offset), "Given offset is not valid for this reader.");
-        _current = header;
-        _currentStart = new MessageStartOffset(Reader.Consumed);
+        value = null;
+        return false;
+    }
+
+    public bool TryReadCStringBuffer(out ReadOnlySequence<byte> strBytes) => _reader.TryReadTo(out strBytes, 0);
+
+    public bool TryCopyTo(Span<byte> destination) => _reader.TryCopyTo(destination);
+    public bool TryReadShort(out short value) => _reader.TryReadBigEndian(out value);
+    public bool TryReadInt(out int value) => _reader.TryReadBigEndian(out value);
+    public bool TryReadByte(out byte value) => _reader.TryRead(out value);
+    public void Advance(long count) => _reader.Advance(count);
+
+    public void Rewind(long count)
+    {
+        // https://github.com/dotnet/runtime/issues/68774
+        if (count == 0) return;
+        _reader.Rewind(count);
     }
 
     public readonly struct ResumptionData
@@ -299,7 +343,7 @@ ref struct MessageReader
 
 static class MessageReaderExtensions
 {
-    static bool IsAsyncResponse(BackendCode code) => code is BackendCode.NoticeResponse or BackendCode.NotificationResponse or BackendCode.ParameterStatus;
+    public static bool IsAsyncResponse(this BackendCode code) => code is BackendCode.NoticeResponse or BackendCode.NotificationResponse or BackendCode.ParameterStatus;
 
     /// <summary>
     /// Skip messages until code does not equal Current.Code.
@@ -314,7 +358,7 @@ static class MessageReaderExtensions
         while (reader.Current.Code == code && (moved = reader.MoveNext()))
         {}
 
-        if (moved && IsAsyncResponse(reader.Current.Code))
+        if (moved && reader.Current.Code.IsAsyncResponse())
         {
             status = ReadStatus.AsyncResponse;
             return false;
@@ -323,32 +367,15 @@ static class MessageReaderExtensions
         return moved;
     }
 
-    public static bool TryReadCString(this ref MessageReader reader, [NotNullWhen(true)]out string? value)
-    {
-        if (reader.Reader.TryReadTo(out ReadOnlySequence<byte> strBytes, 0))
-        {
-            value = PgEncoding.RelaxedUTF8.GetString(strBytes);
-            return true;
-        }
-
-        value = null;
-        return false;
-    }
-
-    public static bool TryReadShort(this ref MessageReader reader, out short value) => reader.Reader.TryReadBigEndian(out value);
-    public static bool TryReadInt(this ref MessageReader reader, out int value) => reader.Reader.TryReadBigEndian(out value);
-
     public static bool TryReadUInt(this ref MessageReader reader, out uint value)
     {
         UnsafeShim.SkipInit(out value);
-        return reader.Reader.TryReadBigEndian(out Unsafe.As<uint,int>(ref value));
+        return reader.TryReadInt(out Unsafe.As<uint, int>(ref value));
     }
-
-    public static bool TryReadByte(this ref MessageReader reader, out byte value) => reader.Reader.TryRead(out value);
 
     public static bool TryReadBool(this ref MessageReader reader, out bool value)
     {
-        if (!TryReadByte(ref reader, out var b))
+        if (!reader.TryReadByte(out var b))
         {
             value = false;
             return false;
@@ -365,7 +392,7 @@ static class MessageReaderExtensions
     {
         if (reader.Current.Code != code)
         {
-            status = IsAsyncResponse(code) ? ReadStatus.AsyncResponse : ReadStatus.InvalidData;
+            status = code.IsAsyncResponse() ? ReadStatus.AsyncResponse : ReadStatus.InvalidData;
             return false;
         }
 

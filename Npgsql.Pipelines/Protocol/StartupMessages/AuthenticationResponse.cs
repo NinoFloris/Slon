@@ -31,8 +31,7 @@ class AuthenticationResponse : IBackendMessage
         if (!reader.MoveNextAndIsExpected(BackendCode.AuthenticationRequest, out var status, ensureBuffered: true))
             return status;
 
-        ref var seqReader = ref reader.Reader;
-        var _ = seqReader.TryReadBigEndian(out int rq);
+        var _ = reader.TryReadInt(out var rq);
         AuthenticationType = (AuthenticationType)rq;
         if (BackendMessage.DebugEnabled && !EnumShim.IsDefined(AuthenticationType))
             throw new Exception("Unknown authentication request type code: " + AuthenticationType);
@@ -41,12 +40,10 @@ class AuthenticationResponse : IBackendMessage
         {
             case AuthenticationType.MD5Password:
                 var salt = new byte[4];
-                if(!seqReader.TryCopyTo(salt))
+                if(!reader.TryCopyTo(salt))
                     return ReadStatus.InvalidData;
-                seqReader.Advance(4);
+                reader.Advance(4);
                 MD5Salt = salt;
-                break;
-            default:
                 break;
         }
 

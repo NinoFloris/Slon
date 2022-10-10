@@ -42,12 +42,10 @@ struct ErrorResponse: IBackendMessage
         if (!reader.MoveNextAndIsExpected(BackendCode.ErrorResponse, out var status, ensureBuffered: true))
             return status;
 
-        ref var sq = ref reader.Reader;
-
         var fin = false;
         while (!fin)
         {
-            sq.TryRead(out var fieldCodeByte);
+            reader.TryReadByte(out var fieldCodeByte);
             var fieldCode = (ErrorFieldTypeCode) fieldCodeByte;
 
             switch (fieldCode)
