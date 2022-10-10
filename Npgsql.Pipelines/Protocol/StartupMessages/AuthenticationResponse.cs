@@ -34,7 +34,7 @@ class AuthenticationResponse : IBackendMessage
         ref var seqReader = ref reader.Reader;
         var _ = seqReader.TryReadBigEndian(out int rq);
         AuthenticationType = (AuthenticationType)rq;
-        if (BackendMessageDebug.Enabled && !EnumShim.IsDefined(AuthenticationType))
+        if (BackendMessage.DebugEnabled && !EnumShim.IsDefined(AuthenticationType))
             throw new Exception("Unknown authentication request type code: " + AuthenticationType);
 
         switch (AuthenticationType)

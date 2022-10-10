@@ -1,10 +1,10 @@
 namespace Npgsql.Pipelines;
 
-static class BackendMessageDebug {
-    public static bool Enabled { get; } = false;
+static class BackendMessage {
+    public static readonly bool DebugEnabled = false;
 }
 
-enum BackendCode : byte
+enum BackendCode: byte
 {
     AuthenticationRequest   = (byte)'R',
     BackendKeyData          = (byte)'K',

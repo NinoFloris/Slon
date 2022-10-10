@@ -30,6 +30,9 @@ class CommandReader
 
     public async ValueTask InitializeAsync(CancellationToken cancellationToken = default)
     {
+        if (_commandReaderState == CommandReaderState.UnrecoverablyCompleted)
+            throw new InvalidOperationException("Connection is broken.");
+
         try
         {
             var result = await _protocol.ReadMessageAsync<StartCommand>(cancellationToken).ConfigureAwait(false);
@@ -50,36 +53,42 @@ class CommandReader
         }
     }
 
+    void ThrowIfNotInitialized()
+    {
+        if (_commandReaderState == CommandReaderState.None)
+            throw new InvalidOperationException("Command reader wasn't initialized properly, this is a bug.");
+    }
+
     public Task<bool> ReadAsync(CancellationToken cancellationToken = default)
     {
+        ThrowIfNotInitialized();
         switch (_commandReaderState)
         {
             case CommandReaderState.Initialized:
                 if(_rowReader.ReadNext(out var status))
                     return Task.FromResult(true);
 
-                switch (status)
+                return status switch
                 {
-                    case ReadStatus.NeedMoreData:
-                        return BufferAsync(this, cancellationToken);
-                    case ReadStatus.Done:
-                        return CompleteAsync();
-                    default:
-                        throw new InvalidOperationException("Unexpected status from row reader, this is a bug.");
-                }
-
-            case CommandReaderState.Completed:
-            case CommandReaderState.UnrecoverablyCompleted:
-                return Task.FromResult(false);
+                    ReadStatus.AsyncResponse => HandleAsyncResponse(this, cancellationToken),
+                    ReadStatus.NeedMoreData => BufferData(this, cancellationToken),
+                    _ => CompleteAsync(status == ReadStatus.Done)
+                };
             default:
-                throw new InvalidOperationException("Command reader wasn't initialized properly, this is a bug.");
+                return Task.FromResult(false);
         }
 
-        static async Task<bool> BufferAsync(CommandReader instance, CancellationToken cancellationToken = default)
+        static async Task<bool> BufferData(CommandReader instance, CancellationToken cancellationToken = default)
         {
             var result = await instance._protocol.ReadMessageAsync(new ExpandBuffer(instance._rowReader.ResumptionData, instance._rowReader.Consumed), cancellationToken).ConfigureAwait(false);
             instance._rowReader.ExpandBuffer(result.Buffer);
             return await instance.ReadAsync().ConfigureAwait(false);
+        }
+
+        static Task<bool> HandleAsyncResponse(CommandReader instance, CancellationToken cancellationToken = default)
+        {
+            // TODO implement async response.
+            throw new NotImplementedException();
         }
     }
 
@@ -235,48 +244,47 @@ class CommandReader
         // We're dropping down to manual here because reconstructing a SequenceReader every row is too slow.
         public bool ReadNext(out ReadStatus status)
         {
-            if (IsMessageBuffered(_resumptionData.Header.Length - _resumptionData.MessageIndex))
-            {
-                _consumed += _resumptionData.Header.Length - _resumptionData.MessageIndex;
-                _resumptionData = new MessageReader.ResumptionData(_resumptionData.Header, _resumptionData.Header.Length);
-                if (_resumptionData.Header.Code == BackendCode.CommandComplete)
-                {
-                    status = ReadStatus.Done;
-                    return false;
-                }
-            }
-            else
+            if (!IsMessageBuffered(_resumptionData.Header.Length - _resumptionData.MessageIndex))
             {
                 status = ReadStatus.NeedMoreData;
                 return false;
             }
 
+            _consumed += _resumptionData.Header.Length - _resumptionData.MessageIndex;
+            _resumptionData = new MessageReader.ResumptionData(_resumptionData.Header, _resumptionData.Header.Length);
+
+            // Check for the resumption case where CommandComplete wasn't fully buffered in the switch below.
+            if (_resumptionData.Header.Code == BackendCode.CommandComplete)
+            {
+                status = ReadStatus.Done;
+                return false;
+            }
+
             var buffer = _buffer.Slice(_consumed);
-            if (!MessageHeader.TryParse(ref buffer, out var code, out var length))
+            if (!MessageHeader.TryParse(ref buffer, out var header))
             {
                 status = ReadStatus.NeedMoreData;
                 return false;
             }
 
             _consumed += MessageHeader.ByteCount;
-            _resumptionData = new MessageReader.ResumptionData(new MessageHeader(code, length), MessageHeader.ByteCount);
+            _resumptionData = new MessageReader.ResumptionData(header, MessageHeader.ByteCount);
 
-            switch (code)
+            switch (header.Code)
             {
                 case BackendCode.DataRow:
                     // TODO Read column count and validate against row description columns in backend debug mode.
                     status = ReadStatus.Done;
                     return true;
                 case BackendCode.CommandComplete:
-                    // TODO Probably want to move this into the result set "invalid data" path and fix it there.
-                    if (!IsMessageBuffered(length))
+                    if (!IsMessageBuffered(header.Length))
                     {
                         status = ReadStatus.NeedMoreData;
                         return false;
                     }
 
-                    _consumed += length - MessageHeader.ByteCount;
-                    _resumptionData = new MessageReader.ResumptionData(new MessageHeader(code, length), length);
+                    _consumed += header.Length - MessageHeader.ByteCount;
+                    _resumptionData = new MessageReader.ResumptionData(header, header.Length);
                     status = ReadStatus.Done;
                     return false;
                 default:

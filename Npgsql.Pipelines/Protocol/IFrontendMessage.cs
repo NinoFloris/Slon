@@ -7,7 +7,7 @@ using Npgsql.Pipelines.Buffers;
 namespace Npgsql.Pipelines;
 
 static class FrontendMessage {
-    public static bool DebugEnabled { get; } = false;
+    public static readonly bool DebugEnabled = false;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool CannotPrecomputeLength(out int length)
