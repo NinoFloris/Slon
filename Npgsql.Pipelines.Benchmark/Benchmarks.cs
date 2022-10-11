@@ -36,7 +36,7 @@ namespace Npgsql.Pipelines.Benchmark
             _protocol = await PgV3Protocol.StartAsync(socket.Writer, socket.Reader, PgOptions, Options);
             _commandText = $"SELECT generate_series(1, {NumRows})";
             _channel = Channel.CreateUnbounded<bool>();
-            _dataReader = new DataReader(_protocol);
+            _dataReader = new Npgsql.Pipelines.NpgsqlDataReader(_protocol);
 
             var _ = Task.Run(async () =>
             {
@@ -80,7 +80,7 @@ namespace Npgsql.Pipelines.Benchmark
         [Benchmark(OperationsPerInvoke = PipelinedCommands, Baseline = true)]
         public async ValueTask NpgsqlPipelined()
         {
-            var readerTasks = new Task<NpgsqlDataReader>[PipelinedCommands];
+            var readerTasks = new Task<Npgsql.NpgsqlDataReader>[PipelinedCommands];
             for (var i = 0; i < readerTasks.Length; i++)
             {
                 readerTasks[i] = new NpgsqlCommand(_commandText, _conn).ExecuteReaderAsync();
@@ -101,7 +101,7 @@ namespace Npgsql.Pipelines.Benchmark
             var conn = _protocol;
             var activation = await conn.ExecuteQueryAsync(_commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>>.Empty);
             await activation.Task;
-            var dataReader = new DataReader(conn);
+            var dataReader = new Npgsql.Pipelines.NpgsqlDataReader(conn);
             await dataReader.IntializeAsync(activation);
             while (await dataReader.ReadAsync())
             {
@@ -115,7 +115,7 @@ namespace Npgsql.Pipelines.Benchmark
         readonly ReadActivation[] _readActivations = new ReadActivation[PipelinedCommands];
         NpgsqlConnection _conn;
         Channel<bool> _channel;
-        DataReader _dataReader;
+        Npgsql.Pipelines.NpgsqlDataReader _dataReader;
 
         [Benchmark(OperationsPerInvoke = PipelinedCommands)]
         public async ValueTask PipelinesPipelined()

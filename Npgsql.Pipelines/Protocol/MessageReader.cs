@@ -417,4 +417,10 @@ static class MessageReaderExtensions
 
         return reader.IsExpected(code, out status, ensureBuffered);
     }
+
+    public static bool ReadMessage<T>(this ref MessageReader reader, T message, out ReadStatus status) where T : IBackendMessage
+    {
+        status = message.Read(ref reader);
+        return status == ReadStatus.Done;
+    }
 }

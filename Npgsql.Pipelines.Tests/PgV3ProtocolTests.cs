@@ -27,7 +27,7 @@ public class PgV3ProtocolTests
             var socket = await PgPipeConnection.ConnectAsync(IPEndPoint.Parse(EndPoint));
             var conn = await PgV3Protocol.StartAsync(socket.Writer, socket.Reader, PgOptions, Options);
             await conn.ExecuteQueryAsync("SELECT pg_sleep(2)", ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>>.Empty);
-            var dataReader = new DataReader(conn);
+            var dataReader = new NpgsqlDataReader(conn);
             while (await dataReader.ReadAsync().ConfigureAwait(false))
             {
             }
@@ -78,7 +78,7 @@ public class PgV3ProtocolTests
         const int Pipelined = 1000;
         var outer = 1;
 
-        var dataReader = new DataReader(conn);
+        var dataReader = new NpgsqlDataReader(conn);
 
         for (int j = 0; j < outer; j++)
         {
