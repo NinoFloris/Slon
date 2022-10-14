@@ -4,19 +4,18 @@ using System.Collections.Generic;
 
 namespace Npgsql.Pipelines.Protocol;
 
-struct RowDescription: IBackendMessage, IDisposable
+class RowDescription: IBackendMessage
 {
-    readonly ArrayPool<FieldDescription>? _pool;
     static int ColumnCountLookupThreshold => 10;
-    public const int MaxColumns = short.MaxValue;
+    public const int MaxColumns = ushort.MaxValue;
 
     ArraySegment<FieldDescription> _fields;
     Dictionary<string, int>? _nameIndex;
     Dictionary<string, int>? _insensitiveIndex;
 
-    public RowDescription(ArrayPool<FieldDescription>? pool = null)
+    public RowDescription(int fields = 10)
     {
-        _pool = pool;
+        _fields = new ArraySegment<FieldDescription>(new FieldDescription[fields]);
     }
 
     public ArraySegment<FieldDescription> Fields => _fields;
@@ -26,8 +25,13 @@ struct RowDescription: IBackendMessage, IDisposable
         if (!reader.MoveNextAndIsExpected(BackendCode.RowDescription, out var status, ensureBuffered: true))
             return status;
 
+        // TODO read ushort.
         reader.TryReadShort(out var columnCount);
-        var fields = _pool is not null ? _pool.Rent(columnCount) : new FieldDescription[columnCount];
+        if (_fields.Array!.Length >= columnCount)
+            _fields = new ArraySegment<FieldDescription>(_fields.Array, 0, columnCount);
+        else
+            _fields = new ArraySegment<FieldDescription>(new FieldDescription[columnCount], 0, columnCount);
+        var fields = _fields.Array!;
         Dictionary<string, int>? nameIndex = null;
         if (columnCount > ColumnCountLookupThreshold)
             nameIndex = new Dictionary<string, int>(columnCount, StringComparer.Ordinal);
@@ -54,17 +58,15 @@ struct RowDescription: IBackendMessage, IDisposable
                 nameIndex.TryAdd(name!, i);
         }
 
-        _fields = new ArraySegment<FieldDescription>(fields, 0, columnCount);
         _nameIndex = nameIndex;
 
         reader.ConsumeCurrent();
         return ReadStatus.Done;
     }
 
-    public void Dispose()
+    public void Reset()
     {
-        if (_pool is not null && _fields.Array is not null)
-            _pool.Return(_fields.Array);
+        _fields = new ArraySegment<FieldDescription>(_fields.Array, 0, 0);
     }
 }
 
@@ -73,7 +75,7 @@ struct RowDescription: IBackendMessage, IDisposable
 /// A descriptive record on a single field received from PostgreSQL.
 /// See RowDescription in https://www.postgresql.org/docs/current/static/protocol-message-formats.html
 /// </summary>
-public sealed class FieldDescription
+public struct FieldDescription
 {
     internal FieldDescription(
         string name, Oid tableOid, short columnAttributeNumber,

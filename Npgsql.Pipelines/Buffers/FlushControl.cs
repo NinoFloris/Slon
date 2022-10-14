@@ -1,5 +1,6 @@
 using System;
 using System.IO.Pipelines;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -105,6 +106,8 @@ class ResettableFlushControl: FlushControl
     public override bool IsFlushBlocking => _timeoutSource is null;
     public override long UnflushedBytes => _pipeWriter.UnflushedBytes;
 
+    public bool WriterCompleted { get; private set; }
+
     TimeSpan GetTimeout()
     {
         ThrowIfDisposed();
@@ -130,43 +133,48 @@ class ResettableFlushControl: FlushControl
         return _timeoutSource.Token;
     }
 
-    void CompleteFlush()
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    void CompleteFlush(System.IO.Pipelines.FlushResult flushResult)
     {
-        _timeoutSource?.CancelAfter(Timeout.Infinite);
-        _registration?.Dispose();
-    }
+        if (flushResult.IsCompleted)
+            WriterCompleted = true;
 
-    public bool AlwaysObserveFlushThreshold { get; set; } = false;
+        if (!IsFlushBlocking)
+        {
+            _timeoutSource!.CancelAfter(Timeout.Infinite);
+            _registration?.Dispose();
+        }
+    }
 
     public override ValueTask<FlushResult> FlushAsync(bool observeFlushThreshold = true, CancellationToken cancellationToken = default)
     {
-        if (AlwaysObserveFlushThreshold || observeFlushThreshold)
-        {
-            if (FlushThreshold != -1 && FlushThreshold > _pipeWriter.UnflushedBytes)
-                return new ValueTask<FlushResult>(new FlushResult(isCanceled: false, isCompleted: false));
-        }
+        if (observeFlushThreshold && FlushThreshold != -1 && FlushThreshold > _pipeWriter.UnflushedBytes)
+            return new ValueTask<FlushResult>(new FlushResult(isCanceled: false, isCompleted: WriterCompleted));
 
         if (_pipeWriter.UnflushedBytes == 0)
-            return new ValueTask<FlushResult>(new FlushResult(isCanceled: false, isCompleted: false));
+            return new ValueTask<FlushResult>(new FlushResult(isCanceled: false, isCompleted: WriterCompleted));
 
-        return FlushAsyncCore();
+        return Core(this, cancellationToken);
 
-        async ValueTask<FlushResult> FlushAsyncCore()
+#if !NETSTANDARD2_0
+        [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+#endif
+        static async ValueTask<FlushResult> Core(ResettableFlushControl instance, CancellationToken cancellationToken)
         {
+            System.IO.Pipelines.FlushResult result = default;
             try
             {
-                System.IO.Pipelines.FlushResult result;
-                if (_timeoutSource is null)
+                if (instance.IsFlushBlocking)
                 {
-                    result = _writer.Flush(GetTimeout());
+                    result = instance._writer.Flush(instance.GetTimeout());
                 }
                 else
                 {
                     try
                     {
-                        result = await _writer.PipeWriter.FlushAsync(GetToken(cancellationToken));
+                        result = await instance._writer.PipeWriter.FlushAsync(instance.GetToken(cancellationToken));
                     }
-                    catch (OperationCanceledException ex) when (TimeoutCancellationToken.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                    catch (OperationCanceledException ex) when (instance.TimeoutCancellationToken.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
                     {
                         throw new TimeoutException("The operation has timed out.", ex);
                     }
@@ -176,7 +184,7 @@ class ResettableFlushControl: FlushControl
             }
             finally
             {
-                CompleteFlush();
+                instance.CompleteFlush(result);
             }
         }
     }
@@ -201,11 +209,14 @@ class ResettableFlushControl: FlushControl
         _timeoutSource ??= new CancellationTokenSource();
     }
 
+    void ThrowWriterCompleted() => throw new InvalidOperationException("PipeWriter is completed.");
+
     internal void Reset()
     {
         ThrowIfDisposed();
+        if (WriterCompleted)
+            ThrowWriterCompleted();
         _start = -2;
-        AlwaysObserveFlushThreshold = false;
         if (_timeoutSource is not null)
         {
             _registration?.Dispose();

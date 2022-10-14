@@ -41,33 +41,57 @@ public enum StatementType
 
 class CommandReader
 {
-    readonly PgV3Protocol _protocol;
+    PgV3Protocol _protocol;
     RowDescription _rowDescription;
     CommandReaderState _commandReaderState;
     DataRowReader _rowReader;
     CommandComplete _commandComplete;
-
-    public CommandReader(PgV3Protocol protocol)
-    {
-        _protocol = protocol;
-    }
 
     public CommandReaderState State => _commandReaderState;
     public int FieldCount => ThrowIfNotInitialized()._rowDescription.Fields.Count;
     public bool HasRows => ThrowIfNotInitialized()._rowReader.ResumptionData.IsDefault;
 
     public StatementType StatementType => ThrowIfNotCompleted()._commandComplete.StatementType;
-    public ulong RowsAffected => ThrowIfNotCompleted()._commandComplete.Rows;
     public Oid Oid => ThrowIfNotCompleted()._commandComplete.Oid;
 
-    public async ValueTask InitializeAsync(CancellationToken cancellationToken = default)
+    public ulong? RowsRetrieved
     {
-        if (_commandReaderState == CommandReaderState.UnrecoverablyCompleted)
-            throw new InvalidOperationException("Connection is broken.");
+        get
+        {
+            ThrowIfNotCompleted();
+            if (RowsAffected.HasValue)
+                return null;
+
+            return _commandComplete.Rows;
+        }
+    }
+    public ulong? RowsAffected
+    {
+        get
+        {
+            ThrowIfNotCompleted();
+            switch (StatementType)
+            {
+                case StatementType.Update:
+                case StatementType.Insert:
+                case StatementType.Delete:
+                case StatementType.Copy:
+                case StatementType.Move:
+                case StatementType.Merge:
+                    return _commandComplete.Rows;
+                default:
+                    return null;
+            }
+        }
+    }
+
+    public async ValueTask InitializeAsync(PgV3Protocol protocol, CancellationToken cancellationToken = default)
+    {
+        _protocol = protocol;
 
         try
         {
-            var result = await _protocol.ReadMessageAsync<StartCommand>(cancellationToken).ConfigureAwait(false);
+            var result = await _protocol.ReadMessageAsync(new StartCommand(_protocol.GetRowDescription()), cancellationToken).ConfigureAwait(false);
             if (result.IsCompleted)
             {
                 Reset();
@@ -97,50 +121,70 @@ class CommandReader
     CommandReader ThrowIfNotCompleted()
     {
         if (_commandReaderState != CommandReaderState.Completed)
-            throw new InvalidOperationException("Command reader is not completed yet.");
+            throw new InvalidOperationException("Command reader is not successfully completed.");
 
         return this;
     }
 
-    public Task<bool> ReadAsync(CancellationToken cancellationToken = default)
+#if !NETSTANDARD2_0
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+#endif
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ValueTask<bool> ReadAsync(CancellationToken cancellationToken = default)
     {
-        ThrowIfNotInitialized();
         switch (_commandReaderState)
         {
             case CommandReaderState.Initialized:
                 if(_rowReader.ReadNext(out var status))
-                    return Task.FromResult(true);
+                    return new ValueTask<bool>(true);
 
                 return status switch
                 {
-                    ReadStatus.NeedMoreData => BufferData(this, cancellationToken).AsTask(),
-                    ReadStatus.Done => CompleteCommand(this, true, cancellationToken).AsTask(),
-                    ReadStatus.InvalidData => CompleteCommand(this, false, cancellationToken).AsTask(),
-                    ReadStatus.AsyncResponse => HandleAsyncResponse(this, cancellationToken).AsTask(),
+                    ReadStatus.NeedMoreData => BufferData(this, cancellationToken),
+                    ReadStatus.Done => CompleteCommand(this, unexpected: false, cancellationToken),
+                    ReadStatus.InvalidData => CompleteCommand(this, unexpected: true, cancellationToken),
+                    ReadStatus.AsyncResponse => HandleAsyncResponse(this, cancellationToken),
                     _ => ThrowArgumentOutOfRange()
                 };
             default:
-                return Task.FromResult(false);
+                ThrowIfNotInitialized();
+                return new ValueTask<bool>(false);
         }
 
         static async ValueTask<bool> BufferData(CommandReader instance, CancellationToken cancellationToken = default)
         {
-            var result = await instance._protocol.ReadMessageAsync(new ExpandBuffer(instance._rowReader.ResumptionData, instance._rowReader.Consumed), cancellationToken).ConfigureAwait(false);
-            instance._rowReader.ExpandBuffer(result.Buffer);
-            return await instance.ReadAsync().ConfigureAwait(false);
+            try
+            {
+                var result = await instance._protocol.ReadMessageAsync(new ExpandBuffer(instance._rowReader.ResumptionData, instance._rowReader.Consumed), cancellationToken).ConfigureAwait(false);
+                instance._rowReader.ExpandBuffer(result.Buffer);
+                return await instance.ReadAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not TimeoutException && (ex is not OperationCanceledException || ex is OperationCanceledException oce && oce.CancellationToken != cancellationToken))
+            {
+                instance.Complete(null);
+                throw;
+            }
         }
 
-        static async ValueTask<bool> CompleteCommand(CommandReader instance, bool expected, CancellationToken cancellationToken = default)
+        static async ValueTask<bool> CompleteCommand(CommandReader instance, bool unexpected, CancellationToken cancellationToken = default)
         {
-            if (!expected)
+            if (unexpected)
             {
                 instance.Complete(null);
                 return false;
             }
 
-            var result =  await instance._protocol.ReadMessageAsync(new CompleteCommand(instance._rowReader.ResumptionData, instance._rowReader.Consumed), cancellationToken).ConfigureAwait(false);
-            instance.Complete(result.CommandComplete);
-            return false;
+            try
+            {
+                var result =  await instance._protocol.ReadMessageAsync(new CompleteCommand(instance._rowReader.ResumptionData, instance._rowReader.Consumed), cancellationToken).ConfigureAwait(false);
+                instance.Complete(result.CommandComplete);
+                return false;
+            }
+            catch (Exception ex) when (ex is not TimeoutException && (ex is not OperationCanceledException || ex is OperationCanceledException oce && oce.CancellationToken != cancellationToken))
+            {
+                instance.Complete(null);
+                throw;
+            }
         }
 
         static ValueTask<bool> HandleAsyncResponse(CommandReader instance, CancellationToken cancellationToken = default)
@@ -149,7 +193,7 @@ class CommandReader
             throw new NotImplementedException();
         }
 
-        static Task<bool> ThrowArgumentOutOfRange() => throw new ArgumentOutOfRangeException();
+        static ValueTask<bool> ThrowArgumentOutOfRange() => throw new ArgumentOutOfRangeException();
     }
 
     void Complete(CommandComplete? commandComplete)
@@ -159,11 +203,10 @@ class CommandReader
             _commandComplete = commandComplete.Value;
     }
 
-    void Reset()
+    public void Reset()
     {
-        _rowReader = default;
         _commandReaderState = CommandReaderState.None;
-        _rowDescription = default;
+        _rowDescription.Reset();
     }
 
     struct ExpandBuffer : IBackendMessage
@@ -205,86 +248,117 @@ class CommandReader
             Parse = default,
             Bind,
             Describe,
+            RowDescription,
             RowOrCompletion,
-            Completion
+            CommandComplete
         }
 
         ReadState _state;
+        MessageReader.ResumptionData _resumptionData;
         public ReadOnlySequence<byte> Buffer { get; private set; }
-        public MessageReader.ResumptionData ResumptionData { get; private set; }
+        public MessageReader.ResumptionData ResumptionData => _resumptionData;
         public RowDescription RowDescription { get; private set; }
         public CommandComplete CommandComplete { get; private set; }
-        public bool IsCompleted => _state == ReadState.Completion;
+        public bool IsCompleted => _resumptionData.IsDefault;
+
+        public StartCommand(RowDescription rowDescription)
+        {
+            RowDescription = rowDescription;
+        }
 
         public ReadStatus Read(ref MessageReader reader)
         {
             switch (_state)
             {
-                case ReadState.Bind: goto bind;
-                case ReadState.Describe: goto describe;
-                case ReadState.RowOrCompletion: goto rowOrCompletion;
+                case ReadState.Bind:
+                    goto bind;
+                case ReadState.Describe:
+                case ReadState.RowDescription:
+                    goto describe;
+                case ReadState.RowOrCompletion:
+                case ReadState.CommandComplete:
+                    goto rowOrCompletion;
             }
 
-            if (!reader.ReadMessage(new ParseComplete(), out var status))
+            if (!reader.ReadMessage<ParseComplete>(out var status))
                 return status;
 
-            _state = ReadState.Bind;
             bind:
-            if (!reader.ReadMessage(new BindComplete(), out status))
+            if (!reader.ReadMessage<BindComplete>(out status))
+            {
+                _state = ReadState.Bind;
                 return status;
+            }
 
-            _state = ReadState.Describe;
             describe:
-            // Peeking with a copy only works if we're already at the end of the current message.
-            Debug.Assert(reader.CurrentRemaining == 0);
             var readerCopy = reader;
-            if (!reader.MoveNext())
-                return ReadStatus.NeedMoreData;
+            if (_state != ReadState.RowDescription)
+            {
+                // Peeking with a copy only works if we're already at the end of the current message.
+                Debug.Assert(!reader.HasCurrent || reader.CurrentRemaining == 0);
+                if (!reader.MoveNext())
+                {
+                    _state = ReadState.Describe;
+                    return ReadStatus.NeedMoreData;
+                }
+            }
 
-            switch (reader.Current.Code)
+            switch (reader.CurrentCode)
             {
                 case BackendCode.NoData:
                     if (!reader.ConsumeCurrent())
+                    {
+                        _state = ReadState.Describe;
                         return ReadStatus.NeedMoreData;
+                    }
                     break;
                 default:
-                    // TODO pool.
                     reader = readerCopy;
-                    if (!reader.ReadMessage(RowDescription = new RowDescription(pool: null), out status))
+                    if (!reader.ReadMessage(RowDescription, out status))
+                    {
+                        _state = ReadState.RowDescription;
                         return status;
+                    }
                     break;
             }
 
-            _state = ReadState.RowOrCompletion;
             rowOrCompletion:
-            // Peeking with a copy only works if we're already at the end of the current message.
-            Debug.Assert(reader.CurrentRemaining == 0);
-            // readerCopy = reader;
-            if (!reader.MoveNext())
-                return ReadStatus.NeedMoreData;
+            readerCopy = reader;
+            if (_state != ReadState.CommandComplete)
+            {
+                // Peeking with a copy only works if we're already at the end of the current message.
+                Debug.Assert(!reader.HasCurrent || reader.CurrentRemaining == 0);
+                if (!reader.MoveNext())
+                {
+                    _state = ReadState.RowOrCompletion;
+                    return ReadStatus.NeedMoreData;
+                }
+            }
 
-            switch (reader.Current.Code)
+            switch (reader.CurrentCode)
             {
                 case BackendCode.EmptyQueryResponse:
-                    _state = ReadState.Completion;
                     if (!reader.ConsumeCurrent())
+                    {
+                        _state = ReadState.RowOrCompletion;
                         return ReadStatus.NeedMoreData;
+                    }
                     break;
                 case BackendCode.CommandComplete:
-                    _state = ReadState.Completion;
-                    // reader = readerCopy;
-                    // // TODO a bit of a hack to let CommandComplete MoveNext again without doing another peek on the 'hot path'.
-                    reader = MessageReader.Create(reader.Sequence, reader.GetResumptionData(), reader.Consumed);
+                    reader = readerCopy;
                     if (!reader.ReadMessage(CommandComplete = new CommandComplete(), out status))
+                    {
+                        _state = ReadState.CommandComplete;
                         return status;
+                    }
                     break;
                 default:
                     if (!reader.IsExpected(BackendCode.DataRow, out status))
                         return status;
-                    ResumptionData = reader.GetResumptionData();
-                    // Explicitly rewind the sequence to mark everything the row reader could want to use as unconsumed.
-                    reader.Rewind(reader.CurrentConsumed);
-                    Buffer = reader.Sequence.Slice(reader.Consumed);
+                    _resumptionData = reader.GetResumptionData();
+                    // Explicitly reset the sequence to mark everything the row reader could want to use as unconsumed.
+                    reader = readerCopy;
+                    Buffer = reader.UnconsumedSequence;
                     break;
             }
 
@@ -307,12 +381,9 @@ class CommandReader
         public ReadStatus Read(ref MessageReader reader)
         {
             reader = MessageReader.Create(reader.Sequence, _resumptionData, _consumed);
-            var commandComplete = new CommandComplete();
-            var status = commandComplete.Read(ref reader);
-            if (status != ReadStatus.Done)
+            if (!reader.ReadMessage(CommandComplete = new CommandComplete(), out var status))
                 return status;
 
-            CommandComplete = commandComplete;
             return ReadStatus.Done;
         }
     }
@@ -324,6 +395,7 @@ class CommandReader
         MessageReader.ResumptionData _resumptionData;
         readonly int _expectedColumnCount;
         long _consumed;
+        bool _messageNeedsMoreData;
 
         public long Consumed => _consumed;
         public MessageReader.ResumptionData ResumptionData => _resumptionData;
@@ -346,39 +418,79 @@ class CommandReader
         // We're dropping down to manual here because reconstructing a SequenceReader every row is too slow.
         public bool ReadNext(out ReadStatus status)
         {
-            if (!IsMessageBuffered(_resumptionData.Header.Length - _resumptionData.MessageIndex))
+            MessageHeader header;
+            ReadOnlySequence<byte> buffer;
+            if (_messageNeedsMoreData)
             {
-                status = ReadStatus.NeedMoreData;
-                return false;
+                header = _resumptionData.Header;
+                buffer = _buffer.Slice(_consumed);
             }
-
-            _consumed += _resumptionData.Header.Length - _resumptionData.MessageIndex;
-            _resumptionData = new MessageReader.ResumptionData(_resumptionData.Header, _resumptionData.Header.Length);
-
-            var buffer = _buffer.Slice(_consumed);
-            if (!MessageHeader.TryParse(ref buffer, out var header))
+            else
             {
-                status = ReadStatus.NeedMoreData;
-                return false;
-            }
+                if (!IsMessageBuffered(_resumptionData.Header.Length - _resumptionData.MessageIndex))
+                {
+                    status = ReadStatus.NeedMoreData;
+                    return false;
+                }
 
-            _consumed += MessageHeader.ByteCount;
-            _resumptionData = new MessageReader.ResumptionData(header, MessageHeader.ByteCount);
+                _consumed += _resumptionData.Header.Length - _resumptionData.MessageIndex;
+
+                buffer = _buffer.Slice(_consumed);
+                if (!MessageHeader.TryParse(buffer, out header))
+                {
+                    if (!_messageNeedsMoreData)
+                        _resumptionData = _resumptionData with { MessageIndex = _resumptionData.Header.Length };
+
+                    status = ReadStatus.NeedMoreData;
+                    return false;
+                }
+            }
 
             switch (header.Code)
             {
                 case BackendCode.DataRow:
-                    // TODO Read column count and validate against row description columns in backend debug mode.
+                    if (BackendMessage.DebugEnabled && !ReadRowDebug(buffer, header, out status))
+                        return false;
+
+                    if (buffer.Length < MessageHeader.ByteCount + sizeof(short))
+                    {
+                        _messageNeedsMoreData = true;
+                        _resumptionData = new MessageReader.ResumptionData(header, 0);
+                        status = ReadStatus.NeedMoreData;
+                        return false;
+                    }
+
+                    _consumed += MessageHeader.ByteCount + sizeof(short);
+                    _resumptionData = new MessageReader.ResumptionData(header, MessageHeader.ByteCount + sizeof(short));
+                    _messageNeedsMoreData = false;
                     status = ReadStatus.Done;
                     return true;
-                case BackendCode.CommandComplete:
-                    // This will be handled in the command reader.
-                    status = ReadStatus.Done;
-                    return false;
                 default:
-                    status = header.Code.IsAsyncResponse() ? ReadStatus.AsyncResponse : ReadStatus.InvalidData;
+                    status = header.Code == BackendCode.CommandComplete ? ReadStatus.Done :
+                        header.Code.IsAsyncResponse() ? ReadStatus.AsyncResponse : ReadStatus.InvalidData;
+
+                    _consumed += MessageHeader.ByteCount;
+                    _resumptionData = new MessageReader.ResumptionData(header, MessageHeader.ByteCount);
                     return false;
             }
+        }
+
+        bool ReadRowDebug(in ReadOnlySequence<byte> buffer, MessageHeader header, out ReadStatus status)
+        {
+            Span<byte> headerAndColumnCount = stackalloc byte[MessageHeader.ByteCount + sizeof(short)];
+            if (!buffer.TryCopyTo(headerAndColumnCount))
+            {
+                _messageNeedsMoreData = true;
+                _resumptionData = new MessageReader.ResumptionData(header, 0);
+                status = ReadStatus.NeedMoreData;
+                return false;
+            }
+
+            if (BinaryPrimitives.ReadInt16BigEndian(headerAndColumnCount.Slice(MessageHeader.ByteCount)) != _expectedColumnCount)
+                throw new InvalidDataException("DataRow returned a different number of columns than was expected from the row description.");
+
+            status = default;
+            return true;
         }
 
         bool IsMessageBuffered(uint remainingMessage)

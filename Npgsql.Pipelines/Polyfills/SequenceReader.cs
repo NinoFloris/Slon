@@ -14,7 +14,7 @@ using System.Diagnostics.CodeAnalysis;
 
 namespace System.Buffers;
 
-static class ReadOnlySequenceExtensions
+static class ReadOnlySequencePolyfillExtensions
 {
     /// <summary>
     /// Polyfill method used by the <see cref="SequenceReader{T}"/>.

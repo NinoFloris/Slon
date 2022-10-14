@@ -12,63 +12,32 @@ namespace Npgsql.Pipelines;
 /// </summary>
 sealed class SimplePipeReader
 {
-    long _readPosition;
+    readonly IPipeReaderSyncSupport _readerSync;
+    readonly TimeSpan _readTimeout;
+    readonly PipeReader _reader;
+    CancellationTokenSource? _readTimeoutSource;
     ReadOnlySequence<byte> _buffer = ReadOnlySequence<byte>.Empty;
     long _bufferLength;
-    readonly IPipeReaderSyncSupport _readerSync;
-    readonly PipeReader _reader;
+    bool _unfinishedRead;
+    long _consumed;
+    long _largestMinimumSize;
+    bool _completed;
 
-    public SimplePipeReader(IPipeReaderSyncSupport reader)
+    public SimplePipeReader(IPipeReaderSyncSupport reader, TimeSpan readTimeout)
     {
         _readerSync = reader;
+        _readTimeout = readTimeout;
         _reader = reader.PipeReader;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Advance(long count)
     {
-        var readPos = _readPosition + count;
-        if (readPos > _bufferLength)
-            ThrowAdvanceOutOfBounds();
-
-        _readPosition = readPos;
-
-        static void ThrowAdvanceOutOfBounds() => throw new ArgumentOutOfRangeException(nameof(count), "Cannot read past buffer length");
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryRead(int minimumSize, out ReadOnlySequence<byte> buffer)
-    {
-        if (_bufferLength != 0)
-        {
-            if (_readPosition == 0 && _bufferLength >= minimumSize)
-            {
-                buffer = _buffer;
-                return true;
-            }
-            _reader.AdvanceTo(_buffer.GetPosition(_readPosition));
-        }
-
-        if (_reader.TryRead(out var result))
-        {
-            var buf = result.Buffer;
-            var bufferLength = buf.Length;
-            if (bufferLength >= minimumSize)
-            {
-                buffer =_buffer = buf;
-                _bufferLength = bufferLength;
-                _readPosition = 0;
-                return true;
-            }
-
-            // We didn't get enough data, fully consume so ReadAsync will wait.
-            _reader.AdvanceTo(buf.Start, buf.End);
-        }
-
-        buffer = ReadOnlySequence<byte>.Empty;
-        _readPosition = 0;
-        _bufferLength = 0;
-        return false;
+        // Once we pass examined/largest minimum size we reset it to allow the next minimumSize
+        // to take effect, as it will all have been consumed at the next read.
+        var consumed = _consumed += count;
+        if (_largestMinimumSize != 0 && consumed >= _largestMinimumSize)
+            _largestMinimumSize = 0;
     }
 
     /// <summary>Asynchronously reads a sequence of bytes from the current <see cref="System.IO.Pipelines.PipeReader" />.</summary>
@@ -84,43 +53,112 @@ sealed class SimplePipeReader
     ///     further data is available. You should instead call <see cref="System.IO.Pipelines.PipeReader.TryRead" /> to avoid a blocking call.
     ///     </para>
     /// </remarks>
-    public async ValueTask<ReadOnlySequence<byte>> ReadAtLeastAsync(int minimumSize, CancellationToken cancellationToken = default)
+    public ValueTask<ReadOnlySequence<byte>> ReadAtLeastAsync(int minimumSize, CancellationToken cancellationToken = default)
     {
-        var result = await _reader.ReadAtLeastAsync(minimumSize, cancellationToken).ConfigureAwait(false);
-        HandleReadResult(result);
-        return result.Buffer;
+        if (!_completed && _bufferLength - _consumed >= minimumSize)
+            return new ValueTask<ReadOnlySequence<byte>>(_buffer.Slice(_consumed));
+
+        return ReadAtLeastAsyncCore(minimumSize, cancellationToken);
+    }
+
+#if !NETSTANDARD2_0
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+#endif
+    async ValueTask<ReadOnlySequence<byte>> ReadAtLeastAsyncCore(int minimumsize, CancellationToken cancellationToken)
+    {
+        if (!_completed && _unfinishedRead)
+        {
+            HandleAdvanceTo(_consumed, _largestMinimumSize);
+            _unfinishedRead = false;
+        }
+
+        CancellationTokenSource? timeoutSource = null;
+        if (!cancellationToken.CanBeCanceled)
+        {
+            timeoutSource = _readTimeoutSource ??= new CancellationTokenSource();
+            timeoutSource.CancelAfter(_readTimeout);
+            cancellationToken = timeoutSource.Token;
+        }
+        try
+        {
+            var result = await _reader.ReadAtLeastAsync(minimumsize, cancellationToken);
+            HandleReadResult(result, minimumsize);
+            return result.Buffer;
+        }
+        catch (OperationCanceledException ex) when (timeoutSource?.Token.IsCancellationRequested == true && !cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException("The operation has timed out.", ex);
+        }
+        finally
+        {
+            if (timeoutSource is not null && _readTimeoutSource!.TryReset() == false)
+            {
+                _readTimeoutSource.Dispose();
+                _readTimeoutSource = null;
+            }
+        }
     }
 
     public ReadOnlySequence<byte> ReadAtLeast(int minimumSize, TimeSpan timeout)
     {
+        if (!_completed && _bufferLength - _consumed >= minimumSize)
+            return _buffer.Slice(_consumed);
+
+        if (!_completed && _unfinishedRead)
+        {
+            HandleAdvanceTo(_consumed, _largestMinimumSize);
+            _unfinishedRead = false;
+        }
+
         var result = _readerSync.ReadAtLeast(minimumSize, timeout);
-        HandleReadResult(result);
+        HandleReadResult(result, minimumSize);
         return result.Buffer;
     }
 
-    void HandleReadResult(ReadResult result)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    void HandleReadResult(ReadResult result, int minimumSize)
     {
-        if (result.IsCompleted)
-        {
-            throw new ObjectDisposedException("Pipe was completed while waiting for more data.");
-        }
+        if (result.IsCompleted || result.IsCanceled)
+            HandleUncommon();
 
-        if (result.IsCanceled)
-            throw new OperationCanceledException();
-
-        // Clear the Reading state so TryRead can get a buffer again.
-        _readPosition = 0;
+        _unfinishedRead = true;
         _buffer = result.Buffer;
         _bufferLength = result.Buffer.Length;
+        if (minimumSize > _largestMinimumSize)
+            _largestMinimumSize = minimumSize;
+
+        void HandleUncommon()
+        {
+            if (result.IsCompleted)
+            {
+                _completed = true;
+                throw new ObjectDisposedException("Pipe was completed while waiting for more data.");
+            }
+
+            if (result.IsCanceled)
+                throw new OperationCanceledException();
+        }
+    }
+
+    // See https://github.com/dotnet/runtime/issues/66577, not allowing examined to move back is an absolute shite idea of a usable api.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    void HandleAdvanceTo(long consumed, long examined)
+    {
+        var consumedPosition = _buffer.GetPosition(consumed);
+        _reader.AdvanceTo(consumedPosition, examined > consumed ? _buffer.GetPosition(examined) : consumedPosition);
+        _bufferLength = 0;
+        _consumed = 0;
     }
 
     public ValueTask CompleteAsync(Exception? exception = null)
     {
+        _completed = true;
         return _reader.CompleteAsync(exception);
     }
 
     public void Complete(Exception? exception = null)
     {
+        _completed = true;
         _reader.Complete(exception);
     }
 }

@@ -11,60 +11,132 @@ namespace Npgsql.Pipelines;
 
 enum ReaderState
 {
-    BeforeResult,
-    InResult,
-    BetweenResults,
-    Consumed,
+    Uninitialized = 0,
+    BeforeFirstMove,
+    Active,
+    Completed,
+    Exhausted,
     Closed,
-    Disposed,
 }
 
 public sealed class NpgsqlDataReader: DbDataReader
 {
-    readonly PgV3Protocol _protocol;
-    readonly CommandReader _commandReader;
-    ReadActivation _readActivation;
+    readonly Action<NpgsqlDataReader>? _returnAction;
+    CommandReader _commandReader = null!; // Will be set during initialization.
+    IOCompletionPair _ioCompletion;
     ReaderState _state;
+    int _fieldCount;
+    bool _hasRows;
+    ulong? _recordsAffected;
 
-    internal NpgsqlDataReader(PgV3Protocol protocol)
+    internal NpgsqlDataReader(Action<NpgsqlDataReader>? returnAction = null)
     {
-        _protocol = protocol;
-        _commandReader = new CommandReader(protocol);
+        _returnAction = returnAction;
     }
 
-    internal async ValueTask IntializeAsync(ReadActivation readActivation)
+    // This may throw io exceptions from either the write or read pipe.
+    ValueTask<Operation> GetProtocol() => _ioCompletion.SelectAsync();
+
+    internal async ValueTask<NpgsqlDataReader> IntializeAsync(IOCompletionPair ioCompletion, CommandBehavior behavior, CancellationToken cancellationToken)
     {
-        _readActivation = readActivation;
+        _state = ReaderState.BeforeFirstMove;
+        _ioCompletion = ioCompletion;
+        var op = await GetProtocol().ConfigureAwait(false);
+        _commandReader = op.Protocol.GetCommandReader();
         // Immediately initialize the first result set, we're supposed to be positioned there at the start.
-        await _commandReader.InitializeAsync().ConfigureAwait(false);
+        await NextResultAsyncInternal(op.Protocol, cancellationToken).ConfigureAwait(false);
+        return this;
     }
 
     public override int Depth => 0;
-    public override int FieldCount => _commandReader.FieldCount;
-
+    public override int FieldCount => _fieldCount;
     public override object this[int ordinal] => throw new NotImplementedException();
-
     public override object this[string name] => throw new NotImplementedException();
+    public override int RecordsAffected
+        => !_recordsAffected.HasValue
+            ? -1
+        : _recordsAffected > int.MaxValue
+            ? throw new OverflowException(
+            $"The number of records affected exceeds int.MaxValue. Use {nameof(Rows)}.")
+            : (int)_recordsAffected;
+    public ulong Rows => _recordsAffected ?? 0; 
+    public override bool HasRows => _hasRows;
+    public override bool IsClosed => _state > ReaderState.Closed || _state == ReaderState.Uninitialized;
 
-    public override int RecordsAffected { get; }
-    public override bool HasRows { get; }
-    public override bool IsClosed => _state > ReaderState.Closed || _state == ReaderState.Disposed;
-
-    
     public override void Close()
     {
         throw new NotImplementedException();
     }
 
+    public override async Task<bool> ReadAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var hasNext = await _commandReader.ReadAsync(cancellationToken);
+            if (!hasNext)
+                SyncStates();
+            return hasNext;
+        }
+        catch
+        {
+            SyncStates();
+            throw;
+        }
+    }
 
-    // TODO Could check completed here or in nextresultasync after awaiting and make sure Rfq is buffered, so we can do all that async, dispose would be guaranteed not to do IO.
-    public override Task<bool> ReadAsync(CancellationToken cancellationToken) =>
-        _commandReader.ReadAsync(cancellationToken);
+    void SyncStates()
+    {
+        switch (_commandReader.State)
+        {
+            case CommandReaderState.Completed:
+                HandleCompleted();
+                break;
+            case CommandReaderState.UnrecoverablyCompleted:
+                HandleFailure();
+                break;
+        }
+
+        void HandleCompleted()
+        {
+            // Store this before we move on.
+            if (_state == ReaderState.Active)
+            {
+                _state = ReaderState.Completed;
+                if (!_recordsAffected.HasValue)
+                    _recordsAffected = 0;
+                _recordsAffected += _commandReader.RowsAffected;
+            }
+        }
+
+        void HandleFailure()
+        {
+            _state = ReaderState.Closed;
+        }
+    }
+
+#if !NETSTANDARD2_0
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+#endif
+    async ValueTask<bool> NextResultAsyncInternal(PgV3Protocol? protocol = null, CancellationToken cancellationToken = default)
+    {
+        // TODO walk the commands array and move to exhausted once done.
+        try
+        {
+            protocol ??= (await GetProtocol().ConfigureAwait(false)).Protocol;
+            await _commandReader.InitializeAsync(protocol, cancellationToken).ConfigureAwait(false);
+            _state = ReaderState.Active;
+            _fieldCount = _commandReader.FieldCount;
+            _hasRows = _commandReader.HasRows;
+            return true;
+        }
+        finally
+        {
+            SyncStates();
+        }
+    }
 
     public override Task<bool> NextResultAsync(CancellationToken cancellationToken)
-    {
-        throw new NotImplementedException();
-    }
+        => NextResultAsyncInternal(cancellationToken: cancellationToken).AsTask();
 
     public override Task<bool> IsDBNullAsync(int ordinal, CancellationToken cancellationToken)
     {
@@ -175,7 +247,7 @@ public sealed class NpgsqlDataReader: DbDataReader
     {
         throw new NotImplementedException();
     }
-    
+
     public override bool NextResult()
     {
         throw new NotImplementedException();
@@ -192,23 +264,74 @@ public sealed class NpgsqlDataReader: DbDataReader
         throw new NotImplementedException();
     }
 
+#if !NETSTANDARD2_0
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
+#endif
+    async ValueTask DisposeCore(bool async)
+    {
+        var op = default(Operation);
+        try
+        {
+            // Even await the task in the finally to make sure our return will always work, no matter the protocol state.
+            op = await GetProtocol().ConfigureAwait(false);
+            var state = _commandReader.State;
+            if (state == CommandReaderState.Initialized)
+            {
+                try
+                {
+                    while (await ReadAsync())
+                    {}
+                    state = _commandReader.State;
+                }
+                catch (TimeoutException)
+                {
+                    state = CommandReaderState.Initialized;
+                }
+            }
+
+            // TODO this might hang if writing somehow doesn't complete, maybe have a timeout and break the connection if its hit?
+            if (state != CommandReaderState.UnrecoverablyCompleted && !_ioCompletion.Write.IsCompleted)
+            {
+                if (async)
+                    await _ioCompletion.Write.ConfigureAwait(false);
+                else
+                    _ioCompletion.Write.GetAwaiter().GetResult();
+            }
+
+            // TODO update transaction status (where should it be held?), also probably want this as a method on CommandReader.
+            if (state == CommandReaderState.Completed)
+            {
+                var rfq = async ? await op.Protocol.ReadMessageAsync<ReadyForQuery>().ConfigureAwait(false) : op.Protocol.ReadMessage<ReadyForQuery>();
+            }
+        }
+        finally
+        {
+            _commandReader.Reset();
+            _commandReader = null!;
+            _ioCompletion = default;
+            _state = ReaderState.Uninitialized;
+            _returnAction?.Invoke(this);
+            op.Dispose();
+        }
+    }
+
     protected override void Dispose(bool disposing)
     {
-        _readActivation?.Complete();
-        // TODO Make sure _commandReader is completed (consume any remaining commands and rfq etc).
+        if (disposing)
+            DisposeCore(false).GetAwaiter().GetResult();
     }
 
-#if !NETSTANDARD
+#if NETSTANDARD2_0
+    public Task CloseAsync()
+#else
     public override Task CloseAsync()
-    {
-        throw new NotImplementedException();
-    }
-
-    public override ValueTask DisposeAsync()
-    {
-        _readActivation?.Complete();
-        // TODO Make sure _commandReader is completed (consume any remaining commands and rfq etc).
-        return new ValueTask();
-    }
 #endif
+        => DisposeAsync().AsTask();
+
+#if NETSTANDARD2_0
+    public ValueTask DisposeAsync()
+#else
+    public override ValueTask DisposeAsync()
+#endif
+        => DisposeCore(true);
 }

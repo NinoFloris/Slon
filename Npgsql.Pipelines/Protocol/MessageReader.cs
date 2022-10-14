@@ -11,10 +11,9 @@ using Npgsql.Pipelines.Buffers;
 
 namespace Npgsql.Pipelines.Protocol;
 
-readonly struct MessageHeader
+readonly record struct MessageHeader
 {
-    // code + length
-    public const int ByteCount = sizeof(byte) + sizeof(int);
+    public const int ByteCount = sizeof(uint) + sizeof(BackendCode);
 
     readonly uint _length;
     readonly BackendCode _code;
@@ -30,72 +29,56 @@ readonly struct MessageHeader
 
     public bool IsDefault => _code == 0;
 
-    public static bool TryParse(ref ReadOnlySequence<byte> buffer, out MessageHeader header)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryParse(ReadOnlySpan<byte> span, out MessageHeader header)
     {
-        Span<byte> headerTemp = stackalloc byte[ByteCount];
-
-        var firstSpan = buffer.First.Span;
-        if (firstSpan.Length >= headerTemp.Length)
-            firstSpan.Slice(0, headerTemp.Length).CopyTo(headerTemp);
-        else
-        {
-            if (!TryCopySlow(ref buffer, headerTemp))
-            {
-                header = default;
-                return false;
-            }
-        }
-
-        header = new MessageHeader((BackendCode)headerTemp[0], BinaryPrimitives.ReadUInt32BigEndian(headerTemp.Slice(1)) + sizeof(byte));
-
-        if (BackendMessage.DebugEnabled && !EnumShim.IsDefined(header._code))
-            throw new Exception("Unknown backend code: " + header._code);
-
-        return true;
-
-        static bool TryCopySlow(ref ReadOnlySequence<byte> buffer, Span<byte> destination)
-        {
-            if (buffer.Length < destination.Length)
-                return false;
-
-            var firstSpan = buffer.First.Span;
-            Debug.Assert(firstSpan.Length < destination.Length);
-            firstSpan.CopyTo(destination);
-            int copied = firstSpan.Length;
-
-            SequencePosition next = buffer.GetPosition(firstSpan.Length);
-            while (buffer.TryGet(ref next, out ReadOnlyMemory<byte> nextSegment, true))
-            {
-                if (nextSegment.Length > 0)
-                {
-                    var nextSpan = nextSegment.Span;
-                    int toCopy = Math.Min(nextSpan.Length, destination.Length - copied);
-                    nextSpan.Slice(0, toCopy).CopyTo(destination.Slice(copied));
-                    copied += toCopy;
-                    if (copied >= destination.Length)
-                    {
-                        break;
-                    }
-                }
-            }
-
-            return true;
-        }
-    }
-
-    public static bool TryParse(ref SequenceReader<byte> reader, out MessageHeader header)
-    {
-        Span<byte> headerTemp = stackalloc byte[ByteCount];
-        if (!reader.TryCopyTo(headerTemp))
+        if (span.Length < ByteCount)
         {
             header = default;
             return false;
         }
 
-        header = new MessageHeader((BackendCode)headerTemp[0], BinaryPrimitives.ReadUInt32BigEndian(headerTemp.Slice(1)) + sizeof(byte));
+        ref var first = ref MemoryMarshal.GetReference(span);
+        var code = (BackendCode)first;
 
-        if (BackendMessage.DebugEnabled && !EnumShim.IsDefined(header._code))
-            throw new Exception("Unknown backend code: " + header._code);
+        if (BackendMessage.DebugEnabled)
+            ThrowIfNotDefined(code);
+
+        var length = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref first, 1));
+        if (BitConverter.IsLittleEndian)
+            length = BinaryPrimitives.ReverseEndianness(length);
+        length += sizeof(byte);
+
+        header = new MessageHeader(code, length);
+        return true;
+
+        static void ThrowIfNotDefined(BackendCode code)
+        {
+            if (!EnumShim.IsDefined(code))
+                throw new InvalidDataException("Unknown backend code: " + code);
+        }
+    }
+
+    public static bool TryParse(in ReadOnlySequence<byte> buffer, out MessageHeader header)
+    {
+        Span<byte> span = stackalloc byte[ByteCount];
+        if (!TryParse(buffer.GetFirstSpan(), out header) && (!ReadOnlySequenceExtensions.TryCopySlow(buffer, span) || !TryParse(span, out header)))
+        {
+            header = default;
+            return false;
+        }
+
+        return true;
+    }
+
+    public static bool TryParse(ref SequenceReader<byte> reader, out MessageHeader header)
+    {
+        Span<byte> span = stackalloc byte[ByteCount];
+        if (!TryParse(reader.UnreadSpan, out header) && (!ReadOnlySequenceExtensions.TryCopySlow(reader.Sequence.Slice(reader.Position), span) || !TryParse(span, out header)))
+        {
+            header = default;
+            return false;
+        }
 
         reader.Advance(ByteCount);
         return true;
@@ -126,7 +109,8 @@ readonly struct MessageStartOffset
     public bool IsResumption => (_flags & MessageStartOffsetFlags.ResumptionOffset) != 0;
     public bool IsBeforeFirstMove => (_flags & MessageStartOffsetFlags.BeforeFirstMove) != 0;
 
-    public long GetOffset() => IsResumption ? -_offset : _offset;
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public long GetOffset() => (_flags & MessageStartOffsetFlags.ResumptionOffset) != 0 ? -_offset : _offset;
 
     public static MessageStartOffset Recreate(long offset) => new(offset, MessageStartOffsetFlags.BeforeFirstMove);
     public static MessageStartOffset Resume(long offset) => new(offset, MessageStartOffsetFlags.ResumptionOffset | MessageStartOffsetFlags.BeforeFirstMove);
@@ -148,16 +132,32 @@ ref struct MessageReader
         _currentStart = currentStart;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     readonly long GetUnvalidatedCurrentConsumed() => _reader.Consumed - _currentStart.GetOffset();
 
     public readonly ReadOnlySequence<byte> Sequence => _reader.Sequence;
+    public readonly ReadOnlySequence<byte> UnconsumedSequence => _reader.Sequence.Slice(_reader.Position);
     public readonly long Consumed => _reader.Consumed;
+
+    public bool HasCurrent => !_current.IsDefault;
+
+    public readonly BackendCode CurrentCode
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get
+        {
+            if (_current.IsDefault)
+                ThrowEnumOpCantHappen();
+
+            return _current.Code;
+        }
+    }
 
     public readonly MessageHeader Current
     {
         get
         {
-            if (_currentStart.IsBeforeFirstMove || _current.IsDefault)
+            if (_current.IsDefault)
                 ThrowEnumOpCantHappen();
 
             return _current;
@@ -168,7 +168,7 @@ ref struct MessageReader
     {
         get
         {
-            if (_currentStart.IsBeforeFirstMove || _current.IsDefault)
+            if (_current.IsDefault)
                 ThrowEnumOpCantHappen();
 
             return _currentStart;
@@ -179,7 +179,7 @@ ref struct MessageReader
     {
         get
         {
-            if (_currentStart.IsBeforeFirstMove || _current.IsDefault)
+            if (_current.IsDefault)
                 ThrowEnumOpCantHappen();
 
             var consumed = GetUnvalidatedCurrentConsumed();
@@ -194,9 +194,10 @@ ref struct MessageReader
 
     public readonly uint CurrentRemaining
     {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
         {
-            if (_currentStart.IsBeforeFirstMove || _current.IsDefault)
+            if (_current.IsDefault)
                 ThrowEnumOpCantHappen();
 
             var remaining = _current.Length - GetUnvalidatedCurrentConsumed();
@@ -209,16 +210,7 @@ ref struct MessageReader
         }
     }
 
-    public readonly bool IsCurrentBuffered
-    {
-        get
-        {
-            if (_currentStart.IsBeforeFirstMove || _current.IsDefault)
-                ThrowEnumOpCantHappen();
-
-            return _reader.Length >= _currentStart.GetOffset() + _current.Length;
-        }
-    }
+    public readonly bool IsCurrentBuffered => _reader.Remaining >= CurrentRemaining;
 
     public static MessageReader Create(scoped in ReadOnlySequence<byte> sequence) => new(sequence);
 
@@ -283,7 +275,7 @@ ref struct MessageReader
     public bool ConsumeCurrent()
     {
         if (_currentStart.IsBeforeFirstMove)
-            return true;
+            ThrowEnumOpCantHappen();
 
         var remaining = CurrentRemaining;
         if (remaining == 0)
@@ -323,19 +315,13 @@ ref struct MessageReader
         _reader.Rewind(count);
     }
 
-    public readonly struct ResumptionData
-    {
-        public ResumptionData(MessageHeader header, uint messageIndex)
-        {
-            Header = header;
-            MessageIndex = messageIndex;
-        }
-
+    public readonly record struct ResumptionData(
         // The current message at the time of the suspend.
-        public MessageHeader Header { get; }
+        MessageHeader Header,
         // Where we need to start relative to the message in Header.
-        public uint MessageIndex { get; }
-
+        uint MessageIndex
+    )
+    {
         public bool IsDefault => Header.IsDefault;
     }
 
@@ -357,10 +343,10 @@ static class MessageReaderExtensions
     public static bool SkipSimilar(this ref MessageReader reader, BackendCode code, out ReadStatus status)
     {
         bool moved = true;
-        while (reader.Current.Code == code && (moved = reader.MoveNext()))
+        while (reader.CurrentCode == code && (moved = reader.MoveNext()))
         {}
 
-        if (moved && reader.Current.Code.IsAsyncResponse())
+        if (moved && reader.CurrentCode.IsAsyncResponse())
         {
             status = ReadStatus.AsyncResponse;
             return false;
@@ -392,7 +378,7 @@ static class MessageReaderExtensions
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool IsExpected(this ref MessageReader reader, BackendCode code, out ReadStatus status, bool ensureBuffered = false)
     {
-        if (reader.Current.Code != code)
+        if (reader.CurrentCode != code)
         {
             status = code.IsAsyncResponse() ? ReadStatus.AsyncResponse : ReadStatus.InvalidData;
             return false;
@@ -418,6 +404,12 @@ static class MessageReaderExtensions
         }
 
         return reader.IsExpected(code, out status, ensureBuffered);
+    }
+
+    public static bool ReadMessage<T>(this ref MessageReader reader, out ReadStatus status) where T : struct, IBackendMessage
+    {
+        status = new T().Read(ref reader);
+        return status == ReadStatus.Done;
     }
 
     public static bool ReadMessage<T>(this ref MessageReader reader, T message, out ReadStatus status) where T : IBackendMessage

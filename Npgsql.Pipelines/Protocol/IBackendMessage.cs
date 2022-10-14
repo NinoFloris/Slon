@@ -36,6 +36,7 @@ enum BackendCode: byte
 public enum ReadStatus
 {
     Done,
+    ConsumeData,
     NeedMoreData,
     InvalidData, // Desync
     AsyncResponse

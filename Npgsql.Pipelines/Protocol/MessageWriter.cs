@@ -69,18 +69,19 @@ class MessageWriter<T> where T : IBufferWriter<byte>
 
     internal ref BufferWriter<T> Writer => ref _writer;
 
-    async ValueTask<FlushResult> FlushAsyncCore(bool observeFlushThreshold, CancellationToken cancellationToken)
+    ValueTask<FlushResult> FlushAsyncCore(bool observeFlushThreshold, CancellationToken cancellationToken)
     {
         _writer.Commit();
-        var result = await _flushControl.FlushAsync(observeFlushThreshold, cancellationToken);
-        if (!result.IsCompleted && !result.IsCanceled)
-            Reset();
-        return result;
+        return _flushControl.FlushAsync(observeFlushThreshold, cancellationToken);
     }
 
     /// Commit and Flush on the underlying writer if threshold is reached.
     /// Commit is always executed, independent of the flush threshold being reached.
-    public ValueTask<FlushResult> FlushAsync(CancellationToken cancellationToken = default) => FlushAsyncCore(observeFlushThreshold: true, cancellationToken);
+    public ValueTask<FlushResult> FlushAsync(CancellationToken cancellationToken = default)
+        => FlushAsyncCore(observeFlushThreshold: true, cancellationToken);
+
+    public ValueTask<FlushResult> FlushAsync(bool observeFlushThreshold, CancellationToken cancellationToken = default)
+        => FlushAsyncCore(observeFlushThreshold, cancellationToken);
 
     internal void Reset()
     {
