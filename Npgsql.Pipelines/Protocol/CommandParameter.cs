@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using System.Data;
 using Microsoft.AspNetCore.Internal;
 
-namespace Npgsql.Pipelines;
+namespace Npgsql.Pipelines.Protocol;
 
 struct Oid
 {

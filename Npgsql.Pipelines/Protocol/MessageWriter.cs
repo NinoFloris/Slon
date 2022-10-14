@@ -1,17 +1,16 @@
 using System;
 using System.Buffers;
-using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Buffers;
 
-namespace Npgsql.Pipelines;
+namespace Npgsql.Pipelines.Protocol;
 
 static class PgEncoding
 {
-    public static UTF8Encoding UTF8 { get; } = new(false, true);
-    public static UTF8Encoding RelaxedUTF8 { get; } = new(false, false);
+    public static readonly UTF8Encoding UTF8 = new(false, true);
+    public static readonly UTF8Encoding RelaxedUTF8 = new(false, false);
 }
 
 static class MessageWriter
@@ -28,10 +27,10 @@ class MessageWriter<T> where T : IBufferWriter<byte>
     BufferWriter<T> _writer;
     readonly FlushControl _flushControl;
 
-    public MessageWriter(T writer, FlushControl flushFlushControl)
+    public MessageWriter(T writer, FlushControl flushControl)
     {
         _writer = new BufferWriter<T>(writer);
-        _flushControl = flushFlushControl;
+        _flushControl = flushControl;
         AdvisoryFlushThreshold = _flushControl.FlushThreshold < AdvisoryFlushThreshold ? _flushControl.FlushThreshold : BufferWriter.DefaultCommitThreshold;
     }
 
@@ -66,7 +65,7 @@ class MessageWriter<T> where T : IBufferWriter<byte>
 
     public long BufferedBytes => Writer.BufferedBytes;
     public long BytesCommitted => Writer.BytesCommitted;
-    public long? UnflushedBytes => _flushControl?.UnflushedBytes + Writer.BufferedBytes;
+    public long UnflushedBytes => _flushControl.UnflushedBytes + Writer.BufferedBytes;
 
     internal ref BufferWriter<T> Writer => ref _writer;
 
@@ -74,7 +73,7 @@ class MessageWriter<T> where T : IBufferWriter<byte>
     {
         _writer.Commit();
         var result = await _flushControl.FlushAsync(observeFlushThreshold, cancellationToken);
-        if (!result.IsCompleted && !result.IsCanceled && !result.IsIgnored)
+        if (!result.IsCompleted && !result.IsCanceled)
             Reset();
         return result;
     }

@@ -3,7 +3,7 @@ using System.Buffers;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Npgsql.Pipelines.StartupMessages;
+namespace Npgsql.Pipelines.Protocol;
 
 class PasswordMessage : IFrontendMessage
 {

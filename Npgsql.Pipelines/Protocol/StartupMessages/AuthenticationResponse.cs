@@ -1,7 +1,6 @@
 using System;
-using System.Buffers;
 
-namespace Npgsql.Pipelines.StartupMessages;
+namespace Npgsql.Pipelines.Protocol;
 
 enum AuthenticationType
 {

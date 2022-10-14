@@ -1,4 +1,4 @@
-namespace Npgsql.Pipelines;
+namespace Npgsql.Pipelines.Protocol;
 
 static class BackendMessage {
     public static readonly bool DebugEnabled = false;

@@ -2,7 +2,6 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
-using Npgsql.Pipelines;
 
 namespace System.Buffers;
 
@@ -49,7 +48,7 @@ static class BufferExtensions
     public static void WriteCString<T>(ref this BufferWriter<T> buffer, string value) where T : IBufferWriter<byte>
     {
         if (value is not "")
-            buffer.WriteEncoded(value.AsSpan(), PgEncoding.UTF8);
+            buffer.WriteEncoded(value.AsSpan(), Encoding.UTF8);
         buffer.WriteByte(0);
     }
 

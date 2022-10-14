@@ -1,4 +1,4 @@
-namespace Npgsql.Pipelines.MiscMessages;
+namespace Npgsql.Pipelines.Protocol;
 
 struct ReadyForQuery: IBackendMessage
 {

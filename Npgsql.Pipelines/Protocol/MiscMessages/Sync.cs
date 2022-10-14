@@ -1,6 +1,6 @@
 using System.Buffers;
 
-namespace Npgsql.Pipelines.MiscMessages;
+namespace Npgsql.Pipelines.Protocol;
 
 readonly struct Sync : IFrontendMessage
 {

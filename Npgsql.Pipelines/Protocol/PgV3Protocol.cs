@@ -2,16 +2,16 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using System.Diagnostics;
 using System.IO.Pipelines;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Threading.Tasks.Sources;
 using Npgsql.Pipelines.Buffers;
-using Npgsql.Pipelines.MiscMessages;
-using Npgsql.Pipelines.QueryMessages;
-using Npgsql.Pipelines.StartupMessages;
 using FlushResult = Npgsql.Pipelines.Buffers.FlushResult;
 
-namespace Npgsql.Pipelines;
+namespace Npgsql.Pipelines.Protocol;
 
 record ProtocolOptions
 {
@@ -279,6 +279,31 @@ class PgV3Protocol : IDisposable
             {
                 headerBufferWriter.Reset();
             }
+        }
+    }
+
+    readonly struct CancellationTokenOrTimeout
+    {
+        public TimeSpan Timeout { get; }
+        public CancellationToken CancellationToken { get; }
+
+        public bool IsTimeout => Timeout != TimeSpan.Zero;
+        public bool IsCancellationToken => !IsTimeout;
+
+        CancellationTokenOrTimeout(CancellationToken cancellationToken) => CancellationToken = cancellationToken;
+        CancellationTokenOrTimeout(TimeSpan timeout) => Timeout = timeout;
+
+        public static CancellationTokenOrTimeout CreateCancellationToken(CancellationToken cancellationToken) => new(cancellationToken);
+        public static CancellationTokenOrTimeout CreateTimeout(TimeSpan timeout, bool zeroIsInfinite = true)
+        {
+            if (timeout == TimeSpan.Zero)
+            {
+                if (!zeroIsInfinite)
+                    throw new ArgumentOutOfRangeException(nameof(timeout), "Cannot be TimeSpan.Zero.");
+                timeout = System.Threading.Timeout.InfiniteTimeSpan;
+            }
+
+            return new( timeout);
         }
     }
 
@@ -592,7 +617,7 @@ class PgV3Protocol : IDisposable
             var (commandText, parameters, preparedStatementName) = state;
             var portal = string.Empty;
             await writer.WriteMessageAsync(new Parse(commandText, parameters, preparedStatementName), cancellationToken).ConfigureAwait(false);
-            await writer.WriteMessageAsync(new Bind(portal, parameters, ResultColumnCodes.CreateOverall(FormatCode.Binary)), cancellationToken).ConfigureAwait(false);
+            await writer.WriteMessageAsync(new Bind(portal, parameters, ResultColumnCodes.CreateOverall(FormatCode.Binary), preparedStatementName), cancellationToken).ConfigureAwait(false);
             await writer.WriteMessageAsync(new Describe(DescribeName.CreateForPortal(portal)), cancellationToken).ConfigureAwait(false);
             await writer.WriteMessageAsync(new Execute(portal), cancellationToken).ConfigureAwait(false);
             await writer.WriteMessageAsync(new Sync(), cancellationToken).ConfigureAwait(false);
@@ -602,7 +627,7 @@ class PgV3Protocol : IDisposable
     {
         var portal = string.Empty;
         WriteMessage(new Parse(commandText, parameters, preparedStatementName));
-        WriteMessage(new Bind(portal, parameters, ResultColumnCodes.CreateOverall(FormatCode.Binary)));
+        WriteMessage(new Bind(portal, parameters, ResultColumnCodes.CreateOverall(FormatCode.Binary), preparedStatementName));
         WriteMessage(new Describe(DescribeName.CreateForPortal(portal)));
         WriteMessage(new Execute(portal));
         WriteMessage(new Sync());

@@ -4,7 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Buffers;
 
-namespace Npgsql.Pipelines;
+namespace Npgsql.Pipelines.Protocol;
 
 static class FrontendMessage {
     public static readonly bool DebugEnabled = false;

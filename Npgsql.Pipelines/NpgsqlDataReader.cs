@@ -1,8 +1,11 @@
 using System;
 using System.Collections;
+using System.Data;
 using System.Data.Common;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Npgsql.Pipelines.Protocol;
 
 namespace Npgsql.Pipelines;
 

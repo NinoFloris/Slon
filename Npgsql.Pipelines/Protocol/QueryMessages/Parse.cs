@@ -2,7 +2,7 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 
-namespace Npgsql.Pipelines.QueryMessages;
+namespace Npgsql.Pipelines.Protocol;
 
 readonly struct Parse: IFrontendMessage
 {
@@ -10,7 +10,7 @@ readonly struct Parse: IFrontendMessage
     readonly ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> _parameters;
     readonly string _preparedStatementName;
 
-    public Parse(string commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, string? preparedStatementName = null)
+    public Parse(string commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, string? preparedStatementName)
     {
         if (FrontendMessage.DebugEnabled && _parameters.Count > short.MaxValue)
             throw new InvalidOperationException($"Cannot accept more than short.MaxValue ({short.MaxValue} parameters.");

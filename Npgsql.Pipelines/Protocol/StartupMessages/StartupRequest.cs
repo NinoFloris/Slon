@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Internal;
 using Npgsql.Pipelines.Buffers;
 
-namespace Npgsql.Pipelines.StartupMessages;
+namespace Npgsql.Pipelines.Protocol;
 
 class StartupRequest: IStreamingFrontendMessage
 {

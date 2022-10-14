@@ -6,7 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Buffers;
 
-namespace Npgsql.Pipelines.QueryMessages;
+namespace Npgsql.Pipelines.Protocol;
 
 readonly struct ResultColumnCodes
 {
@@ -33,7 +33,7 @@ readonly struct Bind: IStreamingFrontendMessage
     readonly string _preparedStatementName;
     readonly int _precomputedMessageLength;
 
-    public Bind(string portalName, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, ResultColumnCodes resultColumnCodes, string? preparedStatementName = null)
+    public Bind(string portalName, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, ResultColumnCodes resultColumnCodes, string? preparedStatementName)
     {
         if (FrontendMessage.DebugEnabled && _parameters.Count > short.MaxValue)
             throw new InvalidOperationException($"Cannot accept more than short.MaxValue ({short.MaxValue} parameters.");
@@ -128,7 +128,6 @@ readonly struct Bind: IStreamingFrontendMessage
             // additionally any writer loop may start writing small packets if we let it know certain memory is returned.
             if (writer.BufferedBytes > writer.AdvisoryFlushThreshold)
             {
-                writer.Writer.Commit();
                 var result = await writer.FlushAsync(cancellationToken);
                 if (result.IsCanceled || result.IsCompleted) return result;
                 lastCommitted = writer.BytesCommitted;
@@ -140,7 +139,7 @@ readonly struct Bind: IStreamingFrontendMessage
         }
 
         WriteResultColumnCodes(ref writer.Writer);
-        return new FlushResult(isCanceled: false, isCompleted: false, isIgnored: false);
+        return new FlushResult(isCanceled: false, isCompleted: false);
     }
 
     int PrecomputeMessageLength()

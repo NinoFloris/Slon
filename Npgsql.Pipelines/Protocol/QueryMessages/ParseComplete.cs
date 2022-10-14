@@ -1,4 +1,4 @@
-namespace Npgsql.Pipelines.QueryMessages;
+namespace Npgsql.Pipelines.Protocol;
 
 readonly struct ParseComplete: IBackendMessage
 {

@@ -3,8 +3,7 @@ using System.Collections.Generic;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
-using Npgsql.Pipelines.MiscMessages;
-using Npgsql.Pipelines.QueryMessages;
+using Npgsql.Pipelines.Protocol;
 using NUnit.Framework;
 
 namespace Npgsql.Pipelines.Tests;

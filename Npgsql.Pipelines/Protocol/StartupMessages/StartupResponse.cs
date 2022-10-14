@@ -1,4 +1,4 @@
-namespace Npgsql.Pipelines.StartupMessages;
+namespace Npgsql.Pipelines.Protocol;
 
 struct StartupResponse : IBackendMessage
 {

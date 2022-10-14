@@ -1,11 +1,14 @@
 using System;
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Diagnostics;
+using System.IO;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
-using Npgsql.Pipelines.QueryMessages;
+using Npgsql.Pipelines.Buffers;
 
-namespace Npgsql.Pipelines;
+namespace Npgsql.Pipelines.Protocol;
 
 enum CommandReaderState
 {
@@ -31,7 +34,8 @@ public enum StatementType
     Fetch,
     Copy,
     Other,
-    Merge
+    Merge,
+    Call
 #pragma warning restore 1591
 }
 

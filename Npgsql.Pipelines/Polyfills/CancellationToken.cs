@@ -1,13 +1,13 @@
 namespace System.Threading;
-#if NETSTANDARD2_0
 
+#if NETSTANDARD2_0
 static class CancellationTokenExtensions
 {
     public static CancellationTokenRegistration UnsafeRegister(this CancellationToken cancellationToken, Action<object?> callback, object? state)
     {
         return cancellationToken.Register(callback, state);
     }
-    
+
     public static CancellationTokenRegistration UnsafeRegister(this CancellationToken cancellationToken, Action<object?, CancellationToken> callback, object? state)
     {
         return cancellationToken.Register(state => callback.Invoke(state, cancellationToken), state);
@@ -24,6 +24,4 @@ static class CancellationTokenSourceExtensions
         return !cancellationTokenSource.IsCancellationRequested;
     }
 }
-
-
 #endif

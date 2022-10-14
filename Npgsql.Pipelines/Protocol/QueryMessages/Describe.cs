@@ -1,6 +1,6 @@
 using System.Buffers;
 
-namespace Npgsql.Pipelines.QueryMessages;
+namespace Npgsql.Pipelines.Protocol;
 
 readonly struct DescribeName
 {

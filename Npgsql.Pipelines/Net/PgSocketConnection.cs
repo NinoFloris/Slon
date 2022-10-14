@@ -103,9 +103,9 @@ sealed class PgPipeConnection: PgSocketConnection, IDisposable
     const int ResumeWriteBufferingOnPipe = MaxWriteBufferingOnPipe / 2;
     static PipeScheduler IOScheduler { get; } = PipeScheduler.Inline;
     static System.IO.Pipelines.PipeOptions DefaultSendPipeOptions { get; } =
-        new(null, IOScheduler, PipeScheduler.Inline, MaxWriteBufferingOnPipe, ResumeWriteBufferingOnPipe, DefaultReaderSegmentSize, false);
+        new(null, IOScheduler, PipeScheduler.Inline, MaxWriteBufferingOnPipe, ResumeWriteBufferingOnPipe, DefaultWriterSegmentSize, false);
     static System.IO.Pipelines.PipeOptions DefaultReceivePipeOptions { get; } =
-        new(null, PipeScheduler.Inline, IOScheduler, useSynchronizationContext: false);
+        new(null, PipeScheduler.Inline, IOScheduler, minimumSegmentSize: DefaultReaderSegmentSize, useSynchronizationContext: false);
 
     public static async ValueTask<PgPipeConnection> ConnectAsync(EndPoint endPoint, CancellationToken cancellationToken = default)
     {

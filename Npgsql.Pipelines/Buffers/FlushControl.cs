@@ -5,6 +5,37 @@ using System.Threading.Tasks;
 
 namespace Npgsql.Pipelines.Buffers;
 
+readonly struct FlushResult
+{
+    [Flags]
+    enum ResultFlags
+    {
+        None = 0,
+        Canceled = 1,
+        Completed = 2,
+    }
+
+    readonly ResultFlags _resultFlags;
+
+    public FlushResult(bool isCanceled, bool isCompleted)
+    {
+        _resultFlags = ResultFlags.None;
+
+        if (isCanceled)
+        {
+            _resultFlags |= ResultFlags.Canceled;
+        }
+
+        if (isCompleted)
+        {
+            _resultFlags |= ResultFlags.Completed;
+        }
+    }
+
+    public bool IsCanceled => (_resultFlags & ResultFlags.Canceled) != 0;
+    public bool IsCompleted => (_resultFlags & ResultFlags.Completed) != 0;
+}
+
 abstract class FlushControl: IDisposable
 {
     public abstract TimeSpan FlushTimeout { get; }
@@ -112,11 +143,11 @@ class ResettableFlushControl: FlushControl
         if (AlwaysObserveFlushThreshold || observeFlushThreshold)
         {
             if (FlushThreshold != -1 && FlushThreshold > _pipeWriter.UnflushedBytes)
-                return new ValueTask<FlushResult>(new FlushResult(isCanceled: false, isCompleted: false, isIgnored: true));
+                return new ValueTask<FlushResult>(new FlushResult(isCanceled: false, isCompleted: false));
         }
 
         if (_pipeWriter.UnflushedBytes == 0)
-            return new ValueTask<FlushResult>(new FlushResult(isCanceled: false, isCompleted: false, isIgnored: true));
+            return new ValueTask<FlushResult>(new FlushResult(isCanceled: false, isCompleted: false));
 
         return FlushAsyncCore();
 
@@ -141,7 +172,7 @@ class ResettableFlushControl: FlushControl
                     }
                 }
 
-                return new FlushResult(isCanceled: result.IsCanceled, isCompleted: result.IsCompleted, isIgnored: false);
+                return new FlushResult(isCanceled: result.IsCanceled, isCompleted: result.IsCompleted);
             }
             finally
             {

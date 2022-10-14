@@ -2,7 +2,7 @@ using System;
 using System.Buffers;
 using System.Buffers.Text;
 
-namespace Npgsql.Pipelines.QueryMessages;
+namespace Npgsql.Pipelines.Protocol;
 
 struct CommandComplete: IBackendMessage
 {
@@ -26,15 +26,16 @@ struct CommandComplete: IBackendMessage
 
         (StatementType, var argumentsStart) = Convert.ToChar(bytes[0]) switch
         {
-            'I' when bytes.StartsWith("INSERT "u8) => (StatementType.Insert, "INSERT ".Length),
-            'D' when bytes.StartsWith("DELETE "u8) => (StatementType.Delete, "DELETE ".Length),
-            'U' when bytes.StartsWith("UPDATE "u8) => (StatementType.Update, "UPDATE ".Length),
             'S' when bytes.StartsWith("SELECT "u8) => (StatementType.Select, "SELECT ".Length),
-            'C' when bytes.StartsWith("CREATE TABLE AS "u8) => (StatementType.CreateTableAs, "CREATE TABLE AS ".Length),
+            'I' when bytes.StartsWith("INSERT "u8) => (StatementType.Insert, "INSERT ".Length),
+            'U' when bytes.StartsWith("UPDATE "u8) => (StatementType.Update, "UPDATE ".Length),
+            'D' when bytes.StartsWith("DELETE "u8) => (StatementType.Delete, "DELETE ".Length),
             'M' when bytes.StartsWith("MERGE "u8) => (StatementType.Merge, "MERGE ".Length),
+            'C' when bytes.StartsWith("COPY "u8) => (StatementType.Copy, "COPY ".Length),
+            'C' when bytes.StartsWith("CALL"u8) => (StatementType.Call, "CALL".Length),
             'M' when bytes.StartsWith("MOVE "u8) => (StatementType.Move, "MOVE ".Length),
             'F' when bytes.StartsWith("FETCH "u8) => (StatementType.Fetch, "FETCH ".Length),
-            'C' when bytes.StartsWith("COPY "u8) => (StatementType.Copy, "COPY ".Length),
+            'C' when bytes.StartsWith("CREATE TABLE AS "u8) => (StatementType.CreateTableAs, "CREATE TABLE AS ".Length),
             _ => (StatementType.Other, 0)
         };
 

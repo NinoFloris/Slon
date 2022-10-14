@@ -4,7 +4,7 @@ using System.Net;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using BenchmarkDotNet.Attributes;
-using Npgsql.Pipelines.MiscMessages;
+using Npgsql.Pipelines.Protocol;
 
 namespace Npgsql.Pipelines.Benchmark
 {

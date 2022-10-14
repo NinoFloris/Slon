@@ -1,4 +1,4 @@
-namespace Npgsql.Pipelines.MiscMessages;
+namespace Npgsql.Pipelines.Protocol;
 
 struct ErrorResponse: IBackendMessage
 {
@@ -133,6 +133,7 @@ struct ErrorResponse: IBackendMessage
             detail, hint, position, internalPosition, internalQuery, where,
             schemaName, tableName, columnName, dataTypeName, constraintName,
             file, line, routine);
+        reader.ConsumeCurrent();
         return ReadStatus.Done;
     }
 }

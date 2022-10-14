@@ -9,7 +9,7 @@ sealed class StreamPipeReader: PipeReader, IPipeReaderSyncSupport
     readonly Stream _stream;
     readonly bool _canTimeout;
     readonly int? _readTimeout;
-    int _reading;
+    bool _reading;
 
     public StreamPipeReader(Stream stream, StreamPipeReaderOptions options)
     {
@@ -31,8 +31,9 @@ sealed class StreamPipeReader: PipeReader, IPipeReaderSyncSupport
         try
         {
             // To map conceptually to pipelines, only one read can be active.
-            if (Interlocked.CompareExchange(ref _reading, 1, 0) != 0)
+            if (_reading)
                 ThrowHelper.ThrowInvalidOperationException_AlreadyReading();
+            _reading = true;
 
             if (_canTimeout)
             {
@@ -71,7 +72,7 @@ sealed class StreamPipeReader: PipeReader, IPipeReaderSyncSupport
         {
             if (start != -1)
                 _stream.ReadTimeout = previousTimeout;
-            Interlocked.Exchange(ref _reading, 0);
+            _reading = false;
         }
 
         if (read == -1)
@@ -87,6 +88,8 @@ sealed class StreamPipeReader: PipeReader, IPipeReaderSyncSupport
 
         return task.GetAwaiter().GetResult();
     }
+
+    protected override ValueTask<ReadResult> ReadAtLeastAsyncCore(int minimumSize, CancellationToken cancellationToken) => PipeReader.ReadAtLeastAsync(minimumSize, cancellationToken);
 
     public override bool TryRead(out ReadResult result) => PipeReader.TryRead(out result);
 
