@@ -2,10 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading;
-using System.Threading.Channels;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Protocol;
+using Npgsql.Pipelines.Protocol.PgV3;
 
 namespace Npgsql.Pipelines;
 
@@ -17,27 +18,24 @@ public sealed class NpgsqlCommand: DbCommand, ICommandInfo
         return () => new NpgsqlDataReader(returnAction);
     });
 
-    readonly PgV3Protocol _protocol;
     bool _prepare;
 
-    bool _appendErrorBarrier;
+    object? _dataSourceOrConnection;
+    readonly bool _managedMultiplexing;
     CommandKind _commandKind;
-    RowDescription? _rowDescription;
-    readonly ChannelWriter<NpgsqlCommand> _multiplexingChannel;
-    TaskCompletionSource<IOCompletionPair>? _multiplexingOperation;
-    readonly bool _multiplexingCommand;
 
-    internal NpgsqlCommand(PgV3Protocol protocol)
+    public NpgsqlCommand(NpgsqlConnection conn)
     {
         GC.SuppressFinalize(this);
-        _protocol = protocol;
+        _dataSourceOrConnection = conn;
     }
 
-    internal NpgsqlCommand(ChannelWriter<NpgsqlCommand> multiplexingChannel)
+    // Connectionless
+    internal NpgsqlCommand(NpgsqlDataSource dataDataSource, bool managedMultiplexing = false)
     {
         GC.SuppressFinalize(this);
-        _multiplexingChannel = multiplexingChannel;
-        _multiplexingCommand = true;
+        _dataSourceOrConnection = dataDataSource;
+        _managedMultiplexing = managedMultiplexing;
     }
 
     public override void Cancel()
@@ -60,15 +58,50 @@ public sealed class NpgsqlCommand: DbCommand, ICommandInfo
         _prepare = true;
     }
 
-
     public override string CommandText { get; set; }
     public override int CommandTimeout { get; set; }
     public override CommandType CommandType { get; set; }
     public override UpdateRowSource UpdatedRowSource { get; set; }
-    protected override DbConnection? DbConnection { get; set; }
+    protected override DbConnection? DbConnection {
+        get => _dataSourceOrConnection as NpgsqlConnection;
+        set
+        {
+            if (value is not NpgsqlConnection conn)
+                throw new ArgumentException($"Value is not an instance of {nameof(NpgsqlConnection)}.", nameof(value));
+
+            _dataSourceOrConnection = conn;
+        }
+    }
     protected override DbParameterCollection DbParameterCollection { get; }
     protected override DbTransaction? DbTransaction { get; set; }
     public override bool DesignTimeVisible { get; set; }
+
+    bool TryGetConnection([NotNullWhen(true)]out NpgsqlConnection? connection)
+    {
+        if (_dataSourceOrConnection is NpgsqlConnection conn)
+        {
+            connection = conn;
+            return true;
+        }
+
+        connection = null;
+        return false;
+    }
+    NpgsqlConnection GetConnection() => TryGetConnection(out var connection) ? connection : throw new NullReferenceException("Connection is null.");
+    NpgsqlConnection.CommandWriter GetCommandWriter() => GetConnection().GetCommandWriter();
+
+    bool TryGetDataSource([NotNullWhen(true)]out NpgsqlDataSource? connection)
+    {
+        if (_dataSourceOrConnection is NpgsqlDataSource conn)
+        {
+            connection = conn;
+            return true;
+        }
+
+        connection = null;
+        return false;
+    }
+    NpgsqlDataSource GetDataSource() => TryGetDataSource(out var dataSource) ? dataSource : throw new NullReferenceException("DbDataSource is null.");
 
     protected override System.Data.Common.DbParameter CreateDbParameter()
     {
@@ -86,27 +119,31 @@ public sealed class NpgsqlCommand: DbCommand, ICommandInfo
     public new Task<NpgsqlDataReader> ExecuteReaderAsync(CommandBehavior behavior, CancellationToken cancellationToken = default)
         => ExecuteDataReaderAsync(behavior, cancellationToken).AsTask();
 
-    internal void CompleteMultiplexingOperation(IOCompletionPair completionPair)
-    {
-        _multiplexingOperation!.SetResult(completionPair);
-    }
-
     ValueTask<NpgsqlDataReader> ExecuteDataReaderAsync(CommandBehavior behavior, CancellationToken cancellationToken)
     {
-        IOCompletionPair completionPair;
-        // TODO this should instead be 'bring your own operationsource' that we can then await as this way brings too many dispatches.
-        // if (_multiplexingCommand)
-        // {
-        //     _multiplexingOperation ??= new TaskCompletionSource<IOCompletionPair>();
-        //     _multiplexingChannel.TryWrite(this);
-        //     completionPair = await _multiplexingOperation.Task;
-        //     _multiplexingOperation = new TaskCompletionSource<IOCompletionPair>();
-        // }
-        // else
-            completionPair = CommandWriter.WriteExtendedAsync(_protocol, this, flushHint: true, cancellationToken);
+        if (TryGetDataSource(out var dataSource))
+        {
+            if (_managedMultiplexing)
+            {
+                var completionPair = dataSource.WriteMultiplexingCommand(this, behavior, cancellationToken);
+                return ReaderPool.Rent().IntializeAsync(completionPair, behavior, cancellationToken);
+            }
 
-        var reader = ReaderPool.Rent();
-        return reader.IntializeAsync(completionPair, behavior, cancellationToken);
+            return UnmanagedMultiplexing(this, dataSource, behavior, cancellationToken);
+        }
+        else
+        {
+            var completionPair = GetCommandWriter().WriteCommand(this, behavior, cancellationToken);
+            return ReaderPool.Rent().IntializeAsync(completionPair, behavior, cancellationToken);
+        }
+
+        static async ValueTask<NpgsqlDataReader> UnmanagedMultiplexing(NpgsqlCommand instance, NpgsqlDataSource dataSource, CommandBehavior behavior, CancellationToken cancellationToken)
+        {
+            // Pick a connection and do the write ourselves.
+            var slot = await dataSource.OpenAsync(exclusiveUse: false, cancellationToken: cancellationToken);
+            var completionPair = dataSource.WriteCommand(slot, instance, behavior, cancellationToken);
+            return await ReaderPool.Rent().IntializeAsync(completionPair, behavior, cancellationToken);
+        }
     }
 
     protected override async Task<DbDataReader> ExecuteDbDataReaderAsync(CommandBehavior behavior, CancellationToken cancellationToken)

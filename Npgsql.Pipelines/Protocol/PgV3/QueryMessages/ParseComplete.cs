@@ -1,8 +1,8 @@
-namespace Npgsql.Pipelines.Protocol;
+namespace Npgsql.Pipelines.Protocol.PgV3;
 
-readonly struct ParseComplete: IBackendMessage
+readonly struct ParseComplete: IPgV3BackendMessage
 {
-    public ReadStatus Read(ref MessageReader reader)
+    public ReadStatus Read(ref MessageReader<PgV3Header> reader)
     {
         if (!reader.MoveNextAndIsExpected(BackendCode.ParseComplete, out var status, ensureBuffered: true))
             return status;

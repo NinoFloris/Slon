@@ -1,6 +1,6 @@
 using System.Buffers;
 
-namespace Npgsql.Pipelines.Protocol;
+namespace Npgsql.Pipelines.Protocol.PgV3;
 
 readonly struct DescribeName
 {
@@ -17,7 +17,7 @@ readonly struct DescribeName
     public static DescribeName CreateForPortal(string portalName) => new(portalName, true);
 }
 
-readonly struct Describe: IFrontendMessage
+readonly struct Describe: IPgV3FrontendMessage
 {
     enum StatementOrPortal : byte
     {
@@ -29,16 +29,15 @@ readonly struct Describe: IFrontendMessage
 
     public Describe(DescribeName name) => _name = name;
 
-    public FrontendCode FrontendCode => FrontendCode.Describe;
+    public bool TryPrecomputeHeader(out PgV3FrontendHeader header)
+    {
+        header =  PgV3FrontendHeader.Create(FrontendCode.Describe, MessageWriter.ByteByteCount + MessageWriter.GetCStringByteCount(_name.Name));
+        return true;
+    }
+
     public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
     {
         buffer.WriteByte((byte)(_name.IsPortalName ? StatementOrPortal.Portal : StatementOrPortal.Statement));
         buffer.WriteCString(_name.Name);
-    }
-
-    public bool TryPrecomputeLength(out int length)
-    {
-        length = MessageWriter.ByteByteCount + MessageWriter.GetCStringByteCount(_name.Name);
-        return true;
     }
 }

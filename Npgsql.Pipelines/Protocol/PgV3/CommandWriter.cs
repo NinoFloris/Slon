@@ -1,9 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
-using System.Threading.Tasks;
 
-namespace Npgsql.Pipelines.Protocol;
+namespace Npgsql.Pipelines.Protocol.PgV3;
 
 public enum CommandKind
 {
@@ -40,19 +39,10 @@ static class CommandInfoExtensions
 
 class CommandWriter
 {
-    readonly PgV3Protocol _protocol;
-    public CommandWriter(PgV3Protocol protocol)
-    {
-        _protocol = protocol;
-    }
-
-    public IOCompletionPair WriteExtendedAsync(ICommandInfo commandInfo, bool flushHint = true, CancellationToken cancellationToken = default)
-        => WriteExtendedAsync(_protocol, commandInfo, flushHint, cancellationToken);
-
-    public static IOCompletionPair WriteExtendedAsync(PgV3Protocol protocol, ICommandInfo commandInfo, bool flushHint = true, CancellationToken cancellationToken = default)
+    public static IOCompletionPair WriteExtendedAsync(OperationSlot operationSlot, ICommandInfo commandInfo, bool flushHint = true, CancellationToken cancellationToken = default)
     {
         commandInfo.Validate();
-        return protocol.WriteMessageBatchAsync(static async (writer, commandInfo, cancellationToken) =>
+        return ((PgV3Protocol)operationSlot.Protocol!).WriteMessageBatchAsync(operationSlot, static async (writer, commandInfo, cancellationToken) =>
         {
             var portal = string.Empty;
             switch (commandInfo.CommandKind)

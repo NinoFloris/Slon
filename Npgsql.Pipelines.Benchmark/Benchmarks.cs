@@ -1,10 +1,9 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Net;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using BenchmarkDotNet.Attributes;
-using Npgsql.Pipelines.Protocol;
+using Npgsql.Pipelines.Protocol.PgV3;
 
 namespace Npgsql.Pipelines.Benchmark
 {
@@ -20,21 +19,23 @@ namespace Npgsql.Pipelines.Benchmark
         const string ConnectionString = $"Server={EndPoint};User ID={Username};Password={Password};Database=postgres;SSL Mode=Disable;Pooling=false;Max Auto Prepare=0;";
         const string ConnectionString2 = $"Server={EndPoint};User ID={Username};Password={Password};Database=postgres;SSL Mode=Disable;Pooling=true;MaxPoolSize=1;Max Auto Prepare=0;Multiplexing=true";
         static PgOptions PgOptions { get; } = new() { Username = Username, Password = Password, Database = Database };
-        static ProtocolOptions Options { get; } = new() { ReadTimeout = TimeSpan.FromSeconds(5) };
+        static PgV3ProtocolOptions Options { get; } = new() { ReadTimeout = TimeSpan.FromSeconds(5) };
 
         string _commandText = string.Empty;
-        PgV3Protocol _protocol;
+        NpgsqlConnection _protocol;
 
         Npgsql.NpgsqlCommand Command;
-        NpgsqlConnection _conn;
+        Npgsql.NpgsqlConnection _conn;
         Channel<NpgsqlCommand> _channel;
         ChannelWriter<NpgsqlCommand> _channelWriter;
 
         [GlobalSetup(Targets = new[] { nameof(Pipelines), nameof(PipelinesPipelined) })]
         public async ValueTask SetupPipelines()
         {
+            var dataSource = new NpgsqlDataSource(IPEndPoint.Parse(EndPoint), PgOptions, Options);
             var socket = await PgStreamConnection.ConnectAsync(IPEndPoint.Parse(EndPoint));
-            _protocol = await PgV3Protocol.StartAsync(socket.Writer, socket.Reader, PgOptions, Options);
+            _protocol = new NpgsqlConnection(dataSource);
+            await _protocol.OpenAsync();
             _commandText = $"SELECT generate_series(1, {NumRows})";
             const int MultiplexingCommandChannelBound = 4096;
             _channel = Channel.CreateBounded<NpgsqlCommand>(new BoundedChannelOptions(MultiplexingCommandChannelBound)
@@ -44,24 +45,25 @@ namespace Npgsql.Pipelines.Benchmark
             });
             _channelWriter = _channel.Writer;
 
-            var _ = Task.Run(async () =>
-            {
-                var reader = _channel.Reader;
-                var conn = _protocol;
-
-                while (await reader.WaitToReadAsync())
-                while (reader.TryRead(out var command))
-                {
-                    var completionPair = CommandWriter.WriteExtendedAsync(conn, command, flushHint: !reader.TryPeek(out var _));
-                    command.CompleteMultiplexingOperation(completionPair);
-                }
-            });
+            // var _ = Task.Run(async () =>
+            // {
+            //     var reader = _channel.Reader;
+            //     var conn = _protocol;
+            //
+            //     while (await reader.WaitToReadAsync())
+            //     while (reader.TryRead(out var command))
+            //     {
+            //         var slot = await dataSource.OpenAsync();
+            //         var completionPair = PgV3CommandWriter.WriteExtendedAsync(slot, command, flushHint: !reader.TryPeek(out var _));
+            //         command.CompleteMultiplexingOperation(completionPair);
+            //     }
+            // });
         }
 
         [GlobalSetup(Targets = new []{ nameof(Npgsql)})]
         public async ValueTask SetupNpgsql()
         {
-            _conn = new NpgsqlConnection(ConnectionString);
+            _conn = new Npgsql.NpgsqlConnection(ConnectionString);
             await _conn.OpenAsync();
             Command = new Npgsql.NpgsqlCommand($"SELECT generate_series(1, {NumRows})", _conn);
         }
@@ -69,7 +71,7 @@ namespace Npgsql.Pipelines.Benchmark
         [GlobalSetup(Targets = new []{ nameof(NpgsqlPipelined) })]
         public async ValueTask SetupNpgsqlMultiplexing()
         {
-            _conn = new NpgsqlConnection(ConnectionString2);
+            _conn = new Npgsql.NpgsqlConnection(ConnectionString2);
             await _conn.OpenAsync();
             _commandText = $"SELECT generate_series(1, {NumRows})";
         }
@@ -107,7 +109,7 @@ namespace Npgsql.Pipelines.Benchmark
             }
         }
 
-        [Benchmark(OperationsPerInvoke = PipelinedCommandsConst, Baseline = true)]
+        // [Benchmark(OperationsPerInvoke = PipelinedCommandsConst, Baseline = true)]
         public async ValueTask NpgsqlPipelined()
         {
             var readerTasks = new Task<Npgsql.NpgsqlDataReader>[PipelinedCommands];

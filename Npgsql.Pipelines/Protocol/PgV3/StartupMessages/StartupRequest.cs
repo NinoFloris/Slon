@@ -6,9 +6,9 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Internal;
 using Npgsql.Pipelines.Buffers;
 
-namespace Npgsql.Pipelines.Protocol;
+namespace Npgsql.Pipelines.Protocol.PgV3;
 
-class StartupRequest: IStreamingFrontendMessage
+class StartupRequest: IPgV3StreamingFrontendMessage
 {
     readonly List<KeyValuePair<string, string>> _parameters;
 
@@ -22,9 +22,8 @@ class StartupRequest: IStreamingFrontendMessage
             _parameters.Add(new KeyValuePair<string, string>("database", options.Database));
     }
 
-    public FrontendCode FrontendCode => throw new NotSupportedException();
     public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte> => throw new NotSupportedException();
-    public bool TryPrecomputeLength(out int length) => FrontendMessage.CannotPrecomputeLength(out length);
+    public bool TryPrecomputeHeader(out PgV3FrontendHeader header) => FrontendMessage.CannotPrecomputeHeader(out header);
 
     public ValueTask<FlushResult> WriteWithHeaderAsync<T>(MessageWriter<T> writer, CancellationToken cancellationToken = default) where T : IBufferWriter<byte>
     {

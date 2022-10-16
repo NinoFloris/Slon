@@ -3,6 +3,7 @@ using System.Net;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Protocol;
+using Npgsql.Pipelines.Protocol.PgV3;
 using NUnit.Framework;
 
 namespace Npgsql.Pipelines.Tests;
@@ -15,14 +16,13 @@ public class PgV3ProtocolTests
     const string Database = "postgres";
 
     static PgOptions PgOptions { get; } = new() { Username = Username, Password = Password, Database = Database };
-    static ProtocolOptions Options { get; } = new() { ReadTimeout = TimeSpan.FromSeconds(5), ReaderSegmentSize = 1024};
+    static PgV3ProtocolOptions Options { get; } = new() { ReadTimeout = TimeSpan.FromSeconds(5), ReaderSegmentSize = 1024};
 
     [Test]
     public async Task PipeSimpleQueryAsync()
     {
-        var socket = await PgPipeConnection.ConnectAsync(IPEndPoint.Parse(EndPoint));
-        var conn = await PgV3Protocol.StartAsync(socket.Writer, socket.Reader, PgOptions, Options);
-        var command = new NpgsqlCommand(conn) { CommandText = "SELECT pg_sleep(2)" };
+        var dataSource = new NpgsqlDataSource(IPEndPoint.Parse(EndPoint), PgOptions, Options);
+        var command = new NpgsqlCommand(new NpgsqlConnection(dataSource)) { CommandText = "SELECT pg_sleep(2)" };
         await using var dataReader = await command.ExecuteReaderAsync();
         while (await dataReader.ReadAsync().ConfigureAwait(false))
         {
@@ -32,9 +32,10 @@ public class PgV3ProtocolTests
     [Test]
     public async Task StreamSimpleQueryAsync()
     {
-        var socket = await PgStreamConnection.ConnectAsync(IPEndPoint.Parse(EndPoint));
-        var conn = await PgV3Protocol.StartAsync(socket.Writer, socket.Reader, PgOptions, Options);
-        var command = new NpgsqlCommand(conn) { CommandText = "SELECT pg_sleep(2)" };
+        var dataSource = new NpgsqlDataSource(IPEndPoint.Parse(EndPoint), PgOptions, Options);
+        var connection = new NpgsqlConnection(dataSource);
+        await connection.OpenAsync();
+        var command = new NpgsqlCommand(connection) { CommandText = "SELECT pg_sleep(2)" };
         await using var dataReader = await command.ExecuteReaderAsync();
         while (await dataReader.ReadAsync().ConfigureAwait(false))
         {
@@ -106,11 +107,12 @@ public class PgV3ProtocolTests
     [Test]
     public async ValueTask PipeliningTest()
     {
-        var socket = await PgStreamConnection.ConnectAsync(IPEndPoint.Parse(EndPoint));
-        var conn = await PgV3Protocol.StartAsync(socket.Writer, socket.Reader, PgOptions, Options);
-        var NumRows = 1000;
-        var command = new NpgsqlCommand(conn) { CommandText = $"SELECT generate_series(1, {NumRows})" };
+        const int NumRows = 1000;
         const int Pipelined = 1000;
+        var dataSource = new NpgsqlDataSource(IPEndPoint.Parse(EndPoint), PgOptions, Options);
+        var conn = new NpgsqlConnection(dataSource);
+        await conn.OpenAsync();
+        var command = new NpgsqlCommand(conn) { CommandText = $"SELECT generate_series(1, {NumRows})" };
         var outer = 10;
 
         for (int j = 0; j < outer; j++)

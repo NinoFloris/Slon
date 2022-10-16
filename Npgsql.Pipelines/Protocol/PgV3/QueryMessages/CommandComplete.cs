@@ -2,15 +2,15 @@ using System;
 using System.Buffers;
 using System.Buffers.Text;
 
-namespace Npgsql.Pipelines.Protocol;
+namespace Npgsql.Pipelines.Protocol.PgV3;
 
-struct CommandComplete: IBackendMessage
+struct CommandComplete: IPgV3BackendMessage
 {
     public StatementType StatementType { get; private set; }
     public Oid Oid { get; private set; }
     public ulong Rows { get; private set; }
 
-    public ReadStatus Read(ref MessageReader reader)
+    public ReadStatus Read(ref MessageReader<PgV3Header> reader)
     {
         if (!reader.MoveNextAndIsExpected(BackendCode.CommandComplete, out var status, ensureBuffered: true))
             return status;

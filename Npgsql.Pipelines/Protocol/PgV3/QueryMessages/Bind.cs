@@ -6,7 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Buffers;
 
-namespace Npgsql.Pipelines.Protocol;
+namespace Npgsql.Pipelines.Protocol.PgV3;
 
 readonly struct ResultColumnCodes
 {
@@ -24,7 +24,7 @@ readonly struct ResultColumnCodes
     public static ResultColumnCodes CreatePerColumn(ArraySegment<FormatCode> codes) => new(codes);
 }
 
-readonly struct Bind: IStreamingFrontendMessage
+readonly struct Bind: IPgV3StreamingFrontendMessage
 {
     readonly string _portalName;
     readonly ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> _parameters;
@@ -63,18 +63,16 @@ readonly struct Bind: IStreamingFrontendMessage
         _precomputedMessageLength = PrecomputeMessageLength();
     }
 
-    public FrontendCode FrontendCode => FrontendCode.Bind;
-
-    public bool TryPrecomputeLength(out int length)
+    public bool TryPrecomputeHeader(out PgV3FrontendHeader header)
     {
         // Whatever, something like segment size can come via the constructor too, if we want to get fancy.
         if (_precomputedMessageLength < 2048)
         {
-            length = _precomputedMessageLength;
+            header = PgV3FrontendHeader.Create(FrontendCode.Bind, _precomputedMessageLength);
             return true;
         }
 
-        length = default;
+        header = default;
         return false;
     }
 
@@ -105,7 +103,7 @@ readonly struct Bind: IStreamingFrontendMessage
 
     public async ValueTask<FlushResult> WriteWithHeaderAsync<T>(MessageWriter<T> writer, CancellationToken cancellationToken = default) where T : IBufferWriter<byte>
     {
-        writer.WriteByte((byte)FrontendCode);
+        writer.WriteByte((byte)FrontendCode.Bind);
         writer.WriteInt(_precomputedMessageLength + MessageWriter.IntByteCount);
 
         writer.WriteCString(_portalName);

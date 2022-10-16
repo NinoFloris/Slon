@@ -7,6 +7,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Buffers;
+using Npgsql.Pipelines.Protocol.PgV3;
 
 namespace Npgsql.Pipelines.Protocol;
 
@@ -85,9 +86,9 @@ class CommandReader
         }
     }
 
-    public async ValueTask InitializeAsync(PgV3Protocol protocol, CancellationToken cancellationToken = default)
+    public async ValueTask InitializeAsync(PgProtocol protocol, CancellationToken cancellationToken = default)
     {
-        _protocol = protocol;
+        _protocol = (PgV3Protocol)protocol;
 
         try
         {
@@ -209,13 +210,13 @@ class CommandReader
         _rowDescription.Reset();
     }
 
-    struct ExpandBuffer : IBackendMessage
+    struct ExpandBuffer : IPgV3BackendMessage
     {
-        readonly MessageReader.ResumptionData _resumptionData;
+        readonly MessageReader<PgV3Header>.ResumptionData _resumptionData;
         readonly long _consumed;
         bool _resumed;
 
-        public ExpandBuffer(MessageReader.ResumptionData resumptionData, long consumed)
+        public ExpandBuffer(MessageReader<PgV3Header>.ResumptionData resumptionData, long consumed)
         {
             _resumptionData = resumptionData;
             _consumed = consumed;
@@ -223,25 +224,25 @@ class CommandReader
 
         public ReadOnlySequence<byte> Buffer { get; private set; }
 
-        public ReadStatus Read(ref MessageReader reader)
+        public ReadStatus Read(ref MessageReader<PgV3Header> reader)
         {
             if (_resumed)
             {
                 // When we get resumed all we do is store the new buffer.
                 Buffer = reader.Sequence;
                 // Return a reader that has not consumed anything, this ensures no part of the buffer will be advanced out from under us.
-                reader = MessageReader.Create(reader.Sequence);
+                reader = MessageReader<PgV3Header>.Create(reader.Sequence);
                 return ReadStatus.Done;
             }
 
             // Create a reader that has the right consumed state and header data for the outer read loop to figure out the next size.
-            reader = _consumed == 0 ? MessageReader.Resume(reader.Sequence, _resumptionData) : MessageReader.Create(reader.Sequence, _resumptionData, _consumed);
+            reader = _consumed == 0 ? MessageReader<PgV3Header>.Resume(reader.Sequence, _resumptionData) : MessageReader<PgV3Header>.Create(reader.Sequence, _resumptionData, _consumed);
             _resumed = true;
             return ReadStatus.NeedMoreData;
         }
     }
 
-    struct StartCommand: IBackendMessage
+    struct StartCommand: IPgV3BackendMessage
     {
         enum ReadState
         {
@@ -254,9 +255,9 @@ class CommandReader
         }
 
         ReadState _state;
-        MessageReader.ResumptionData _resumptionData;
+        MessageReader<PgV3Header>.ResumptionData _resumptionData;
         public ReadOnlySequence<byte> Buffer { get; private set; }
-        public MessageReader.ResumptionData ResumptionData => _resumptionData;
+        public MessageReader<PgV3Header>.ResumptionData ResumptionData => _resumptionData;
         public RowDescription RowDescription { get; private set; }
         public CommandComplete CommandComplete { get; private set; }
         public bool IsCompleted => _resumptionData.IsDefault;
@@ -266,7 +267,7 @@ class CommandReader
             RowDescription = rowDescription;
         }
 
-        public ReadStatus Read(ref MessageReader reader)
+        public ReadStatus Read(ref MessageReader<PgV3Header> reader)
         {
             switch (_state)
             {
@@ -303,7 +304,7 @@ class CommandReader
                 }
             }
 
-            switch (reader.CurrentCode)
+            switch (reader.Current.Code)
             {
                 case BackendCode.NoData:
                     if (!reader.ConsumeCurrent())
@@ -335,7 +336,7 @@ class CommandReader
                 }
             }
 
-            switch (reader.CurrentCode)
+            switch (reader.Current.Code)
             {
                 case BackendCode.EmptyQueryResponse:
                     if (!reader.ConsumeCurrent())
@@ -366,21 +367,21 @@ class CommandReader
         }
     }
 
-    struct CompleteCommand : IBackendMessage
+    struct CompleteCommand : IPgV3BackendMessage
     {
-        readonly MessageReader.ResumptionData _resumptionData;
+        readonly MessageReader<PgV3Header>.ResumptionData _resumptionData;
         readonly long _consumed;
         public CommandComplete CommandComplete { get; private set; }
 
-        public CompleteCommand(MessageReader.ResumptionData resumptionData, long consumed)
+        public CompleteCommand(MessageReader<PgV3Header>.ResumptionData resumptionData, long consumed)
         {
             _resumptionData = resumptionData;
             _consumed = consumed;
         }
 
-        public ReadStatus Read(ref MessageReader reader)
+        public ReadStatus Read(ref MessageReader<PgV3Header> reader)
         {
-            reader = MessageReader.Create(reader.Sequence, _resumptionData, _consumed);
+            reader = MessageReader<PgV3Header>.Create(reader.Sequence, _resumptionData, _consumed);
             if (!reader.ReadMessage(CommandComplete = new CommandComplete(), out var status))
                 return status;
 
@@ -392,15 +393,15 @@ class CommandReader
     {
         ReadOnlySequence<byte> _buffer;
         long _bufferLength;
-        MessageReader.ResumptionData _resumptionData;
+        MessageReader<PgV3Header>.ResumptionData _resumptionData;
         readonly int _expectedColumnCount;
         long _consumed;
         bool _messageNeedsMoreData;
 
         public long Consumed => _consumed;
-        public MessageReader.ResumptionData ResumptionData => _resumptionData;
+        public MessageReader<PgV3Header>.ResumptionData ResumptionData => _resumptionData;
 
-        public DataRowReader(ReadOnlySequence<byte> buffer, MessageReader.ResumptionData resumptionData, RowDescription rowDescription)
+        public DataRowReader(ReadOnlySequence<byte> buffer, MessageReader<PgV3Header>.ResumptionData resumptionData, RowDescription rowDescription)
         {
             _buffer = buffer;
             _bufferLength = buffer.Length;
@@ -418,7 +419,7 @@ class CommandReader
         // We're dropping down to manual here because reconstructing a SequenceReader every row is too slow.
         public bool ReadNext(out ReadStatus status)
         {
-            MessageHeader header;
+            PgV3Header header;
             ReadOnlySequence<byte> buffer;
             if (_messageNeedsMoreData)
             {
@@ -436,7 +437,7 @@ class CommandReader
                 _consumed += _resumptionData.Header.Length - _resumptionData.MessageIndex;
 
                 buffer = _buffer.Slice(_consumed);
-                if (!MessageHeader.TryParse(buffer, out header))
+                if (!PgV3Header.TryParse(buffer, out header))
                 {
                     if (!_messageNeedsMoreData)
                         _resumptionData = _resumptionData with { MessageIndex = _resumptionData.Header.Length };
@@ -452,41 +453,41 @@ class CommandReader
                     if (BackendMessage.DebugEnabled && !ReadRowDebug(buffer, header, out status))
                         return false;
 
-                    if (buffer.Length < MessageHeader.ByteCount + sizeof(short))
+                    if (buffer.Length < PgV3Header.ByteCount + sizeof(short))
                     {
                         _messageNeedsMoreData = true;
-                        _resumptionData = new MessageReader.ResumptionData(header, 0);
+                        _resumptionData = new MessageReader<PgV3Header>.ResumptionData(header, 0);
                         status = ReadStatus.NeedMoreData;
                         return false;
                     }
 
-                    _consumed += MessageHeader.ByteCount + sizeof(short);
-                    _resumptionData = new MessageReader.ResumptionData(header, MessageHeader.ByteCount + sizeof(short));
+                    _consumed += PgV3Header.ByteCount + sizeof(short);
+                    _resumptionData = new MessageReader<PgV3Header>.ResumptionData(header, PgV3Header.ByteCount + sizeof(short));
                     _messageNeedsMoreData = false;
                     status = ReadStatus.Done;
                     return true;
                 default:
                     status = header.Code == BackendCode.CommandComplete ? ReadStatus.Done :
-                        header.Code.IsAsyncResponse() ? ReadStatus.AsyncResponse : ReadStatus.InvalidData;
+                        header.IsAsyncResponse ? ReadStatus.AsyncResponse : ReadStatus.InvalidData;
 
-                    _consumed += MessageHeader.ByteCount;
-                    _resumptionData = new MessageReader.ResumptionData(header, MessageHeader.ByteCount);
+                    _consumed += PgV3Header.ByteCount;
+                    _resumptionData = new MessageReader<PgV3Header>.ResumptionData(header, PgV3Header.ByteCount);
                     return false;
             }
         }
 
-        bool ReadRowDebug(in ReadOnlySequence<byte> buffer, MessageHeader header, out ReadStatus status)
+        bool ReadRowDebug(in ReadOnlySequence<byte> buffer, PgV3Header header, out ReadStatus status)
         {
-            Span<byte> headerAndColumnCount = stackalloc byte[MessageHeader.ByteCount + sizeof(short)];
+            Span<byte> headerAndColumnCount = stackalloc byte[PgV3Header.ByteCount + sizeof(short)];
             if (!buffer.TryCopyTo(headerAndColumnCount))
             {
                 _messageNeedsMoreData = true;
-                _resumptionData = new MessageReader.ResumptionData(header, 0);
+                _resumptionData = new MessageReader<PgV3Header>.ResumptionData(header, 0);
                 status = ReadStatus.NeedMoreData;
                 return false;
             }
 
-            if (BinaryPrimitives.ReadInt16BigEndian(headerAndColumnCount.Slice(MessageHeader.ByteCount)) != _expectedColumnCount)
+            if (BinaryPrimitives.ReadInt16BigEndian(headerAndColumnCount.Slice(PgV3Header.ByteCount)) != _expectedColumnCount)
                 throw new InvalidDataException("DataRow returned a different number of columns than was expected from the row description.");
 
             status = default;

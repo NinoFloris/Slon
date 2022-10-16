@@ -1,6 +1,6 @@
-namespace Npgsql.Pipelines.Protocol;
+namespace Npgsql.Pipelines.Protocol.PgV3;
 
-struct ErrorResponse: IBackendMessage
+struct ErrorResponse: IPgV3BackendMessage
 {
     /// <summary>
     /// Error and notice message field codes
@@ -30,7 +30,7 @@ struct ErrorResponse: IBackendMessage
 
     public ErrorOrNoticeMessage ErrorOrNoticeMessage { get; private set; }
 
-    public ReadStatus Read(ref MessageReader reader)
+    public ReadStatus Read(ref MessageReader<PgV3Header> reader)
     {
         (string? severity, string? invariantSeverity, string? code, string? message, string? detail, string? hint) = (null, null, null, null, null, null);
         var (position, internalPosition) = (0, 0);
@@ -39,7 +39,7 @@ struct ErrorResponse: IBackendMessage
             (null, null, null, null, null);
         (string? file, string? line, string? routine) = (null, null, null);
 
-        if (!reader.MoveNextAndIsExpected(BackendCode.ErrorResponse, out var status, ensureBuffered: true))
+        if (!reader.MoveNextAndIsExpected(PgV3Header.CreateType(BackendCode.ErrorResponse), out var status, ensureBuffered: true))
             return status;
 
         var fin = false;

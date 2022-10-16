@@ -1,10 +1,9 @@
 using System;
-using System.Buffers;
 using System.Collections.Generic;
 
-namespace Npgsql.Pipelines.Protocol;
+namespace Npgsql.Pipelines.Protocol.PgV3;
 
-class RowDescription: IBackendMessage
+class RowDescription: IPgV3BackendMessage
 {
     static int ColumnCountLookupThreshold => 10;
     public const int MaxColumns = ushort.MaxValue;
@@ -20,13 +19,12 @@ class RowDescription: IBackendMessage
 
     public ArraySegment<FieldDescription> Fields => _fields;
 
-    public ReadStatus Read(ref MessageReader reader)
+    public ReadStatus Read(ref MessageReader<PgV3Header> reader)
     {
         if (!reader.MoveNextAndIsExpected(BackendCode.RowDescription, out var status, ensureBuffered: true))
             return status;
 
-        // TODO read ushort.
-        reader.TryReadShort(out var columnCount);
+        reader.TryReadUShort(out var columnCount);
         if (_fields.Array!.Length >= columnCount)
             _fields = new ArraySegment<FieldDescription>(_fields.Array, 0, columnCount);
         else
@@ -66,7 +64,7 @@ class RowDescription: IBackendMessage
 
     public void Reset()
     {
-        _fields = new ArraySegment<FieldDescription>(_fields.Array, 0, 0);
+        _fields = new ArraySegment<FieldDescription>(_fields.Array!, 0, 0);
     }
 }
 

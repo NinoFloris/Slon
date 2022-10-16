@@ -1,6 +1,6 @@
 using System;
 
-namespace Npgsql.Pipelines.Protocol;
+namespace Npgsql.Pipelines.Protocol.PgV3;
 
 enum AuthenticationType
 {
@@ -17,7 +17,7 @@ enum AuthenticationType
     SASLFinal = 12
 }
 
-class AuthenticationResponse : IBackendMessage
+class AuthenticationRequest : IPgV3BackendMessage
 {
     public AuthenticationType AuthenticationType { get; private set; }
 
@@ -25,7 +25,7 @@ class AuthenticationResponse : IBackendMessage
     public byte[]? GSSAPIData { get; private set; }
     public byte[]? SASLData { get; private set; }
 
-    public ReadStatus Read(ref MessageReader reader)
+    public ReadStatus Read(ref MessageReader<PgV3Header> reader)
     {
         if (!reader.MoveNextAndIsExpected(BackendCode.AuthenticationRequest, out var status, ensureBuffered: true))
             return status;

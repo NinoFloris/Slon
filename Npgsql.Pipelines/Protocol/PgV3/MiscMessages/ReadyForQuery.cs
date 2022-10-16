@@ -1,7 +1,7 @@
 using System.IO;
 using System.Runtime.CompilerServices;
 
-namespace Npgsql.Pipelines.Protocol;
+namespace Npgsql.Pipelines.Protocol.PgV3;
 
 enum TransactionStatus : byte
 {
@@ -21,12 +21,12 @@ enum TransactionStatus : byte
     InFailedTransactionBlock = (byte)'E',
 }
 
-struct ReadyForQuery: IBackendMessage
+struct ReadyForQuery: IPgV3BackendMessage
 {
     TransactionStatus _transactionStatus;
     TransactionStatus TransactionStatus => _transactionStatus;
 
-    public ReadStatus Read(ref MessageReader reader)
+    public ReadStatus Read(ref MessageReader<PgV3Header> reader)
     {
         if (!reader.MoveNextAndIsExpected(BackendCode.ReadyForQuery, out var status, ensureBuffered: true))
             return status;

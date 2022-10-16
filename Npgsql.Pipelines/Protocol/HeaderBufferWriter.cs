@@ -1,6 +1,5 @@
 using System;
 using System.Buffers;
-using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 
@@ -9,7 +8,7 @@ namespace Npgsql.Pipelines.Protocol;
 /// <summary>
 /// Buffer writer which backfills a PG header on copy.
 /// </summary>
-class HeaderBufferWriter: ICopyableBufferWriter<byte>
+class HeaderBufferWriter<THeader>: ICopyableBufferWriter<byte> where THeader: struct, IFrontendHeader<THeader>
 {
     readonly int _minimumSegmentSize;
     int _bytesWritten;
@@ -21,13 +20,13 @@ class HeaderBufferWriter: ICopyableBufferWriter<byte>
     public HeaderBufferWriter(int minimumSegmentSize = 4096)
     {
         _minimumSegmentSize = minimumSegmentSize;
-        _bytesWritten = MessageHeader.ByteCount;
-        _position = MessageHeader.ByteCount;
+        _bytesWritten = default(THeader).HeaderLength;
+        _position = default(THeader).HeaderLength;
     }
 
-    byte _code;
+    THeader _header;
 
-    public void SetCode(byte value) => _code = value;
+    public void SetHeader(THeader header) => _header = header;
 
     public void Reset()
     {
@@ -47,9 +46,9 @@ class HeaderBufferWriter: ICopyableBufferWriter<byte>
             _currentSegment = null;
         }
 
-        _bytesWritten = MessageHeader.ByteCount;
-        _position = MessageHeader.ByteCount;
-        _code = 0;
+        _bytesWritten = default(THeader).HeaderLength;
+        _position = default(THeader).HeaderLength;
+        _header = default;
     }
 
     public void Advance(int count)
@@ -135,14 +134,11 @@ class HeaderBufferWriter: ICopyableBufferWriter<byte>
     void WriteHeader()
     {
         var segment = _completedSegments == null ? _currentSegment : _completedSegments[0].Buffer;
-
         if (segment is not null)
         {
-            var span = segment.AsSpan();
-            if (_code == 0)
-                throw new InvalidOperationException("Missing code, code should be set before copying out data.");
-            span[0] = _code;
-            BinaryPrimitives.WriteInt32BigEndian(span.Slice(1), _bytesWritten - (MessageHeader.ByteCount - MessageWriter.IntByteCount));
+            var writer = new BufferWriter<CompletedBuffer>(new CompletedBuffer(segment, _header.HeaderLength));
+            _header.Write(ref writer);
+            writer.Commit();
         }
 
     }
@@ -196,7 +192,7 @@ class HeaderBufferWriter: ICopyableBufferWriter<byte>
     /// <summary>
     /// Holds a byte[] from the pool and a size value. Basically a Memory but guaranteed to be backed by an ArrayPool byte[], so that we know we can return it.
     /// </summary>
-    internal readonly struct CompletedBuffer
+    internal readonly struct CompletedBuffer: IBufferWriter<byte>
     {
         public byte[] Buffer { get; }
         public int Length { get; }
@@ -212,6 +208,22 @@ class HeaderBufferWriter: ICopyableBufferWriter<byte>
         public void Return()
         {
             ArrayPool<byte>.Shared.Return(Buffer);
+        }
+
+        public void Advance(int count)
+        {
+            if (count > Length)
+                throw new InvalidOperationException("Header writer went out of bounds of the given HeaderLength");
+        }
+
+        public Memory<byte> GetMemory(int sizeHint = 0)
+        {
+            return Buffer;
+        }
+
+        public Span<byte> GetSpan(int sizeHint = 0)
+        {
+            return Buffer;
         }
     }
 }

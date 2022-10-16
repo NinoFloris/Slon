@@ -3,9 +3,9 @@ using System.Buffers;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Npgsql.Pipelines.Protocol;
+namespace Npgsql.Pipelines.Protocol.PgV3;
 
-class PasswordMessage : IFrontendMessage
+class PasswordMessage : IPgV3FrontendMessage
 {
     readonly string _hashedPassword;
 
@@ -21,9 +21,9 @@ class PasswordMessage : IFrontendMessage
         buffer.WriteCString(_hashedPassword);
     }
 
-    public bool TryPrecomputeLength(out int length)
+    public bool TryPrecomputeHeader(out PgV3FrontendHeader header)
     {
-        length = MessageWriter.GetCStringByteCount(_hashedPassword);
+        header = PgV3FrontendHeader.Create(FrontendCode.Password, MessageWriter.GetCStringByteCount(_hashedPassword));
         return true;
     }
 

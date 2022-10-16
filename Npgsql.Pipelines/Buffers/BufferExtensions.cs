@@ -45,6 +45,13 @@ static class BufferExtensions
         buffer.Advance(sizeof(int));
     }
 
+    public static void WriteUInt<T>(ref this BufferWriter<T> buffer, uint value) where T : IBufferWriter<byte>
+    {
+        buffer.Ensure(sizeof(uint));
+        BinaryPrimitives.WriteUInt32BigEndian(buffer.Span, value);
+        buffer.Advance(sizeof(uint));
+    }
+
     public static void WriteCString<T>(ref this BufferWriter<T> buffer, string value) where T : IBufferWriter<byte>
     {
         if (value is not "")

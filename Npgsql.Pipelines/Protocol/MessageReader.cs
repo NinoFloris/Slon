@@ -1,88 +1,40 @@
 using System;
 using System.Text;
 using System.Buffers;
-using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
-using System.IO;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using Npgsql.Pipelines.Buffers;
 
 namespace Npgsql.Pipelines.Protocol;
 
-readonly record struct MessageHeader
+interface IHeader<THeader>: IEquatable<THeader> where THeader: struct, IHeader<THeader>
 {
-    public const int ByteCount = sizeof(uint) + sizeof(BackendCode);
+    /// <summary>
+    /// Number of bytes the header consists of.
+    /// </summary>
+    int HeaderLength { get; }
+    /// <summary>
+    /// Length of the entire message, including the header.
+    /// </summary>
+    long Length { get; }
+    /// <summary>
+    /// Whether the current instance is the default for this type.
+    /// </summary>
+    bool IsDefault { get; }
+    /// <summary>
+    /// Whether this message should be handled by the protocol.
+    /// </summary>
+    bool IsAsyncResponse { get; }
 
-    readonly uint _length;
-    readonly BackendCode _code;
+    // Too bad static abstract interface methods are not supported on ns2.0.
+    bool TryParse(in ReadOnlySpan<byte> unreadSpan, in ReadOnlySequence<byte> buffer, long bufferStart, out THeader header);
 
-    public MessageHeader(BackendCode code, uint length)
-    {
-        _code = code;
-        _length = length;
-    }
-
-    public BackendCode Code => _code;
-    public uint Length => _length;
-
-    public bool IsDefault => _code == 0;
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool TryParse(ReadOnlySpan<byte> span, out MessageHeader header)
-    {
-        if (span.Length < ByteCount)
-        {
-            header = default;
-            return false;
-        }
-
-        ref var first = ref MemoryMarshal.GetReference(span);
-        var code = (BackendCode)first;
-
-        if (BackendMessage.DebugEnabled)
-            ThrowIfNotDefined(code);
-
-        var length = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref first, 1));
-        if (BitConverter.IsLittleEndian)
-            length = BinaryPrimitives.ReverseEndianness(length);
-        length += sizeof(byte);
-
-        header = new MessageHeader(code, length);
-        return true;
-
-        static void ThrowIfNotDefined(BackendCode code)
-        {
-            if (!EnumShim.IsDefined(code))
-                throw new InvalidDataException("Unknown backend code: " + code);
-        }
-    }
-
-    public static bool TryParse(in ReadOnlySequence<byte> buffer, out MessageHeader header)
-    {
-        Span<byte> span = stackalloc byte[ByteCount];
-        if (!TryParse(buffer.GetFirstSpan(), out header) && (!ReadOnlySequenceExtensions.TryCopySlow(buffer, span) || !TryParse(span, out header)))
-        {
-            header = default;
-            return false;
-        }
-
-        return true;
-    }
-
-    public static bool TryParse(ref SequenceReader<byte> reader, out MessageHeader header)
-    {
-        Span<byte> span = stackalloc byte[ByteCount];
-        if (!TryParse(reader.UnreadSpan, out header) && (!ReadOnlySequenceExtensions.TryCopySlow(reader.Sequence.Slice(reader.Position), span) || !TryParse(span, out header)))
-        {
-            header = default;
-            return false;
-        }
-
-        reader.Advance(ByteCount);
-        return true;
-    }
+    /// <summary>
+    /// Header equality up to type (packet code, flags, whatever is enough to distinguish *types of messages*).
+    /// </summary>
+    /// <param name="other"></param>
+    /// <returns></returns>
+    bool TypeEquals(in THeader other);
 }
 
 // Could be optimized like SequencePosition where the flags are in the top bits of the integer.
@@ -117,15 +69,15 @@ readonly struct MessageStartOffset
     public MessageStartOffset ToFirstMove() => new(_offset, _flags & ~MessageStartOffsetFlags.BeforeFirstMove);
 }
 
-[DebuggerDisplay("Code = {_current.Code}, Length = {_current.Length}")]
-ref struct MessageReader
+[DebuggerDisplay("Current = {_current}")]
+ref struct MessageReader<THeader> where THeader : struct, IHeader<THeader>, IEquatable<THeader>
 {
     SequenceReader<byte> _reader;
     MessageStartOffset _currentStart;
-    MessageHeader _current;
+    THeader _current;
 
     MessageReader(ReadOnlySequence<byte> sequence) => _reader = new SequenceReader<byte>(sequence);
-    MessageReader(ReadOnlySequence<byte> sequence, MessageHeader current, MessageStartOffset currentStart)
+    MessageReader(ReadOnlySequence<byte> sequence, THeader current, MessageStartOffset currentStart)
         : this(sequence)
     {
         _current = current;
@@ -141,19 +93,7 @@ ref struct MessageReader
 
     public bool HasCurrent => !_current.IsDefault;
 
-    public readonly BackendCode CurrentCode
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get
-        {
-            if (_current.IsDefault)
-                ThrowEnumOpCantHappen();
-
-            return _current.Code;
-        }
-    }
-
-    public readonly MessageHeader Current
+    public readonly THeader Current
     {
         get
         {
@@ -210,9 +150,20 @@ ref struct MessageReader
         }
     }
 
-    public readonly bool IsCurrentBuffered => _reader.Remaining >= CurrentRemaining;
+    public bool CurrentIsAsyncResponse
+    {
+        get
+        {
+            if (_current.IsDefault)
+                ThrowEnumOpCantHappen();
 
-    public static MessageReader Create(scoped in ReadOnlySequence<byte> sequence) => new(sequence);
+            return _current.IsAsyncResponse;
+        }
+    }
+
+    public readonly bool CurrentIsBuffered => _reader.Remaining >= CurrentRemaining;
+
+    public static MessageReader<THeader> Create(scoped in ReadOnlySequence<byte> sequence) => new(sequence);
 
     /// <summary>
     /// Recreate a reader over the same (or the same starting point) sequence with resumption data.
@@ -221,12 +172,12 @@ ref struct MessageReader
     /// <param name="resumptionData"></param>
     /// <param name="consumed"></param>
     /// <returns></returns>
-    public static MessageReader Create(scoped in ReadOnlySequence<byte> sequence, scoped in ResumptionData resumptionData, long consumed)
+    public static MessageReader<THeader> Create(scoped in ReadOnlySequence<byte> sequence, scoped in ResumptionData resumptionData, long consumed)
     {
         if (consumed - resumptionData.MessageIndex < 0)
             ThrowArgumentOutOfRangeException();
 
-        var reader = new MessageReader(sequence, resumptionData.Header, MessageStartOffset.Recreate((uint)(consumed - resumptionData.MessageIndex)));
+        var reader = new MessageReader<THeader>(sequence, resumptionData.Header, MessageStartOffset.Recreate((uint)(consumed - resumptionData.MessageIndex)));
         reader._reader.Advance(consumed);
         return reader;
 
@@ -240,7 +191,7 @@ ref struct MessageReader
     /// <param name="sequence"></param>
     /// <param name="resumptionData"></param>
     /// <returns></returns>
-    public static MessageReader Resume(scoped in ReadOnlySequence<byte> sequence, scoped in ResumptionData resumptionData) =>
+    public static MessageReader<THeader> Resume(scoped in ReadOnlySequence<byte> sequence, scoped in ResumptionData resumptionData) =>
         new(sequence, resumptionData.Header, MessageStartOffset.Resume(resumptionData.MessageIndex));
 
     public readonly ResumptionData GetResumptionData() => _current.IsDefault ? default : new(_current, (uint)GetUnvalidatedCurrentConsumed());
@@ -257,13 +208,15 @@ ref struct MessageReader
             return false;
 
         _currentStart = new MessageStartOffset(_reader.Consumed);
-        if (!MessageHeader.TryParse(ref _reader, out _current))
+        if (!default(THeader).TryParse(_reader.UnreadSpan, _reader.Sequence, _reader.Consumed, out _current))
         {
             // We couldn't fully parse the next header, reset all 'current' state, specifically important for resumption data.
             _current = default;
             _currentStart = default;
             return false;
         }
+
+        _reader.Advance(_current.HeaderLength);
 
         return true;
     }
@@ -286,6 +239,22 @@ ref struct MessageReader
 
         _reader.Advance(remaining);
         return true;
+    }
+
+    public bool CurrentEquals(scoped in THeader other)
+    {
+        if (_current.IsDefault)
+            ThrowEnumOpCantHappen();
+
+        return _current.Equals(other);
+    }
+
+    public bool CurrentTypeEquals(scoped in THeader other)
+    {
+        if (_current.IsDefault)
+            ThrowEnumOpCantHappen();
+
+        return _current.TypeEquals(other);
     }
 
     public bool TryReadCString([NotNullWhen(true)]out string? value)
@@ -317,7 +286,7 @@ ref struct MessageReader
 
     public readonly record struct ResumptionData(
         // The current message at the time of the suspend.
-        MessageHeader Header,
+        THeader Header,
         // Where we need to start relative to the message in Header.
         uint MessageIndex
     )
@@ -331,37 +300,46 @@ ref struct MessageReader
 
 static class MessageReaderExtensions
 {
-    public static bool IsAsyncResponse(this BackendCode code) => code is BackendCode.NoticeResponse or BackendCode.NotificationResponse or BackendCode.ParameterStatus;
-
     /// <summary>
-    /// Skip messages until code does not equal Current.Code.
+    /// Skip messages until header does not equal TypeEquals.
     /// </summary>
     /// <param name="reader"></param>
     /// <param name="code"></param>
+    /// <param name="matchingHeader"></param>
     /// <param name="status">returned if we found an async response or couldn't skip past 'code' yet.</param>
     /// <returns>Returns true if skip succeeded, false if it could not skip past 'code' yet.</returns>
-    public static bool SkipSimilar(this ref MessageReader reader, BackendCode code, out ReadStatus status)
+    public static bool SkipSimilar<THeader>(this ref MessageReader<THeader> reader, scoped in THeader matchingHeader, out ReadStatus status)
+        where THeader : struct, IHeader<THeader>
     {
         bool moved = true;
-        while (reader.CurrentCode == code && (moved = reader.MoveNext()))
+        while (reader.CurrentTypeEquals(matchingHeader) && (moved = reader.MoveNext()))
         {}
 
-        if (moved && reader.CurrentCode.IsAsyncResponse())
+        if (moved && reader.CurrentIsAsyncResponse)
         {
             status = ReadStatus.AsyncResponse;
             return false;
         }
-        status = ReadStatus.NeedMoreData;
+        status = moved ? ReadStatus.Done : ReadStatus.NeedMoreData;
         return moved;
     }
 
-    public static bool TryReadUInt(this ref MessageReader reader, out uint value)
+    public static bool TryReadUInt<THeader>(this ref MessageReader<THeader> reader, out uint value)
+        where THeader : struct, IHeader<THeader>
     {
         UnsafeShim.SkipInit(out value);
         return reader.TryReadInt(out Unsafe.As<uint, int>(ref value));
     }
 
-    public static bool TryReadBool(this ref MessageReader reader, out bool value)
+    public static bool TryReadUShort<THeader>(this ref MessageReader<THeader> reader, out ushort value)
+        where THeader : struct, IHeader<THeader>
+    {
+        UnsafeShim.SkipInit(out value);
+        return reader.TryReadShort(out Unsafe.As<ushort, short>(ref value));
+    }
+
+    public static bool TryReadBool<THeader>(this ref MessageReader<THeader> reader, out bool value)
+        where THeader : struct, IHeader<THeader>
     {
         if (!reader.TryReadByte(out var b))
         {
@@ -376,26 +354,28 @@ static class MessageReaderExtensions
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool IsExpected(this ref MessageReader reader, BackendCode code, out ReadStatus status, bool ensureBuffered = false)
+    public static bool IsExpected<THeader>(this ref MessageReader<THeader> reader, scoped in THeader matchingHeader, out ReadStatus status, bool ensureBuffered = false) 
+        where THeader : struct, IHeader<THeader>
     {
-        if (reader.CurrentCode != code)
+        if (!reader.CurrentTypeEquals(matchingHeader))
         {
-            status = code.IsAsyncResponse() ? ReadStatus.AsyncResponse : ReadStatus.InvalidData;
+            status = matchingHeader.IsAsyncResponse ? ReadStatus.AsyncResponse : ReadStatus.InvalidData;
             return false;
         }
 
-        if (ensureBuffered && !reader.IsCurrentBuffered)
+        if (ensureBuffered && !reader.CurrentIsBuffered)
         {
             status = ReadStatus.NeedMoreData;
             return false;
         }
 
-        status = default;
+        status = ReadStatus.Done;
         return true;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool MoveNextAndIsExpected(this ref MessageReader reader, BackendCode code, out ReadStatus status, bool ensureBuffered = false)
+    public static bool MoveNextAndIsExpected<THeader>(this ref MessageReader<THeader> reader, scoped in THeader matchingHeader, out ReadStatus status, bool ensureBuffered = false) 
+        where THeader : struct, IHeader<THeader>
     {
         if (!reader.MoveNext())
         {
@@ -403,16 +383,11 @@ static class MessageReaderExtensions
             return false;
         }
 
-        return reader.IsExpected(code, out status, ensureBuffered);
+        return reader.IsExpected(matchingHeader, out status, ensureBuffered);
     }
 
-    public static bool ReadMessage<T>(this ref MessageReader reader, out ReadStatus status) where T : struct, IBackendMessage
-    {
-        status = new T().Read(ref reader);
-        return status == ReadStatus.Done;
-    }
-
-    public static bool ReadMessage<T>(this ref MessageReader reader, T message, out ReadStatus status) where T : IBackendMessage
+    public static bool ReadMessage<THeader, T>(this ref MessageReader<THeader> reader, T message, out ReadStatus status) 
+        where T : IBackendMessage<THeader> where THeader : struct, IHeader<THeader>
     {
         status = message.Read(ref reader);
         return status == ReadStatus.Done;

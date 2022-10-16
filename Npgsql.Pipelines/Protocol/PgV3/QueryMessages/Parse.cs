@@ -2,9 +2,9 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 
-namespace Npgsql.Pipelines.Protocol;
+namespace Npgsql.Pipelines.Protocol.PgV3;
 
-readonly struct Parse: IFrontendMessage
+readonly struct Parse: IPgV3FrontendMessage
 {
     readonly string _commandText;
     readonly ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> _parameters;
@@ -12,15 +12,23 @@ readonly struct Parse: IFrontendMessage
 
     public Parse(string commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, string? preparedStatementName)
     {
-        if (FrontendMessage.DebugEnabled && _parameters.Count > short.MaxValue)
-            throw new InvalidOperationException($"Cannot accept more than short.MaxValue ({short.MaxValue} parameters.");
+        if (FrontendMessage.DebugEnabled && _parameters.Count > ushort.MaxValue)
+            throw new InvalidOperationException($"Cannot accept more than ushort.MaxValue ({ushort.MaxValue} parameters.");
 
         _commandText = commandText;
         _parameters = parameters;
         _preparedStatementName = preparedStatementName ?? string.Empty;
     }
 
-    public FrontendCode FrontendCode => FrontendCode.Parse;
+    public bool TryPrecomputeHeader(out PgV3FrontendHeader header)
+    {
+        var length = MessageWriter.GetCStringByteCount(_preparedStatementName) +
+                     MessageWriter.GetCStringByteCount(_commandText) +
+                     MessageWriter.ShortByteCount +
+                     (MessageWriter.IntByteCount * _parameters.Count);
+        header = PgV3FrontendHeader.Create(FrontendCode.Parse, length);
+        return true;
+    }
 
     public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
     {
@@ -33,14 +41,5 @@ readonly struct Parse: IFrontendMessage
             var p = _parameters.Array![i];
             buffer.WriteInt(p.Key.Oid.Value);
         }
-    }
-
-    public bool TryPrecomputeLength(out int length)
-    {
-        length = MessageWriter.GetCStringByteCount(_preparedStatementName) +
-                 MessageWriter.GetCStringByteCount(_commandText) +
-                 MessageWriter.ShortByteCount +
-                 (MessageWriter.IntByteCount * _parameters.Count);
-        return true;
     }
 }

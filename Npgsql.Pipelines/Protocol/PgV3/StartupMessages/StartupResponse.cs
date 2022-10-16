@@ -1,10 +1,10 @@
-namespace Npgsql.Pipelines.Protocol;
+namespace Npgsql.Pipelines.Protocol.PgV3;
 
-struct StartupResponse : IBackendMessage
+struct StartupResponse : IPgV3BackendMessage
 {
     bool atRfq;
 
-    public ReadStatus Read(ref MessageReader reader)
+    public ReadStatus Read(ref MessageReader<PgV3Header> reader)
     {
         if (atRfq)
             goto atRfq;
@@ -15,6 +15,7 @@ struct StartupResponse : IBackendMessage
         if (!reader.SkipSimilar(BackendCode.ParameterStatus, out var status))
             return status;
 
+        // TODO read backendkeydata for cancellation
         if (!reader.IsExpected(BackendCode.BackendKeyData, out status))
             return status;
 

@@ -6,6 +6,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Protocol;
+using Npgsql.Pipelines.Protocol.PgV3;
 
 namespace Npgsql.Pipelines;
 
@@ -37,14 +38,23 @@ public sealed class NpgsqlDataReader: DbDataReader
     // This may throw io exceptions from either the write or read pipe.
     ValueTask<Operation> GetProtocol() => _ioCompletion.SelectAsync();
 
-    internal async ValueTask<NpgsqlDataReader> IntializeAsync(IOCompletionPair ioCompletion, CommandBehavior behavior, CancellationToken cancellationToken)
+    internal async ValueTask<NpgsqlDataReader> IntializeAsync(IOCompletionPair ioCompletion, CommandBehavior behavior, CancellationToken cancellationToken = default)
     {
         _state = ReaderState.BeforeFirstMove;
         _ioCompletion = ioCompletion;
         var op = await GetProtocol().ConfigureAwait(false);
-        _commandReader = op.Protocol.GetCommandReader();
-        // Immediately initialize the first result set, we're supposed to be positioned there at the start.
-        await NextResultAsyncInternal(op.Protocol, cancellationToken).ConfigureAwait(false);
+        // TODO make Operation generic or introduce some more centralized cast method.
+        _commandReader = ((PgV3Protocol)op.Protocol).GetCommandReader();
+        try
+        {
+            // Immediately initialize the first result set, we're supposed to be positioned there at the start.
+            await NextResultAsyncInternal(op.Protocol, cancellationToken).ConfigureAwait(false);
+        }
+        catch(Exception exception)
+        {
+            // If this is a connection op this causes it to transition to broken, protocol ops will just ignore it.
+            op.Complete(exception);
+        }
         return this;
     }
 
@@ -117,7 +127,7 @@ public sealed class NpgsqlDataReader: DbDataReader
 #if !NETSTANDARD2_0
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
 #endif
-    async ValueTask<bool> NextResultAsyncInternal(PgV3Protocol? protocol = null, CancellationToken cancellationToken = default)
+    async ValueTask<bool> NextResultAsyncInternal(PgProtocol? protocol = null, CancellationToken cancellationToken = default)
     {
         // TODO walk the commands array and move to exhausted once done.
         try
@@ -269,6 +279,10 @@ public sealed class NpgsqlDataReader: DbDataReader
 #endif
     async ValueTask DisposeCore(bool async)
     {
+        if (_state is ReaderState.Uninitialized)
+            return;
+
+        _state = ReaderState.Uninitialized;
         var op = default(Operation);
         try
         {
@@ -301,7 +315,15 @@ public sealed class NpgsqlDataReader: DbDataReader
             // TODO update transaction status (where should it be held?), also probably want this as a method on CommandReader.
             if (state == CommandReaderState.Completed)
             {
-                var rfq = async ? await op.Protocol.ReadMessageAsync<ReadyForQuery>().ConfigureAwait(false) : op.Protocol.ReadMessage<ReadyForQuery>();
+                var protocol = (PgV3Protocol)op.Protocol;
+                try
+                {
+                    var rfq = async ? await protocol.ReadMessageAsync<ReadyForQuery>().ConfigureAwait(false) : protocol.ReadMessage<ReadyForQuery>();
+                }
+                catch(Exception ex)
+                {
+                    op.Complete(ex);
+                }
             }
         }
         finally
@@ -309,7 +331,6 @@ public sealed class NpgsqlDataReader: DbDataReader
             _commandReader.Reset();
             _commandReader = null!;
             _ioCompletion = default;
-            _state = ReaderState.Uninitialized;
             _returnAction?.Invoke(this);
             op.Dispose();
         }
