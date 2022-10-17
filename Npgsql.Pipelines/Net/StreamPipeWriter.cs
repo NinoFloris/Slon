@@ -120,7 +120,7 @@ namespace System.IO.Pipelines
             while (segment.Next != null)
             {
                 Debug.Assert(segment.NextSegment != null);
-                segment.NextSegment.RunningIndex = segment.RunningIndex + segment.Length;
+                segment.NextSegment!.RunningIndex = segment.RunningIndex + segment.Length;
                 segment = segment.NextSegment;
             }
         }
@@ -398,13 +398,13 @@ namespace System.IO.Pipelines
                     if (_tailBytesBuffered > 0)
                     {
                         // Flush buffered data to the segment
-                        _tail.End += _tailBytesBuffered;
+                        _tail!.End += _tailBytesBuffered;
                         _tailBytesBuffered = 0;
                     }
 
                     BufferSegment newSegment = AllocateSegment(sizeHint);
 
-                    _tail.SetNext(newSegment);
+                    _tail!.SetNext(newSegment);
                     _tail = newSegment;
                 }
             }
@@ -583,7 +583,7 @@ namespace System.IO.Pipelines
                     Debug.Assert(_tail != null);
 
                     // Update any buffered data
-                    _tail.End += _tailBytesBuffered;
+                    _tail!.End += _tailBytesBuffered;
                     _tailBytesBuffered = 0;
                 }
 
@@ -671,7 +671,7 @@ namespace System.IO.Pipelines
                 Debug.Assert(_tail != null);
 
                 // Update any buffered data
-                _tail.End += _tailBytesBuffered;
+                _tail!.End += _tailBytesBuffered;
                 _tailBytesBuffered = 0;
             }
 

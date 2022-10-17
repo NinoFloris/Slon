@@ -10,7 +10,6 @@ class RowDescription: IPgV3BackendMessage
 
     ArraySegment<FieldDescription> _fields;
     Dictionary<string, int>? _nameIndex;
-    Dictionary<string, int>? _insensitiveIndex;
 
     public RowDescription(int fields = 10)
     {

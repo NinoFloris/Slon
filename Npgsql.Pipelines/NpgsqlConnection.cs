@@ -2,6 +2,7 @@ using System;
 using System.Data;
 using System.Data.Common;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Protocol;
@@ -39,11 +40,13 @@ public class NpgsqlConnection : DbConnection
         throw new NotImplementedException();
     }
 
+    [AllowNull]
     public override string ConnectionString { get; set; }
-    public override string Database { get; }
-    public override ConnectionState State { get; }
-    public override string DataSource { get; }
-    public override string ServerVersion { get; }
+    public override ConnectionState State => _state;
+
+    public override string Database => throw new NotImplementedException();
+    public override string DataSource => throw new NotImplementedException();
+    public override string ServerVersion => throw new NotImplementedException();
 
     protected override DbCommand CreateDbCommand() => new NpgsqlCommand(this);
 
@@ -216,7 +219,9 @@ public class NpgsqlConnection : DbConnection
             if (writeLock is null)
             {
                 var value = new SemaphoreSlim(1);
+#pragma warning disable CS0197
                 if (Interlocked.CompareExchange(ref _instance._pipeliningWriteLock, value, null) is null)
+#pragma warning restore CS0197
                     writeLock = value;
             }
 

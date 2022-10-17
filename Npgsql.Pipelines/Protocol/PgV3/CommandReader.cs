@@ -7,9 +7,8 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Buffers;
-using Npgsql.Pipelines.Protocol.PgV3;
 
-namespace Npgsql.Pipelines.Protocol;
+namespace Npgsql.Pipelines.Protocol.PgV3;
 
 enum CommandReaderState
 {
@@ -22,7 +21,7 @@ enum CommandReaderState
 /// <summary>
 /// Specifies the type of SQL statement, e.g. SELECT
 /// </summary>
-public enum StatementType
+enum StatementType
 {
 #pragma warning disable 1591
     Unknown,
@@ -42,8 +41,9 @@ public enum StatementType
 
 class CommandReader
 {
-    PgV3Protocol _protocol;
-    RowDescription _rowDescription;
+    // Will be set during InitializeAsync.
+    PgV3Protocol _protocol = null!;
+    RowDescription _rowDescription = null!;
     CommandReaderState _commandReaderState;
     DataRowReader _rowReader;
     CommandComplete _commandComplete;

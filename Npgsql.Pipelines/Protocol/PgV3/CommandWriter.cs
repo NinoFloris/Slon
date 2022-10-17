@@ -42,6 +42,7 @@ class CommandWriter
     public static IOCompletionPair WriteExtendedAsync(OperationSlot operationSlot, ICommandInfo commandInfo, bool flushHint = true, CancellationToken cancellationToken = default)
     {
         commandInfo.Validate();
+        // TODO layering issue, not sure yet...
         return ((PgV3Protocol)operationSlot.Protocol!).WriteMessageBatchAsync(operationSlot, static async (writer, commandInfo, cancellationToken) =>
         {
             var portal = string.Empty;

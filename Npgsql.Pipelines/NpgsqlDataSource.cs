@@ -23,7 +23,6 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>
     readonly PgV3ProtocolOptions _pgV3ProtocolOptions;
     readonly ConnectionSource<PgV3Protocol> _connectionSource;
 
-    // Whatever
     internal NpgsqlDataSource(EndPoint endPoint, PgOptions pgOptions, PgV3ProtocolOptions pgV3ProtocolOptions)
     {
         _endPoint = endPoint;
@@ -62,6 +61,11 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>
     protected override DbConnection CreateDbConnection()
     {
         throw new NotImplementedException();
+    }
+
+    protected override DbCommand CreateDbCommand(string? commandText = null)
+    {
+        return new NpgsqlCommand(this, true) { CommandText = commandText };
     }
 
     public override string ConnectionString => throw new NotImplementedException();

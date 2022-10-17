@@ -14,7 +14,6 @@ abstract class OperationSlot
     /// </summary>
     public abstract PgProtocol? Protocol { get; }
 
-    [MemberNotNullWhen(false, nameof(Protocol))]
     public abstract bool IsCompleted { get; }
 
     /// <summary>
@@ -36,7 +35,7 @@ abstract class OperationSource: OperationSlot, IValueTaskSource<Operation>
         Canceled = 16
     }
 
-    volatile OperationSourceFlags _state;
+    OperationSourceFlags _state;
     ManualResetValueTaskSourceCore<Operation> _tcs; // mutable struct; do not make this readonly
     CancellationTokenRegistration? _cancellationRegistration;
     PgProtocol? _protocol;
@@ -92,6 +91,7 @@ abstract class OperationSource: OperationSlot, IValueTaskSource<Operation>
 
         return null;
     }
+
     protected void AddCancellation(CancellationToken cancellationToken)
     {
         if (IsPooled)
@@ -130,7 +130,7 @@ abstract class OperationSource: OperationSlot, IValueTaskSource<Operation>
             if (exception is not null)
                 _tcs.SetException(exception);
 
-            _tcs.SetResult(new Operation(this, _protocol!));
+            _tcs.SetResult(new Operation(this, _protocol));
         }
     }
 
@@ -261,6 +261,9 @@ abstract class PgProtocol: IDisposable
 
     public abstract bool TryStartOperation([NotNullWhen(true)]out OperationSlot? operationSlot, OperationBehavior behavior = OperationBehavior.None, CancellationToken cancellationToken = default);
     public abstract Task CompleteAsync(CancellationToken cancellationToken = default);
+
+    // TODO CommandReader is part of PgV3 atm.
+    public abstract PgV3.CommandReader GetCommandReader();
 
     protected virtual void Dispose(bool disposing)
     {

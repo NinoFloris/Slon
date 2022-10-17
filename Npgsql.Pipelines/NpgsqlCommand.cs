@@ -22,7 +22,7 @@ public sealed class NpgsqlCommand: DbCommand, ICommandInfo
 
     object? _dataSourceOrConnection;
     readonly bool _managedMultiplexing;
-    CommandKind _commandKind;
+    CommandKind _commandKind = CommandKind.Unprepared;
 
     public NpgsqlCommand(NpgsqlConnection conn)
     {
@@ -58,6 +58,7 @@ public sealed class NpgsqlCommand: DbCommand, ICommandInfo
         _prepare = true;
     }
 
+    [AllowNull]
     public override string CommandText { get; set; }
     public override int CommandTimeout { get; set; }
     public override CommandType CommandType { get; set; }
@@ -72,7 +73,8 @@ public sealed class NpgsqlCommand: DbCommand, ICommandInfo
             _dataSourceOrConnection = conn;
         }
     }
-    protected override DbParameterCollection DbParameterCollection { get; }
+
+    protected override DbParameterCollection DbParameterCollection => throw new NotImplementedException();
     protected override DbTransaction? DbTransaction { get; set; }
     public override bool DesignTimeVisible { get; set; }
 

@@ -1,7 +1,6 @@
 using System.Buffers;
-using Npgsql.Pipelines.Protocol.PgV3;
 
-namespace Npgsql.Pipelines.Protocol;
+namespace Npgsql.Pipelines.Protocol.PgV3;
 
 readonly struct Execute: IPgV3FrontendMessage
 {

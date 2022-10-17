@@ -100,7 +100,7 @@ static class BufferExtensions
         var bytes = buffer.Span;
         var completed = false;
 
-        // This may be a bug, but encoder.Convert returns completed = true for UTF7 too early.
+        // This may be an underlying problem but encoder.Convert returns completed = true for UTF7 too early.
         // Therefore, we check encodedLength - totalBytesUsed too.
         while (!completed || encodedLength - totalBytesUsed != 0)
         {

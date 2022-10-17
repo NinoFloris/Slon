@@ -43,8 +43,7 @@ public sealed class NpgsqlDataReader: DbDataReader
         _state = ReaderState.BeforeFirstMove;
         _ioCompletion = ioCompletion;
         var op = await GetProtocol().ConfigureAwait(false);
-        // TODO make Operation generic or introduce some more centralized cast method.
-        _commandReader = ((PgV3Protocol)op.Protocol).GetCommandReader();
+        _commandReader = op.Protocol.GetCommandReader();
         try
         {
             // Immediately initialize the first result set, we're supposed to be positioned there at the start.
@@ -163,7 +162,7 @@ public sealed class NpgsqlDataReader: DbDataReader
         throw new NotImplementedException();
     }
 
-    public override long GetBytes(int ordinal, long dataOffset, byte[] buffer, int bufferOffset, int length)
+    public override long GetBytes(int ordinal, long dataOffset, byte[]? buffer, int bufferOffset, int length)
     {
         throw new NotImplementedException();
     }
@@ -173,7 +172,7 @@ public sealed class NpgsqlDataReader: DbDataReader
         throw new NotImplementedException();
     }
 
-    public override long GetChars(int ordinal, long dataOffset, char[] buffer, int bufferOffset, int length)
+    public override long GetChars(int ordinal, long dataOffset, char[]? buffer, int bufferOffset, int length)
     {
         throw new NotImplementedException();
     }
@@ -312,7 +311,7 @@ public sealed class NpgsqlDataReader: DbDataReader
                     _ioCompletion.Write.GetAwaiter().GetResult();
             }
 
-            // TODO update transaction status (where should it be held?), also probably want this as a method on CommandReader.
+            // TODO update transaction status, also probably want this as a method on CommandReader instead.
             if (state == CommandReaderState.Completed)
             {
                 var protocol = (PgV3Protocol)op.Protocol;
@@ -322,6 +321,7 @@ public sealed class NpgsqlDataReader: DbDataReader
                 }
                 catch(Exception ex)
                 {
+                    // If this is a connection op this causes it to transition to broken, protocol ops will just ignore it.
                     op.Complete(ex);
                 }
             }

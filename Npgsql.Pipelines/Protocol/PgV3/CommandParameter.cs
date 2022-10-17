@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Data;
+using System.Diagnostics.CodeAnalysis;
 using Microsoft.AspNetCore.Internal;
 
 namespace Npgsql.Pipelines.Protocol;
@@ -79,8 +80,11 @@ public class DbParameter: System.Data.Common.DbParameter
     public override DbType DbType { get; set; }
     public override ParameterDirection Direction { get; set; }
     public override bool IsNullable { get; set; }
+    [AllowNull]
     public override string ParameterName { get; set; }
+    [AllowNull]
     public override string SourceColumn { get; set; }
+    [AllowNull]
     public override object Value { get; set; }
     public override bool SourceColumnNullMapping { get; set; }
     public override int Size { get; set; }

@@ -100,7 +100,7 @@ class PgV3Protocol : PgProtocol
     }
 
     // TODO add some ownership transfer logic here, allocating new instances if the singleton isn't back yet.
-    public CommandReader GetCommandReader() => _commandReaderSingleton;
+    public override CommandReader GetCommandReader() => _commandReaderSingleton;
     public RowDescription GetRowDescription() => _rowDescriptionSingleton;
 
     public IOCompletionPair WriteMessageAsync<T>(OperationSlot slot, T message, CancellationToken cancellationToken = default) where T : IFrontendMessage<PgV3FrontendHeader>
@@ -268,10 +268,10 @@ class PgV3Protocol : PgProtocol
         await _reader.ReadAtLeastAsync(minimumSize, cancellationToken).ConfigureAwait(false);
     }
 
-    public override ValueTask<T> ReadMessageAsync<T>(T message, CancellationToken cancellationToken = default) => Reader.ReadAsync(this, message, cancellationToken);
-    public override ValueTask<T> ReadMessageAsync<T>(CancellationToken cancellationToken = default) => Reader.ReadAsync(this, new T(), cancellationToken);
-    public override T ReadMessage<T>(T message, TimeSpan timeout = default) => Reader.Read(this, message, timeout);
-    public override T ReadMessage<T>(TimeSpan timeout = default) => Reader.Read(this, new T(), timeout);
+    public ValueTask<T> ReadMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IBackendMessage<PgV3Header> => Reader.ReadAsync(this, message, cancellationToken);
+    public ValueTask<T> ReadMessageAsync<T>(CancellationToken cancellationToken = default) where T : struct, IBackendMessage<PgV3Header> => Reader.ReadAsync(this, new T(), cancellationToken);
+    public T ReadMessage<T>(T message, TimeSpan timeout = default) where T : IBackendMessage<PgV3Header> => Reader.Read(this, message, timeout);
+    public T ReadMessage<T>(TimeSpan timeout = default) where T : struct, IBackendMessage<PgV3Header> => Reader.Read(this, new T(), timeout);
     static class Reader
     {
         // As MessageReader is a ref struct we need a small method to create it and pass a reference for the async versions.
@@ -524,7 +524,7 @@ class PgV3Protocol : PgProtocol
             conn._state = PgProtocolState.Ready;
             return conn;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             conn.Dispose();
             throw;
@@ -771,7 +771,7 @@ class PgV3Protocol : PgProtocol
         //[NotNullWhen(true)] out SemaphoreSlim? writeLock
         public bool EndWrites()
         {
-            if ((IsExclusiveUse && !IsCompleted) || !_writeSlot.IsCompleted || _writeLock is null)
+            if ((IsExclusiveUse && !IsCompleted) || _writeSlot?.IsCompleted == false || _writeLock is null)
             {
                 // writeLock = null;
                 return false;

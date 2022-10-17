@@ -22,7 +22,7 @@ class ObjectPool<T>
 
     public T Rent()
     {
-        if (_queue.TryDequeue(out T state))
+        if (_queue.TryDequeue(out var state))
         {
             Interlocked.Decrement(ref _count);
             return state;

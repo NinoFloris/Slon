@@ -1,5 +1,3 @@
-using System.Runtime.CompilerServices;
-
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
 static class MessageReaderExtensions

@@ -91,7 +91,7 @@ sealed class SimplePipeReader
         }
         finally
         {
-            if (timeoutSource is not null && _readTimeoutSource!.TryReset() == false)
+            if (timeoutSource is not null && _readTimeoutSource?.TryReset() == false)
             {
                 _readTimeoutSource.Dispose();
                 _readTimeoutSource = null;
