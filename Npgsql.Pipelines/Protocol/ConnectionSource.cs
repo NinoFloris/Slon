@@ -17,6 +17,7 @@ class ConnectionSource<T>: IDisposable where T : PgProtocol
 {
     readonly object?[] _connections;
     readonly IConnectionFactory<T> _factory;
+    CancellationTokenSource? _connectionTimeoutSource;
     volatile bool _disposed;
 
     public ConnectionSource(IConnectionFactory<T> factory, int maxPoolSize)
@@ -53,36 +54,46 @@ class ConnectionSource<T>: IDisposable where T : PgProtocol
     /// </summary>
     /// <param name="exclusiveUse"></param>
     /// <param name="allowPipelining"></param>
+    /// <param name="slot"></param>
     /// <param name="slotIndex"></param>
-    /// <param name="opSlot"></param>
+    /// <param name="connectionSlot"></param>
     /// <param name="cancellationToken"></param>
     /// <returns>true if index or slot found, false if we couldn't pipeline onto any, otherwise always true.</returns>
-    bool TryGetSlot(bool exclusiveUse, bool allowPipelining, out int slotIndex, out OperationSlot? opSlot, CancellationToken cancellationToken)
+    bool TryGetSlot(bool exclusiveUse, bool allowPipelining, OperationSlot? slot, out int slotIndex, out OperationSlot? connectionSlot, CancellationToken cancellationToken)
     {
         var connections = _connections;
         int candidateIndex;
-        opSlot = null;
+        connectionSlot = null;
         do
         {
             (bool PendingExclusiveUse, int Pending) candidateKey = (true, Int32.MaxValue);
             candidateIndex = -1;
             T? candidateConn = null;
-            OperationSlot? connOp;
+            OperationSlot? connSlot;
             for (var i = 0; i < connections.Length; i++)
             {
                 var item = connections[i];
                 if (IsReadyConnection(item, out var conn))
                 {
                     // If it's idle then that's the best scenario, return immediately.
-                    if (conn.TryStartOperation(out connOp, OperationBehavior.ImmediateOnly | (exclusiveUse ? OperationBehavior.ExclusiveUse : OperationBehavior.None), cancellationToken))
+                    if (slot is not null)
+                    {
+                        if (conn.TryStartOperation(slot, OperationBehavior.ImmediateOnly | (exclusiveUse ? OperationBehavior.ExclusiveUse : OperationBehavior.None), cancellationToken))
+                        {
+                            slotIndex = i;
+                            connectionSlot = slot;
+                            return true;
+                        }
+                    }
+                    else if (conn.TryStartOperation(out connSlot, OperationBehavior.ImmediateOnly | (exclusiveUse ? OperationBehavior.ExclusiveUse : OperationBehavior.None), cancellationToken))
                     {
                         slotIndex = i;
-                        opSlot = connOp;
+                        connectionSlot = connSlot;
                         return true;
                     }
 
                     var currentKey = (conn.PendingExclusiveUse, conn.Pending);
-                    if (!currentKey.PendingExclusiveUse && candidateKey.Pending > currentKey.Pending)
+                    if (candidateConn is null || (!currentKey.PendingExclusiveUse && candidateKey.PendingExclusiveUse) || currentKey.Pending <= candidateKey.Pending)
                     {
                         candidateKey = currentKey;
                         candidateIndex = i;
@@ -93,7 +104,7 @@ class ConnectionSource<T>: IDisposable where T : PgProtocol
                 {
                     // This is an empty/draining/completed slot which we can fill.
                     slotIndex = i;
-                    opSlot = null;
+                    connectionSlot = null;
                     return true;
                 }
             }
@@ -101,39 +112,74 @@ class ConnectionSource<T>: IDisposable where T : PgProtocol
             // Note: not 'ImmediateOnly' in the candidate flow as we're apparently exhausted.
             // TODO if we want full fairness we can put a channel in between all this
             // (an earlier caller can get stuck behind very slow ops, getting overtaken by 'luckier' callers).
-            if (allowPipelining && candidateConn is not null &&
-                candidateConn.TryStartOperation(out connOp, exclusiveUse ? OperationBehavior.ExclusiveUse : OperationBehavior.None, cancellationToken))
+            if (allowPipelining && candidateConn is not null)
             {
-                opSlot = connOp;
-                slotIndex = candidateIndex;
+                if (slot is not null)
+                {
+                    if (candidateConn.TryStartOperation(slot, exclusiveUse ? OperationBehavior.ExclusiveUse : OperationBehavior.None, cancellationToken))
+                    {
+                        connectionSlot = slot;
+                        slotIndex = candidateIndex;
+                    }
+                }
+                else if (candidateConn.TryStartOperation(out connSlot, exclusiveUse ? OperationBehavior.ExclusiveUse : OperationBehavior.None, cancellationToken))
+                {
+                    connectionSlot = connSlot;
+                    slotIndex = candidateIndex;
+                }
             }
-        } while (allowPipelining && opSlot is null);
+            else if (!allowPipelining)
+            {
+                // Can only get here if it's all full (as long as all connections hold the same limits, otherwise we might miss cases).
+                slotIndex = default;
+                return false;
+            }
 
-        // Can only get here if we aren't allowed to pipeline or its all full.
-        if (candidateIndex == -1)
-        {
-            slotIndex = default;
-            return false;
-        }
+        } while (allowPipelining && connectionSlot is null);
 
         slotIndex = candidateIndex;
         return true;
     }
 
-    async ValueTask<OperationSlot> OpenConnection(int index, bool exclusiveUse, bool async, TimeSpan timeout = default, CancellationToken cancellationToken = default)
+#if !NETSTANDARD2_0
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+#endif
+    async ValueTask<OperationSlot> OpenConnection(int index, bool exclusiveUse, bool async, OperationSlot? slot = null, TimeSpan timeout = default, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var item = Volatile.Read(ref _connections[index]);
         Debug.Assert(ReferenceEquals(item, TakenSentinel));
         T? conn;
+        CancellationTokenSource? timeoutSource = null;
+        CancellationTokenRegistration registration = default;
+        if (async && timeout != default && timeout != Timeout.InfiniteTimeSpan)
+        {
+            timeoutSource = Interlocked.Exchange(ref _connectionTimeoutSource, null) ?? new CancellationTokenSource();
+            timeoutSource.CancelAfter(timeout);
+            if (cancellationToken.CanBeCanceled)
+                registration = cancellationToken.UnsafeRegister(static state => ((CancellationTokenSource)state!).Cancel(), timeoutSource);
+
+            cancellationToken = timeoutSource.Token;
+        }
         try
         {
             conn = await (async ? _factory.CreateAsync(cancellationToken) : new ValueTask<T>(_factory.Create(timeout)));
+        }
+        catch (OperationCanceledException ex) when (timeoutSource?.Token.IsCancellationRequested == true && !cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException("The operation has timed out.", ex);
         }
         catch
         {
             // Remove the sentinel.
             Volatile.Write(ref _connections[index], null);
             throw;
+        }
+        finally
+        {
+            registration.Dispose();
+            if (timeoutSource is not null && _connectionTimeoutSource is null && timeoutSource.TryReset())
+                Interlocked.Exchange(ref _connectionTimeoutSource, timeoutSource);
         }
 
         if (_disposed)
@@ -142,36 +188,59 @@ class ConnectionSource<T>: IDisposable where T : PgProtocol
             ThrowIfDisposed();
         }
 
-        if (!conn.TryStartOperation(out var connOp, OperationBehavior.ImmediateOnly | (exclusiveUse ? OperationBehavior.ExclusiveUse : OperationBehavior.None), CancellationToken.None))
+        OperationSlot? connectionSlot;
+        if (slot is not null)
+        {
+            if (!conn.TryStartOperation(slot, OperationBehavior.ImmediateOnly | (exclusiveUse ? OperationBehavior.ExclusiveUse : OperationBehavior.None), CancellationToken.None))
+                throw new InvalidOperationException("Could not start an operation on a fresh connection.");
+
+            connectionSlot = slot;
+        }
+        else if (!conn.TryStartOperation(out connectionSlot, OperationBehavior.ImmediateOnly | (exclusiveUse ? OperationBehavior.ExclusiveUse : OperationBehavior.None), CancellationToken.None))
             throw new InvalidOperationException("Could not start an operation on a fresh connection.");
 
         // Make sure this won't be reordered to make the instance visible to other threads before we get a spot.
         Volatile.Write(ref _connections[index], conn);
-        return connOp;
+        return connectionSlot;
     }
 
-    public OperationSlot Get(bool exclusiveUse = false, TimeSpan timeout = default)
+    public OperationSlot Get(bool exclusiveUse, TimeSpan connectionTimeout)
     {
         ThrowIfDisposed();
-        if (!TryGetSlot(exclusiveUse, allowPipelining: false, out var index, out var opSlot, CancellationToken.None))
+        if (!TryGetSlot(exclusiveUse, allowPipelining: false, slot: null, out var index, out var connectionSlot, CancellationToken.None))
             throw new InvalidOperationException("ConnectionSource is exhausted, there are no empty slots or idle connections.");
 
-        opSlot ??= OpenConnection(index, exclusiveUse, async: false, timeout).GetAwaiter().GetResult();
-        Debug.Assert(opSlot is not null);
-        Debug.Assert(opSlot!.Task.IsCompletedSuccessfully);
-        return opSlot!;
-
+        connectionSlot ??= OpenConnection(index, exclusiveUse, async: false, slot: null, connectionTimeout).GetAwaiter().GetResult();
+        Debug.Assert(connectionSlot is not null);
+        Debug.Assert(connectionSlot!.Task.IsCompletedSuccessfully);
+        return connectionSlot;
     }
 
-    public async ValueTask<OperationSlot> GetAsync(bool exclusiveUse = false, CancellationToken cancellationToken = default)
+    public ValueTask<OperationSlot> GetAsync(bool exclusiveUse, TimeSpan connectionTimeout, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        if (!TryGetSlot(exclusiveUse, allowPipelining: false, out var index, out var opSlot, CancellationToken.None))
+        if (!TryGetSlot(exclusiveUse, allowPipelining: false, slot: null, out var index, out var connectionSlot, cancellationToken))
             throw new InvalidOperationException("ConnectionSource is exhausted, there are no empty slots or connections idle enough to take new work.");
 
-        opSlot ??= await OpenConnection(index, exclusiveUse, async: true, cancellationToken: cancellationToken);
-        Debug.Assert(opSlot is not null);
-        return opSlot!;
+        return connectionSlot is not null ? new(connectionSlot) : OpenConnection(index, exclusiveUse, async: true, slot: null, connectionTimeout, cancellationToken);
+    }
+
+    // No exclusive use here, it doesn't make much sense to have it atm.
+    public ValueTask BindAsync(OperationSlot slot, TimeSpan connectionTimeout, CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        if (!TryGetSlot(exclusiveUse: false, allowPipelining: true, slot, out var index, out var connectionSlot, CancellationToken.None))
+            throw new InvalidOperationException("ConnectionSource is exhausted, there are no empty slots or connections idle enough to take new work.");
+
+        return connectionSlot is not null ? new() : OpenConnectionIgnoreResult(this, index, exclusiveUse: false, async: true, slot, connectionTimeout, cancellationToken);
+
+#if !NETSTANDARD2_0
+        [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
+#endif
+        static async ValueTask OpenConnectionIgnoreResult(ConnectionSource<T> instance, int slotIndex, bool exclusiveUse, bool async, OperationSlot? slot, TimeSpan connectionTimeout, CancellationToken cancellationToken)
+        {
+            await instance.OpenConnection(slotIndex, exclusiveUse, async, slot, connectionTimeout, cancellationToken);
+        }
     }
 
     public void Dispose()

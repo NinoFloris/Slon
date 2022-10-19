@@ -41,15 +41,14 @@ enum StatementType
 
 class CommandReader
 {
-    // Will be set during InitializeAsync.
-    PgV3Protocol _protocol = null!;
-    RowDescription _rowDescription = null!;
+    PgV3Protocol? _protocol;
+    RowDescription? _rowDescription;
     CommandReaderState _commandReaderState;
     DataRowReader _rowReader;
     CommandComplete _commandComplete;
 
     public CommandReaderState State => _commandReaderState;
-    public int FieldCount => ThrowIfNotInitialized()._rowDescription.Fields.Count;
+    public int FieldCount => ThrowIfNotInitialized()._rowDescription?.Fields.Count ?? 0;
     public bool HasRows => ThrowIfNotInitialized()._rowReader.ResumptionData.IsDefault;
 
     public StatementType StatementType => ThrowIfNotCompleted()._commandComplete.StatementType;
@@ -127,9 +126,6 @@ class CommandReader
         return this;
     }
 
-#if !NETSTANDARD2_0
-    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
-#endif
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ValueTask<bool> ReadAsync(CancellationToken cancellationToken = default)
     {
@@ -141,6 +137,7 @@ class CommandReader
 
                 return status switch
                 {
+                    // TODO BufferData can stack dive if we have a large message or a misread length, make iterative instead.
                     ReadStatus.NeedMoreData => BufferData(this, cancellationToken),
                     ReadStatus.Done => CompleteCommand(this, unexpected: false, cancellationToken),
                     ReadStatus.InvalidData => CompleteCommand(this, unexpected: true, cancellationToken),
@@ -156,7 +153,7 @@ class CommandReader
         {
             try
             {
-                var result = await instance._protocol.ReadMessageAsync(new ExpandBuffer(instance._rowReader.ResumptionData, instance._rowReader.Consumed), cancellationToken).ConfigureAwait(false);
+                var result = await instance._protocol!.ReadMessageAsync(new ExpandBuffer(instance._rowReader.ResumptionData, instance._rowReader.Consumed), cancellationToken).ConfigureAwait(false);
                 instance._rowReader.ExpandBuffer(result.Buffer);
                 return await instance.ReadAsync().ConfigureAwait(false);
             }
@@ -177,7 +174,7 @@ class CommandReader
 
             try
             {
-                var result =  await instance._protocol.ReadMessageAsync(new CompleteCommand(instance._rowReader.ResumptionData, instance._rowReader.Consumed), cancellationToken).ConfigureAwait(false);
+                var result =  await instance._protocol!.ReadMessageAsync(new CompleteCommand(instance._rowReader.ResumptionData, instance._rowReader.Consumed), cancellationToken).ConfigureAwait(false);
                 instance.Complete(result.CommandComplete);
                 return false;
             }
@@ -207,7 +204,7 @@ class CommandReader
     public void Reset()
     {
         _commandReaderState = CommandReaderState.None;
-        _rowDescription.Reset();
+        _rowDescription?.Reset();
     }
 
     struct ExpandBuffer : IPgV3BackendMessage
@@ -258,7 +255,7 @@ class CommandReader
         MessageReader<PgV3Header>.ResumptionData _resumptionData;
         public ReadOnlySequence<byte> Buffer { get; private set; }
         public MessageReader<PgV3Header>.ResumptionData ResumptionData => _resumptionData;
-        public RowDescription RowDescription { get; private set; }
+        public RowDescription RowDescription { get; }
         public CommandComplete CommandComplete { get; private set; }
         public bool IsCompleted => _resumptionData.IsDefault;
 

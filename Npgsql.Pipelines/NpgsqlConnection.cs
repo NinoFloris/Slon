@@ -16,6 +16,8 @@ public class NpgsqlConnection : DbConnection
     ConnectionState _state;
     Exception? _breakException;
 
+    internal NpgsqlConnection(NpgsqlDataSource dataSource) => _dataSource = dataSource;
+
     OperationSlot GetSlot()
     {
         ThrowIfBroken();
@@ -23,11 +25,6 @@ public class NpgsqlConnection : DbConnection
             throw new InvalidOperationException("Connection is not open or ready.");
 
         return _operationSlot;
-    }
-
-    internal NpgsqlConnection(NpgsqlDataSource dataSource)
-    {
-        _dataSource = dataSource;
     }
 
     protected override DbTransaction BeginDbTransaction(IsolationLevel isolationLevel)
@@ -39,6 +36,8 @@ public class NpgsqlConnection : DbConnection
     {
         throw new NotImplementedException();
     }
+
+    public override int ConnectionTimeout => (int)_dataSource.DefaultConnectionTimeout.TotalSeconds;
 
     [AllowNull]
     public override string ConnectionString { get; set; }
@@ -74,7 +73,7 @@ public class NpgsqlConnection : DbConnection
         MoveToConnecting();
         try
         {
-            _operationSlot = _dataSource.Open(exclusiveUse: true, TimeSpan.FromSeconds(ConnectionTimeout));
+            _operationSlot = _dataSource.Open(exclusiveUse: true, _dataSource.DefaultConnectionTimeout);
             Debug.Assert(_operationSlot.Task.IsCompleted);
             _operationSlot.Task.GetAwaiter().GetResult();
             MoveToIdle();
@@ -90,9 +89,8 @@ public class NpgsqlConnection : DbConnection
         MoveToConnecting();
         try
         {
-            // TODO add ConnectionTimeout, catch and throw 'data source exhausted'.
             // First we get a slot (could be a connection open but usually this is synchronous)
-            var slot = await _dataSource.OpenAsync(exclusiveUse: true, TimeSpan.FromSeconds(ConnectionTimeout), cancellationToken).ConfigureAwait(false);
+            var slot = await _dataSource.OpenAsync(exclusiveUse: true, _dataSource.DefaultConnectionTimeout, cancellationToken).ConfigureAwait(false);
             _operationSlot = slot;
             // Then we await until the connection is fully ready for us (both tasks are covered by the same cancellationToken).
             // In non exclusive cases we already start writing our message as well but we choose not to do so here.
@@ -104,7 +102,6 @@ public class NpgsqlConnection : DbConnection
         catch
         {
             MoveToClosed();
-            _state = ConnectionState.Closed;
             throw;
         }
     }
@@ -185,14 +182,14 @@ public class NpgsqlConnection : DbConnection
             return new IOCompletionPair(WriteCommandCore(slot, command, behavior, cancellationToken), subSlot.Task);
         }
 
-        async ValueTask WriteCommandCore(OperationSlot connectionSlot, NpgsqlCommand command, CommandBehavior behavior, CancellationToken cancellationToken = default)
+        async ValueTask<WriteResult> WriteCommandCore(OperationSlot connectionSlot, NpgsqlCommand command, CommandBehavior behavior, CancellationToken cancellationToken = default)
         {
             await BeginWrite(cancellationToken);
             try
             {
                 _instance.MoveToExecuting();
                 var pair = _instance._dataSource.WriteCommand(connectionSlot, command, behavior, cancellationToken);
-                await pair.Write;
+                return await pair.Write;
             }
             finally
             {
@@ -278,23 +275,25 @@ public class NpgsqlConnection : DbConnection
             MoveToBroken(exception);
         else if (next is null)
             MoveToIdle();
+        else if (_breakException is not null)
+            next.TryComplete(_breakException);
         else
-            next.Activate(_breakException);
+            next.Activate();
     }
 
-    class ConnectionOperationSource: OperationSource
+    sealed class ConnectionOperationSource: OperationSource
     {
         readonly NpgsqlConnection _connection;
         ConnectionOperationSource? _next;
 
-        public ConnectionOperationSource(NpgsqlConnection connection, PgProtocol? protocol, bool pooled = false) : base(protocol, pooled)
+        // Pipelining on the same connection is expected to be done on the same thread.
+        public ConnectionOperationSource(NpgsqlConnection connection, PgProtocol? protocol, bool pooled = false) :
+            base(protocol, asyncContinuations: false, pooled)
         {
             _connection = connection;
-            // Pipelining on the same connection is expected to be done on the same thread.
-            RunContinuationsAsynchronously = false;
         }
 
-        public void Activate(Exception? ex = null) => ActivateCore(ex);
+        public void Activate() => ActivateCore();
 
         public void SetNext(ConnectionOperationSource source)
         {

@@ -1,13 +1,13 @@
 using System;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Threading.Tasks.Sources;
 
 namespace Npgsql.Pipelines.Protocol;
 
-abstract class OperationSlot
+internal abstract class OperationSlot
 {
     /// <summary>
     /// The connection the slot belongs to, can be null once completed or when not yet bound.
@@ -17,12 +17,12 @@ abstract class OperationSlot
     public abstract bool IsCompleted { get; }
 
     /// <summary>
-    /// The task that will be activated once the operation can read from the connection.
+    /// The task will be activated once the operation can read from the connection.
     /// </summary>
     public abstract ValueTask<Operation> Task { get; }
 }
 
-abstract class OperationSource: OperationSlot, IValueTaskSource<Operation>
+internal abstract class OperationSource: OperationSlot
 {
     [Flags]
     enum OperationSourceFlags
@@ -36,17 +36,17 @@ abstract class OperationSource: OperationSlot, IValueTaskSource<Operation>
     }
 
     OperationSourceFlags _state;
-    ManualResetValueTaskSourceCore<Operation> _tcs; // mutable struct; do not make this readonly
+    TaskCompletionSource<Operation> _tcs;
     CancellationTokenRegistration? _cancellationRegistration;
     PgProtocol? _protocol;
+    // Could fold this into flags if we wanted to save more space;
+    readonly bool _asyncContinuations;
 
-    [MemberNotNullWhen(true, nameof(_protocol))]
-    bool IsPooled => (_state & OperationSourceFlags.Pooled) != 0;
-
-    protected OperationSource(PgProtocol? protocol, bool pooled = false)
+    protected OperationSource(PgProtocol? protocol, bool asyncContinuations = true, bool pooled = false)
     {
-        _tcs = new ManualResetValueTaskSourceCore<Operation> { RunContinuationsAsynchronously = true };
+        _tcs = new TaskCompletionSource<Operation>(asyncContinuations ? TaskCreationOptions.RunContinuationsAsynchronously : TaskCreationOptions.None);
         _protocol = protocol;
+        _asyncContinuations = asyncContinuations;
         if (pooled)
         {
             if (protocol is null)
@@ -61,35 +61,51 @@ abstract class OperationSource: OperationSlot, IValueTaskSource<Operation>
         }
     }
 
-    public override bool IsCompleted => (_state & OperationSourceFlags.Completed) != 0;
-    public override PgProtocol? Protocol => IsCompleted ? null : _protocol;
-    public override ValueTask<Operation> Task => new(this, _tcs.Version);
-
-    protected bool RunContinuationsAsynchronously
+    PgProtocol? TransitionToCompletion(CancellationToken token, Exception? exception = null)
     {
-        get => _tcs.RunContinuationsAsynchronously;
-        set => _tcs.RunContinuationsAsynchronously = value;
-    }
+        var state = (OperationSourceFlags)Volatile.Read(ref Unsafe.As<OperationSourceFlags, int>(ref _state));
+        // If we were already completed this is likely another completion from the activated code.
+        if ((state & OperationSourceFlags.Completed) != 0)
+            return null;
 
-    protected void BindCore(PgProtocol protocol)
-    {
-        if (Interlocked.CompareExchange(ref _protocol, protocol, null) != null)
-            throw new InvalidOperationException("Already bound.");
-    }
-
-    PgProtocol? TransitionToCompletion(bool cancellation)
-    {
-        var state = _state;
         var newState = (state & ~OperationSourceFlags.Activated) | OperationSourceFlags.Completed;
-        if (cancellation)
+        if (token.IsCancellationRequested)
             newState |= OperationSourceFlags.Canceled;
+        else if (exception is not null)
+            newState |= OperationSourceFlags.Faulted;
         if (Interlocked.CompareExchange(ref Unsafe.As<OperationSourceFlags, int>(ref _state), (int)newState, (int)state) == (int)state)
         {
-            _tcs.Reset();
+            // Only change the _tcs if we weren't already activated before.
+            if ((state & OperationSourceFlags.Activated) == 0)
+            {
+                if (exception is not null)
+                    _tcs.SetException(exception);
+                else if (token.IsCancellationRequested)
+                {
+                    var result  = _tcs.TrySetCanceled(token);
+                    Debug.Assert(result);
+                }
+            }
             return _protocol;
         }
 
         return null;
+    }
+
+    [MemberNotNullWhen(true, nameof(_protocol))]
+    public bool IsPooled => (_state & OperationSourceFlags.Pooled) != 0;
+    public bool IsActivated => (_state & OperationSourceFlags.Activated) != 0;
+    [MemberNotNullWhen(true, nameof(_cancellationRegistration))]
+    public bool IsCanceled => (_state & OperationSourceFlags.Canceled) != 0;
+    public bool IsCompletedSuccessfully => IsCompleted && (_state & OperationSourceFlags.Faulted) != 0;
+    protected bool RunContinuationsAsynchronously => _asyncContinuations;
+    protected abstract void CompleteCore(PgProtocol protocol, Exception? exception);
+
+    protected virtual void ResetCore() {}
+    protected void BindCore(PgProtocol protocol)
+    {
+        if (Interlocked.CompareExchange(ref _protocol, protocol, null) != null)
+            throw new InvalidOperationException("Already bound.");
     }
 
     protected void AddCancellation(CancellationToken cancellationToken)
@@ -101,68 +117,74 @@ abstract class OperationSource: OperationSlot, IValueTaskSource<Operation>
             return;
 
         if (_cancellationRegistration is not null)
-            throw new InvalidOperationException("Cancellation already added");
+            throw new InvalidOperationException("Cancellation already registered.");
 
-        _cancellationRegistration = cancellationToken.Register(state =>
+        _cancellationRegistration = cancellationToken.UnsafeRegister((state, token) =>
         {
-            ((OperationSource)state!).TransitionToCompletion(cancellation: true);
+            ((OperationSource)state!).TransitionToCompletion(token);
         }, this);
     }
 
-    protected void ActivateCore(Exception? exception)
+    protected void ActivateCore()
     {
-        if (IsPooled)
-            throw new InvalidOperationException("Cannot activate pooled source.");
-
-        if (_protocol is null)
-            throw new InvalidOperationException("Cannot activate an unbound source.");
-
-        // The only thing we cannot check for is Completed as that may race with cancellation.
-        if ((_state & OperationSourceFlags.Activated) != 0)
-            throw new InvalidOperationException("Already activated or completed");
-
-        var newState = OperationSourceFlags.Activated;
-        if (exception is not null)
-            newState |= OperationSourceFlags.Faulted;
-
-        if (Interlocked.CompareExchange(ref Unsafe.As<OperationSourceFlags, int>(ref _state), (int)newState, (int)OperationSourceFlags.Created) == (int)OperationSourceFlags.Created)
+        var state = (OperationSourceFlags)Volatile.Read(ref Unsafe.As<OperationSourceFlags, int>(ref _state));
+        if (_protocol is null || (state & OperationSourceFlags.Activated) != 0)
+            HandleUncommon(state);
+        else
         {
-            if (exception is not null)
-                _tcs.SetException(exception);
+            var newState = OperationSourceFlags.Activated;
+            if (Interlocked.CompareExchange(ref Unsafe.As<OperationSourceFlags, int>(ref _state), (int)newState, (int)OperationSourceFlags.Created) == (int)OperationSourceFlags.Created)
+            {
+                _cancellationRegistration?.Dispose();
+                // Can be false when we were raced by cancellation completing the source right after we transitioned to the activated state.
+                _tcs.TrySetResult(new Operation(this, _protocol));
+            }
+        }
 
-            _tcs.SetResult(new Operation(this, _protocol));
+        [MemberNotNull(nameof(_protocol))]
+        void HandleUncommon(OperationSourceFlags state)
+        {
+            if (IsPooled)
+                throw new InvalidOperationException("Cannot activate a pooled source.");
+
+            // The only thing we cannot check for is Completed as that may race with cancellation.
+            if ((state & OperationSourceFlags.Activated) != 0)
+                throw new InvalidOperationException("Already activated.");
+
+            if (_protocol is null)
+                throw new InvalidOperationException("Cannot activate an unbound source.");
         }
     }
 
-    protected abstract void CompleteCore(PgProtocol protocol, Exception? exception);
+    [MemberNotNullWhen(true, nameof(_protocol))]
+    public override bool IsCompleted => (_state & OperationSourceFlags.Completed) != 0;
+    public override PgProtocol? Protocol => IsCompleted ? null : _protocol;
+    public override ValueTask<Operation> Task => new(_tcs.Task);
 
-    public void Complete(Exception? exception = null)
+    /// <summary>
+    /// Slot can already be completed due to cancellation.
+    /// </summary>
+    /// <param name="exception"></param>
+    /// <returns></returns>
+    public bool TryComplete(Exception? exception = null)
     {
         PgProtocol? protocol;
-        if ((protocol = TransitionToCompletion(cancellation: false)) is not null)
+        if ((protocol = TransitionToCompletion(CancellationToken.None, exception)) is not null)
         {
-            _cancellationRegistration?.Dispose();
             CompleteCore(protocol, exception);
+            return true;
         }
-    }
 
-    protected abstract void ResetCore();
+        return false;
+    }
 
     public void Reset()
     {
         if (!IsPooled)
             throw new InvalidOperationException("Cannot reuse non-pooled sources.");
-
-        if (IsCompleted)
-            _tcs.SetResult(new Operation(this, _protocol));
         _state = OperationSourceFlags.Pooled | OperationSourceFlags.Activated;
         ResetCore();
     }
-
-    Operation IValueTaskSource<Operation>.GetResult(short token) => _tcs.GetResult(token);
-    ValueTaskSourceStatus IValueTaskSource<Operation>.GetStatus(short token) => _tcs.GetStatus(token);
-    void IValueTaskSource<Operation>.OnCompleted(Action<object?> continuation, object? state, short token, ValueTaskSourceOnCompletedFlags flags)
-        => _tcs.OnCompleted(continuation, state, token, flags);
 }
 
 readonly record struct Operation: IDisposable
@@ -178,19 +200,31 @@ readonly record struct Operation: IDisposable
     public PgProtocol Protocol { get; }
 
     public bool IsCompleted => _source.IsCompleted;
-    public void Complete(Exception? exception = null) => _source?.Complete();
+    public void Complete(Exception? exception = null) => _source?.TryComplete(exception);
     public void Dispose() => Complete();
+}
+
+readonly struct WriteResult
+{
+    public const long UnknownBytesWritten = long.MinValue;
+
+    public WriteResult(long bytesWritten)
+    {
+        BytesWritten = bytesWritten;
+    }
+
+    public long BytesWritten { get; }
 }
 
 readonly struct IOCompletionPair
 {
-    public IOCompletionPair(ValueTask write, ValueTask<Operation> read)
+    public IOCompletionPair(ValueTask<WriteResult> write, ValueTask<Operation> read)
     {
         Write = write.Preserve();
         Read = read.Preserve();
     }
 
-    public ValueTask Write { get; }
+    public ValueTask<WriteResult> Write { get; }
     public ValueTask<Operation> Read { get; }
 
     /// <summary>
@@ -200,6 +234,7 @@ readonly struct IOCompletionPair
     /// <returns></returns>
     public ValueTask<Operation> SelectAsync()
     {
+        // Return read when it is completed but only when write is completed successfully or still running.
         if (Write.IsCompletedSuccessfully || (!Write.IsCompleted && Read.IsCompleted))
             return Read;
 
@@ -209,6 +244,7 @@ readonly struct IOCompletionPair
             return default;
         }
 
+        // Neither are completed yet.
         return Core(this);
 
 #if !NETSTANDARD2_0
@@ -259,8 +295,10 @@ abstract class PgProtocol: IDisposable
     public abstract bool PendingExclusiveUse { get; }
     public abstract int Pending { get; }
 
-    public abstract bool TryStartOperation([NotNullWhen(true)]out OperationSlot? operationSlot, OperationBehavior behavior = OperationBehavior.None, CancellationToken cancellationToken = default);
+    public abstract bool TryStartOperation([NotNullWhen(true)]out OperationSlot? slot, OperationBehavior behavior = OperationBehavior.None, CancellationToken cancellationToken = default);
+    public abstract bool TryStartOperation(OperationSlot slot, OperationBehavior behavior = OperationBehavior.None, CancellationToken cancellationToken = default);
     public abstract Task CompleteAsync(CancellationToken cancellationToken = default);
+    public abstract ValueTask FlushAsync(CancellationToken cancellationToken = default);
 
     // TODO CommandReader is part of PgV3 atm.
     public abstract PgV3.CommandReader GetCommandReader();

@@ -39,11 +39,13 @@ static class CommandInfoExtensions
 
 class CommandWriter
 {
-    public static IOCompletionPair WriteExtendedAsync(OperationSlot operationSlot, ICommandInfo commandInfo, bool flushHint = true, CancellationToken cancellationToken = default)
+    public static IOCompletionPair WriteExtendedAsync(OperationSlot slot, ICommandInfo commandInfo, bool flushHint = true, CancellationToken cancellationToken = default)
     {
         commandInfo.Validate();
-        // TODO layering issue, not sure yet...
-        return ((PgV3Protocol)operationSlot.Protocol!).WriteMessageBatchAsync(operationSlot, static async (writer, commandInfo, cancellationToken) =>
+        if (slot.Protocol is not PgV3Protocol protocol)
+            throw new ArgumentException($"Cannot write with a slot for a different protocol type, expected: {nameof(PgV3Protocol)}.", nameof(slot));
+
+        return protocol.WriteMessageBatchAsync(slot, static async (writer, commandInfo, cancellationToken) =>
         {
             var portal = string.Empty;
             switch (commandInfo.CommandKind)

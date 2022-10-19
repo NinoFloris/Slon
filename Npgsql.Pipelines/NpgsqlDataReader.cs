@@ -53,6 +53,7 @@ public sealed class NpgsqlDataReader: DbDataReader
         {
             // If this is a connection op this causes it to transition to broken, protocol ops will just ignore it.
             op.Complete(exception);
+            throw;
         }
         return this;
     }

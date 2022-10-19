@@ -15,13 +15,20 @@ public class PgV3ProtocolTests
     const string Password = "postgres123";
     const string Database = "postgres";
 
-    static PgOptions PgOptions { get; } = new() { Username = Username, Password = Password, Database = Database };
-    static PgV3ProtocolOptions Options { get; } = new() { ReadTimeout = TimeSpan.FromSeconds(5), ReaderSegmentSize = 1024};
+    static PgV3ProtocolOptions ProtocolOptions { get; } = new() { ReadTimeout = TimeSpan.FromSeconds(5)};
+    static NpgsqlDataSourceOptions Options { get; } = new()
+    {
+        EndPoint = IPEndPoint.Parse(EndPoint),
+        Username = Username,
+        Password = Password,
+        Database = Database,
+        PoolSize = 10
+    };
 
     [Test]
     public async Task PipeSimpleQueryAsync()
     {
-        var dataSource = new NpgsqlDataSource(IPEndPoint.Parse(EndPoint), PgOptions, Options);
+        var dataSource = new NpgsqlDataSource(Options, ProtocolOptions);
         var command = new NpgsqlCommand(new NpgsqlConnection(dataSource)) { CommandText = "SELECT pg_sleep(2)" };
         await using var dataReader = await command.ExecuteReaderAsync();
         while (await dataReader.ReadAsync().ConfigureAwait(false))
@@ -32,7 +39,7 @@ public class PgV3ProtocolTests
     [Test]
     public async Task StreamSimpleQueryAsync()
     {
-        var dataSource = new NpgsqlDataSource(IPEndPoint.Parse(EndPoint), PgOptions, Options);
+        var dataSource = new NpgsqlDataSource(Options, ProtocolOptions);
         var connection = new NpgsqlConnection(dataSource);
         await connection.OpenAsync();
         var command = new NpgsqlCommand(connection) { CommandText = "SELECT pg_sleep(2)" };
@@ -108,25 +115,32 @@ public class PgV3ProtocolTests
     public async ValueTask PipeliningTest()
     {
         const int NumRows = 1000;
-        const int Pipelined = 1000;
-        var dataSource = new NpgsqlDataSource(IPEndPoint.Parse(EndPoint), PgOptions, Options);
-        var conn = new NpgsqlConnection(dataSource);
-        await conn.OpenAsync();
-        var command = new NpgsqlCommand(conn) { CommandText = $"SELECT generate_series(1, {NumRows})" };
-        var outer = 10;
+        const int Commands = 10000;
+        NpgsqlCommand command;
 
+        var commandText = $"SELECT generate_series(1, {NumRows})";
+
+        // var dataSource = new NpgsqlDataSource(IPEndPoint.Parse(EndPoint), PgOptions, Options, 10);
+        // var conn = new NpgsqlConnection(dataSource);
+        // await conn.OpenAsync();
+        // command = dataSource.CreateCommand(commandText);
+        // command = new NpgsqlCommand(conn) { CommandText = commandText };
+
+        var dataSource2 = new NpgsqlDataSource(Options with { PoolSize = 1 }, ProtocolOptions);
+        command = dataSource2.CreateCommand(_commandText);
+
+        var outer = 10;
         for (int j = 0; j < outer; j++)
         {
-            var commands = new Task<NpgsqlDataReader>[Pipelined];
-
-            for (int i = 0; i < Pipelined; i++)
+            var readerTasks = new Task<NpgsqlDataReader>[Commands];
+            for (var i = 0; i < readerTasks.Length; i++)
             {
-                commands[i] = command.ExecuteReaderAsync();
+                readerTasks[i] = command.ExecuteReaderAsync();
             }
 
-            for (int i = 0; i < Pipelined; i++)
+            for (var i = 0; i < readerTasks.Length; i++)
             {
-                await using var reader = await commands[i];
+                await using var reader = await readerTasks[i];
                 while (await reader.ReadAsync())
                 {
                 }

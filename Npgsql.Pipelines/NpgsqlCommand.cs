@@ -142,7 +142,7 @@ public sealed class NpgsqlCommand: DbCommand, ICommandInfo
         static async ValueTask<NpgsqlDataReader> UnmanagedMultiplexing(NpgsqlCommand instance, NpgsqlDataSource dataSource, CommandBehavior behavior, CancellationToken cancellationToken)
         {
             // Pick a connection and do the write ourselves.
-            var slot = await dataSource.OpenAsync(exclusiveUse: false, cancellationToken: cancellationToken);
+            var slot = await dataSource.OpenAsync(exclusiveUse: false, dataSource.DefaultConnectionTimeout, cancellationToken: cancellationToken);
             var completionPair = dataSource.WriteCommand(slot, instance, behavior, cancellationToken);
             return await ReaderPool.Rent().IntializeAsync(completionPair, behavior, cancellationToken);
         }

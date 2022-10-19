@@ -573,7 +573,7 @@ namespace System.IO.Pipelines
             CancellationTokenRegistration reg = default;
             if (cancellationToken.CanBeCanceled)
             {
-                reg = cancellationToken.UnsafeRegister(state => ((StreamPipeWriter)state!).Cancel(), this);
+                reg = cancellationToken.UnsafeRegister(static state => ((StreamPipeWriter)state!).Cancel(), this);
             }
 
             using (reg)

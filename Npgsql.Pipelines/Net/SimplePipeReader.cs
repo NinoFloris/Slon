@@ -132,7 +132,7 @@ sealed class SimplePipeReader
             if (result.IsCompleted)
             {
                 _completed = true;
-                throw new ObjectDisposedException("Pipe was completed while waiting for more data.");
+                throw new InvalidOperationException("Pipe was completed while waiting for more data.");
             }
 
             if (result.IsCanceled)

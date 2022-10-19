@@ -127,10 +127,13 @@ class ResettableFlushControl: FlushControl
     {
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
-        _timeoutSource!.CancelAfter(FlushTimeout);
-        _timeoutSource.Token.ThrowIfCancellationRequested();
-        _registration = cancellationToken.UnsafeRegister(state => ((CancellationTokenSource)state!).Cancel(), _timeoutSource);
-        return _timeoutSource.Token;
+        if (FlushTimeout != default && FlushTimeout != Timeout.InfiniteTimeSpan)
+        {
+            _timeoutSource!.CancelAfter(FlushTimeout);
+            _registration = cancellationToken.UnsafeRegister(static state => ((CancellationTokenSource)state!).Cancel(), _timeoutSource);
+            return _timeoutSource.Token;
+        }
+        return cancellationToken;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
