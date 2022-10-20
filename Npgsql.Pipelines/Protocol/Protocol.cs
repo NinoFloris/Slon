@@ -73,7 +73,7 @@ internal abstract class OperationSource: OperationSlot
             newState |= OperationSourceFlags.Canceled;
         else if (exception is not null)
             newState |= OperationSourceFlags.Faulted;
-        if (Interlocked.CompareExchange(ref Unsafe.As<OperationSourceFlags, int>(ref _state), (int)newState, (int)state) == (int)state)
+        if (InterlockedShim.CompareExchange(ref _state, newState, state) == state)
         {
             // Only change the _tcs if we weren't already activated before.
             if ((state & OperationSourceFlags.Activated) == 0)
@@ -125,35 +125,30 @@ internal abstract class OperationSource: OperationSlot
         }, this);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     protected void ActivateCore()
     {
-        var state = (OperationSourceFlags)Volatile.Read(ref Unsafe.As<OperationSourceFlags, int>(ref _state));
-        if (_protocol is null || (state & OperationSourceFlags.Activated) != 0)
-            HandleUncommon(state);
-        else
+        if (_protocol is null)
         {
-            var newState = OperationSourceFlags.Activated;
-            if (Interlocked.CompareExchange(ref Unsafe.As<OperationSourceFlags, int>(ref _state), (int)newState, (int)OperationSourceFlags.Created) == (int)OperationSourceFlags.Created)
-            {
+            ThrowProtocolNull();
+            return;
+        }
+        switch (InterlockedShim.CompareExchange(ref _state, OperationSourceFlags.Activated, OperationSourceFlags.Created))
+        {
+            case OperationSourceFlags.Activated:
+                ThrowAlreadyActivated();
+                break;
+            case OperationSourceFlags.Created:
                 _cancellationRegistration?.Dispose();
                 // Can be false when we were raced by cancellation completing the source right after we transitioned to the activated state.
                 _tcs.TrySetResult(new Operation(this, _protocol));
-            }
+                break;
         }
 
+        [DoesNotReturn]
         [MemberNotNull(nameof(_protocol))]
-        void HandleUncommon(OperationSourceFlags state)
-        {
-            if (IsPooled)
-                throw new InvalidOperationException("Cannot activate a pooled source.");
-
-            // The only thing we cannot check for is Completed as that may race with cancellation.
-            if ((state & OperationSourceFlags.Activated) != 0)
-                throw new InvalidOperationException("Already activated.");
-
-            if (_protocol is null)
-                throw new InvalidOperationException("Cannot activate an unbound source.");
-        }
+        void ThrowProtocolNull() => throw new InvalidOperationException("Cannot activate an unbound source.");
+        void ThrowAlreadyActivated() => throw new InvalidOperationException("Already activated.");
     }
 
     [MemberNotNullWhen(true, nameof(_protocol))]
@@ -161,11 +156,7 @@ internal abstract class OperationSource: OperationSlot
     public override PgProtocol? Protocol => IsCompleted ? null : _protocol;
     public override ValueTask<Operation> Task => new(_tcs.Task);
 
-    /// <summary>
-    /// Slot can already be completed due to cancellation.
-    /// </summary>
-    /// <param name="exception"></param>
-    /// <returns></returns>
+    // Slot can already be completed due to cancellation.
     public bool TryComplete(Exception? exception = null)
     {
         PgProtocol? protocol;
@@ -297,7 +288,8 @@ abstract class PgProtocol: IDisposable
 
     public abstract bool TryStartOperation([NotNullWhen(true)]out OperationSlot? slot, OperationBehavior behavior = OperationBehavior.None, CancellationToken cancellationToken = default);
     public abstract bool TryStartOperation(OperationSlot slot, OperationBehavior behavior = OperationBehavior.None, CancellationToken cancellationToken = default);
-    public abstract Task CompleteAsync(CancellationToken cancellationToken = default);
+    // TODO deliberate whether cancellation makes sense.
+    public abstract Task CompleteAsync(Exception? exception = null, CancellationToken cancellationToken = default);
     public abstract ValueTask FlushAsync(CancellationToken cancellationToken = default);
 
     // TODO CommandReader is part of PgV3 atm.

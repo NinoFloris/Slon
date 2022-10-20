@@ -164,6 +164,12 @@ ref struct MessageReader<THeader> where THeader : struct, IHeader<THeader>, IEqu
     public readonly bool CurrentIsBuffered => _reader.Remaining >= CurrentRemaining;
 
     public static MessageReader<THeader> Create(scoped in ReadOnlySequence<byte> sequence) => new(sequence);
+    public static MessageReader<THeader> Create(scoped in ReadOnlySequence<byte> sequence, long consumed)
+    {
+        var reader = new MessageReader<THeader>(sequence);
+        reader.Advance(consumed);
+        return reader;
+    }
 
     /// <summary>
     /// Recreate a reader over the same (or the same starting point) sequence with resumption data.
@@ -172,14 +178,31 @@ ref struct MessageReader<THeader> where THeader : struct, IHeader<THeader>, IEqu
     /// <param name="resumptionData"></param>
     /// <param name="consumed"></param>
     /// <returns></returns>
-    public static MessageReader<THeader> Create(scoped in ReadOnlySequence<byte> sequence, scoped in ResumptionData resumptionData, long consumed)
+    public static MessageReader<THeader> Recreate(scoped in ReadOnlySequence<byte> sequence, scoped in ResumptionData resumptionData, long consumed)
     {
         if (consumed - resumptionData.MessageIndex < 0)
             ThrowArgumentOutOfRangeException();
 
-        var reader = new MessageReader<THeader>(sequence, resumptionData.Header, MessageStartOffset.Recreate((uint)(consumed - resumptionData.MessageIndex)));
+        var currentStart = MessageStartOffset.Recreate((uint)(consumed - resumptionData.MessageIndex));
+        var reader = new MessageReader<THeader>(sequence, resumptionData.Header, resumptionData.IsDefault ? currentStart.ToFirstMove() : currentStart);
         reader._reader.Advance(consumed);
+
+        // If the header was unknown at the time of yielding we'll move here to bring the new header into view.
+        // This mainly allows us to 'goto' in messages where the actual resumption point would be a nested message inside a switch case.
+        // On resumption the switch expects reader.Current.Code to have some value (as you can't 'goto' a specific case directly from the outside).
+        // There are ways around that but effectively this makes writing straight line code more easily correct, which is paramount.
+        if (resumptionData.IsDefault)
+        {
+            if (!reader.MoveNext())
+                ThrowCouldNotMoveNext();
+
+            // Re-arm BeforeFirstMove.
+            reader._currentStart = currentStart;
+        }
         return reader;
+
+        static void ThrowCouldNotMoveNext() =>
+            throw new InvalidOperationException("Could not do MoveNext after receiving a default resumption data, assumption is that there is enough new buffer to read at least a header after a resumption.");
 
         static void ThrowArgumentOutOfRangeException() =>
             throw new ArgumentOutOfRangeException(nameof(resumptionData), "Resumption data carries an invalid MessageIndex for the given consumed value, as its larger than the value of consumed.");
@@ -191,8 +214,29 @@ ref struct MessageReader<THeader> where THeader : struct, IHeader<THeader>, IEqu
     /// <param name="sequence"></param>
     /// <param name="resumptionData"></param>
     /// <returns></returns>
-    public static MessageReader<THeader> Resume(scoped in ReadOnlySequence<byte> sequence, scoped in ResumptionData resumptionData) =>
-        new(sequence, resumptionData.Header, MessageStartOffset.Resume(resumptionData.MessageIndex));
+    public static MessageReader<THeader> Resume(scoped in ReadOnlySequence<byte> sequence, scoped in ResumptionData resumptionData)
+    {
+        var currentStart = MessageStartOffset.Resume(resumptionData.MessageIndex);
+        var reader = new MessageReader<THeader>(sequence, resumptionData.Header, resumptionData.IsDefault ? currentStart.ToFirstMove() : currentStart);
+
+        // If the header was unknown at the time of yielding we'll move here to bring the new header into view.
+        // This mainly allows us to 'goto' in messages where the actual resumption point would be a nested message inside a switch case.
+        // On resumption the switch expects reader.Current.Code to have some value (as you can't 'goto' a specific case directly from the outside).
+        // There are ways around that but effectively this makes writing straight line code more easily correct, which is paramount.
+        if (resumptionData.IsDefault)
+        {
+            if (!reader.MoveNext())
+                ThrowCouldNotMoveNext();
+
+            // Re-arm BeforeFirstMove.
+            reader._currentStart = currentStart;
+        }
+
+        return reader;
+
+        static void ThrowCouldNotMoveNext() =>
+            throw new InvalidOperationException("Could not do MoveNext after receiving a default resumption data, assumption is that there is enough new buffer to read at least a header after a resumption.");
+    }
 
     public readonly ResumptionData GetResumptionData() => _current.IsDefault ? default : new(_current, (uint)GetUnvalidatedCurrentConsumed());
 

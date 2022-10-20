@@ -29,7 +29,7 @@ public class PgV3ProtocolTests
     public async Task PipeSimpleQueryAsync()
     {
         var dataSource = new NpgsqlDataSource(Options, ProtocolOptions);
-        var command = new NpgsqlCommand(new NpgsqlConnection(dataSource)) { CommandText = "SELECT pg_sleep(2)" };
+        var command = new NpgsqlCommand("SELECT pg_sleep(2)", new NpgsqlConnection(dataSource));
         await using var dataReader = await command.ExecuteReaderAsync();
         while (await dataReader.ReadAsync().ConfigureAwait(false))
         {
@@ -42,7 +42,7 @@ public class PgV3ProtocolTests
         var dataSource = new NpgsqlDataSource(Options, ProtocolOptions);
         var connection = new NpgsqlConnection(dataSource);
         await connection.OpenAsync();
-        var command = new NpgsqlCommand(connection) { CommandText = "SELECT pg_sleep(2)" };
+        var command = new NpgsqlCommand("SELECT pg_sleep(2)", connection);
         await using var dataReader = await command.ExecuteReaderAsync();
         while (await dataReader.ReadAsync().ConfigureAwait(false))
         {
@@ -115,21 +115,21 @@ public class PgV3ProtocolTests
     public async ValueTask PipeliningTest()
     {
         const int NumRows = 1000;
-        const int Commands = 10000;
+        const int Commands = 1000;
         NpgsqlCommand command;
 
         var commandText = $"SELECT generate_series(1, {NumRows})";
 
-        // var dataSource = new NpgsqlDataSource(IPEndPoint.Parse(EndPoint), PgOptions, Options, 10);
-        // var conn = new NpgsqlConnection(dataSource);
-        // await conn.OpenAsync();
+        var dataSource = new NpgsqlDataSource(Options with { PoolSize = 10 }, ProtocolOptions);
+        var conn = new NpgsqlConnection(dataSource);
+        await conn.OpenAsync();
         // command = dataSource.CreateCommand(commandText);
-        // command = new NpgsqlCommand(conn) { CommandText = commandText };
+        command = new NpgsqlCommand(commandText, conn) { CommandText = commandText };
 
-        var dataSource2 = new NpgsqlDataSource(Options with { PoolSize = 1 }, ProtocolOptions);
-        command = dataSource2.CreateCommand(_commandText);
+        // var dataSource2 = new NpgsqlDataSource(Options with { PoolSize = 1 }, ProtocolOptions);
+        // command = dataSource2.CreateCommand(_commandText);
 
-        var outer = 10;
+        var outer = 1;
         for (int j = 0; j < outer; j++)
         {
             var readerTasks = new Task<NpgsqlDataReader>[Commands];

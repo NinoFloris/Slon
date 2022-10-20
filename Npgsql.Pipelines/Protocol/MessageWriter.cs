@@ -20,6 +20,8 @@ static class MessageWriter
     public const int IntByteCount = sizeof(int);
     public const int ShortByteCount = sizeof(short);
     public const int ByteByteCount = sizeof(byte);
+    // About the default MTU payload size, not sure how much, if any, it helps.
+    public const int DefaultAdvisoryFlushThreshold = 1450;
 }
 
 class MessageWriter<T> where T : IBufferWriter<byte>
@@ -31,7 +33,7 @@ class MessageWriter<T> where T : IBufferWriter<byte>
     {
         _writer = new BufferWriter<T>(writer);
         _flushControl = flushControl;
-        AdvisoryFlushThreshold = _flushControl.FlushThreshold < AdvisoryFlushThreshold ? _flushControl.FlushThreshold : BufferWriter.DefaultCommitThreshold;
+        AdvisoryFlushThreshold = _flushControl.FlushThreshold < AdvisoryFlushThreshold ? _flushControl.FlushThreshold : MessageWriter.DefaultAdvisoryFlushThreshold;
     }
 
     public int AdvisoryFlushThreshold { get; }

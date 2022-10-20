@@ -1,128 +1,71 @@
 using System;
+using System.ComponentModel;
 using System.Data;
 using System.Data.Common;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Protocol;
+using Npgsql.Pipelines.Protocol.PgV3;
 
 namespace Npgsql.Pipelines;
 
-public class NpgsqlConnection : DbConnection
+// Implementation
+public sealed partial class NpgsqlConnection
 {
-    readonly NpgsqlDataSource _dataSource;
-    OperationSlot? _operationSlot;
+    NpgsqlDataSource? _dataSource;
+    OperationSlot _operationSlot = null!;
     ConnectionState _state;
     Exception? _breakException;
+    bool _disposed;
+    string? _connectionString;
 
-    internal NpgsqlConnection(NpgsqlDataSource dataSource) => _dataSource = dataSource;
+    // Slots are thread safe up to the granularity of the slot, anything more is the responsibility of the caller.
+    volatile SemaphoreSlim? _pipeliningWriteLock;
+    volatile ConnectionOperationSource? _pipelineTail;
+    ConnectionOperationSource? _operationSingleton;
+    TaskCompletionSource<bool>? _closingTcs;
 
-    OperationSlot GetSlot()
+    NpgsqlDataSource DbDataSource
     {
-        ThrowIfBroken();
-        if (_operationSlot is null || _state is not (ConnectionState.Open or ConnectionState.Executing or ConnectionState.Fetching))
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get
+        {
+            if (_dataSource is not null)
+                return _dataSource;
+
+            return LookupDataSource();
+
+            NpgsqlDataSource LookupDataSource()
+            {
+                throw new NotImplementedException();
+            }
+        }
+    }
+
+    void ThrowIfDisposed()
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(NpgsqlConnection));
+    }
+
+    OperationSlot GetSlotUnsynchronized()
+    {
+        ThrowIfDisposed();
+        if (_state is ConnectionState.Broken)
+            throw new InvalidOperationException("Connection is in a broken state.", _breakException);
+
+        if (_state is not (ConnectionState.Open or ConnectionState.Executing or ConnectionState.Fetching))
             throw new InvalidOperationException("Connection is not open or ready.");
 
         return _operationSlot;
     }
 
-    protected override DbTransaction BeginDbTransaction(IsolationLevel isolationLevel)
-    {
-        throw new NotImplementedException();
-    }
-
-    public override void ChangeDatabase(string databaseName)
-    {
-        throw new NotImplementedException();
-    }
-
-    public override int ConnectionTimeout => (int)_dataSource.DefaultConnectionTimeout.TotalSeconds;
-
-    [AllowNull]
-    public override string ConnectionString { get; set; }
-    public override ConnectionState State => _state;
-
-    public override string Database => throw new NotImplementedException();
-    public override string DataSource => throw new NotImplementedException();
-    public override string ServerVersion => throw new NotImplementedException();
-
-    protected override DbCommand CreateDbCommand() => new NpgsqlCommand(this);
-
-    public override void Close()
-    {
-        MoveToClosed();
-
-        // TODO Activate the pipeline with errors
-        _operationSingleton = null;
-        _operationSlot?.Task.Result.Complete();
-    }
-
-#if !NETSTANDARD2_0
-    public override Task CloseAsync()
-#else
-    public Task CloseAsync()
-#endif
-    {
-        Close();
-        return Task.CompletedTask;
-    }
-
-    public override void Open()
-    {
-        MoveToConnecting();
-        try
-        {
-            _operationSlot = _dataSource.Open(exclusiveUse: true, _dataSource.DefaultConnectionTimeout);
-            Debug.Assert(_operationSlot.Task.IsCompleted);
-            _operationSlot.Task.GetAwaiter().GetResult();
-            MoveToIdle();
-        }
-        catch
-        {
-            Close();
-        }
-    }
-
-    public override async Task OpenAsync(CancellationToken cancellationToken)
-    {
-        MoveToConnecting();
-        try
-        {
-            // First we get a slot (could be a connection open but usually this is synchronous)
-            var slot = await _dataSource.OpenAsync(exclusiveUse: true, _dataSource.DefaultConnectionTimeout, cancellationToken).ConfigureAwait(false);
-            _operationSlot = slot;
-            // Then we await until the connection is fully ready for us (both tasks are covered by the same cancellationToken).
-            // In non exclusive cases we already start writing our message as well but we choose not to do so here.
-            // One of the reasons would be to be sure the connection is healthy once we transition to Open.
-            // If we're still stuck in a pipeline we won't know for sure.
-            await slot.Task;
-            MoveToIdle();
-        }
-        catch
-        {
-            MoveToClosed();
-            throw;
-        }
-    }
-
-    void ThrowIfBroken()
-    {
-        if (_state is ConnectionState.Broken)
-            throw new InvalidOperationException("Connection is in a broken state.", _breakException);
-    }
-
-    void MoveToClosed()
-    {
-        if (_state is ConnectionState.Broken)
-            throw new InvalidOperationException("Connection is already broken.");
-
-        _state = ConnectionState.Closed;
-    }
-
-
     void MoveToConnecting()
     {
+        ThrowIfDisposed();
         if (_state is not (ConnectionState.Closed or ConnectionState.Broken))
             throw new InvalidOperationException("Connection is already open or being opened.");
 
@@ -138,29 +81,139 @@ public class NpgsqlConnection : DbConnection
             _state = ConnectionState.Executing;
     }
 
-    public void MoveToFetching()
+    void MoveToFetching()
     {
         Debug.Assert(_state is not (ConnectionState.Closed or ConnectionState.Broken), "Already Closed or Broken.");
         Debug.Assert(_state is ConnectionState.Open or ConnectionState.Executing or ConnectionState.Fetching, "Called on an unopened/not fetching/not executing connection.");
         _state = ConnectionState.Fetching;
     }
 
-    public void MoveToBroken(Exception? exception = null)
+    void EndSlot(OperationSlot slot)
     {
-        // We'll just keep the first exception.
-        if (_state is ConnectionState.Broken)
-            return;
-
-        Close();
-        _breakException = exception;
-        _state = ConnectionState.Broken;
+        Debug.Assert(slot.Task.IsCompletedSuccessfully);
+        slot.Task.Result.Complete(_breakException);
     }
 
-    public void MoveToIdle()
+    void MoveToBroken(Exception? exception = null, ConnectionOperationSource? pendingHead = null)
     {
-        // No debug assert as completion can often happen in finally blocks, just check here.
-        if (_state is not (ConnectionState.Closed or ConnectionState.Broken))
-            _state = ConnectionState.Open;
+        OperationSlot slot;
+        lock (SyncObj)
+        {
+            slot = _operationSlot;
+            // We'll just keep the first exception.
+            if (_state is ConnectionState.Broken)
+                return;
+
+            _state = ConnectionState.Broken;
+            _breakException = exception;
+        }
+
+        var next = pendingHead;
+        while (next is not null)
+        {
+            next.TryComplete(exception);
+            next = next.Next;
+        }
+
+        EndSlot(slot);
+    }
+
+    async ValueTask CloseCore(bool async)
+    {
+        // The only time SyncObj (_operationSlot) is null, before the first successful open.
+        if (ReferenceEquals(SyncObj, null))
+            return;
+
+        OperationSlot slot;
+        Task drainingTask;
+        lock (SyncObj)
+        {
+            slot = _operationSlot;
+            // Only throw if we're already closed
+            if (_state is ConnectionState.Closed)
+            {
+                ThrowIfDisposed();
+                return;
+            }
+
+            if (_pipelineTail is null || _pipelineTail.IsCompleted)
+                drainingTask = Task.CompletedTask;
+            else
+            {
+                _closingTcs = new TaskCompletionSource<bool>();
+                drainingTask = _closingTcs.Task;
+            }
+
+            _state = ConnectionState.Closed;
+        }
+
+        // TODO, if somebody pipelines without reading and then Closes we'll wait forever for the commands to finish as their readers won't get disposed.
+        // Probably want a timeout and then force complete them like in broken.
+        if (async)
+            await drainingTask;
+        else
+            // TODO we may want a latch to prevent sync and async capabilities (pipelining) mixing like this.
+            // Best we can do, this will only happen if somebody closes synchronously while having executed commands asynchronously.
+            drainingTask.Wait();
+        EndSlot(slot);
+        Reset();
+    }
+
+    void MoveToIdle()
+    {
+        lock (SyncObj)
+        {
+            // No debug assert as completion can often happen in finally blocks, just check here.
+            if (_state is not (ConnectionState.Closed or ConnectionState.Broken))
+                _state = ConnectionState.Open;
+
+            _closingTcs?.SetResult(true);
+        }
+    }
+
+    void Reset()
+    {
+        _operationSingleton = null;
+        _pipelineTail = null;
+        _state = default;
+        _breakException = null;
+    }
+
+    object SyncObj => _operationSlot;
+
+    internal void PerformUserCancellation()
+    {
+        var start = TickCount64Shim.Get();
+        PgProtocol? protocol;
+        SemaphoreSlim? writeLock;
+        lock (SyncObj)
+        {
+            var connectionSlot = GetSlotUnsynchronized();
+            protocol = connectionSlot.Protocol;
+            if (protocol is null)
+                return;
+            if (_pipeliningWriteLock is null)
+                writeLock = _pipeliningWriteLock = new SemaphoreSlim(0); // init with empty count.
+            else if (_pipeliningWriteLock.Wait(DbDataSource.DefaultCancellationTimeout))
+                writeLock = _pipeliningWriteLock;
+            else
+                writeLock = null;
+        }
+
+        // We timed out before getting the lock, tear down the connection (highly undesirable).
+        if (writeLock is null)
+            // TODO or something like this.
+            Task.Run(() => protocol.CompleteAsync(new Exception("Connection was prematurely completed as a result of a user cancellation fallback tearing down the socket.")));
+
+        try
+        {
+            var elapsed = TimeSpan.FromMilliseconds(TickCount64Shim.Get() - start);
+            DbDataSource.PerformUserCancellation(protocol, DbDataSource.DefaultCancellationTimeout - elapsed);
+        }
+        finally
+        {
+            _pipeliningWriteLock.Release();
+        }
     }
 
     internal readonly struct CommandWriter
@@ -172,24 +225,30 @@ public class NpgsqlConnection : DbConnection
             _instance = instance;
         }
 
-        public IOCompletionPair WriteCommand(NpgsqlCommand command, CommandBehavior behavior, CancellationToken cancellationToken = default)
+        public Command WriteCommand(bool allowPipelining, NpgsqlCommand command, CommandBehavior behavior, CancellationToken cancellationToken = default)
         {
-            var slot = _instance.GetSlot();
-            // Assumption is that we can already begin reading, otherwise we'd need to tie the tasks together.
-            Debug.Assert(slot.Task.IsCompletedSuccessfully);
-            // First enqueue, only then call WriteCommandCore.
-            var subSlot = EnqueueRead(slot);
-            return new IOCompletionPair(WriteCommandCore(slot, command, behavior, cancellationToken), subSlot.Task);
+            OperationSlot slot;
+            ConnectionOperationSource subSlot;
+            lock (_instance.SyncObj)
+            {
+                slot = _instance.GetSlotUnsynchronized();
+                // Assumption is that we can already begin reading, otherwise we'd need to tie the tasks together.
+                Debug.Assert(slot.Task.IsCompletedSuccessfully);
+                // First enqueue, only then call WriteCommandCore.
+                subSlot = EnqueueReadUnsynchronized(slot, allowPipelining);
+            }
+
+            return Command.Create(command, new IOCompletionPair(WriteCommandCore(slot, command, behavior, cancellationToken), subSlot.Task));
         }
 
-        async ValueTask<WriteResult> WriteCommandCore(OperationSlot connectionSlot, NpgsqlCommand command, CommandBehavior behavior, CancellationToken cancellationToken = default)
+        async ValueTask<WriteResult> WriteCommandCore(OperationSlot connectionSlot, NpgsqlCommand commandInfo, CommandBehavior behavior, CancellationToken cancellationToken = default)
         {
             await BeginWrite(cancellationToken);
             try
             {
                 _instance.MoveToExecuting();
-                var pair = _instance._dataSource.WriteCommand(connectionSlot, command, behavior, cancellationToken);
-                return await pair.Write;
+                var command = _instance.DbDataSource.WriteCommandAsync(connectionSlot, commandInfo, behavior, cancellationToken);
+                return await command.WriteTask;
             }
             finally
             {
@@ -197,17 +256,20 @@ public class NpgsqlConnection : DbConnection
             }
         }
 
-        ConnectionOperationSource EnqueueRead(OperationSlot connectionSlot)
+        ConnectionOperationSource EnqueueReadUnsynchronized(OperationSlot connectionSlot, bool allowPipelining)
         {
-            lock (connectionSlot)
-            {
-                var source = _instance._pipelineTail = _instance.CreateSlotUnsynchronized(connectionSlot);
-                // An immediately active read means head == tail, move to fetching immediately.
-                if (source.Task.IsCompletedSuccessfully)
-                    _instance.MoveToFetching();
+            var current = _instance._pipelineTail;
+            if (!allowPipelining && !(current is null || current.IsCompleted))
+                ThrowCommandInProgress();
 
-                return source;
-            }
+            var source = _instance._pipelineTail = _instance.CreateSlotUnsynchronized(connectionSlot);
+            // An immediately active read means head == tail, move to fetching immediately.
+            if (source.Task.IsCompletedSuccessfully)
+                _instance.MoveToFetching();
+
+            return source;
+
+            void ThrowCommandInProgress() => throw new InvalidOperationException("A command is already in progress.");
         }
 
         Task BeginWrite(CancellationToken cancellationToken = default)
@@ -238,12 +300,8 @@ public class NpgsqlConnection : DbConnection
         }
     }
 
-    // Slots are thread safe up to the granularity of the slot, anything more is the responsibility of the caller.
-    volatile SemaphoreSlim? _pipeliningWriteLock;
-    volatile ConnectionOperationSource? _pipelineTail;
-    ConnectionOperationSource? _operationSingleton;
-
     internal CommandWriter GetCommandWriter() => new(this);
+    internal TimeSpan DefaultCommandTimeout => DbDataSource.DefaultCommandTimeout;
 
     ConnectionOperationSource CreateSlotUnsynchronized(OperationSlot connectionSlot)
     {
@@ -263,20 +321,19 @@ public class NpgsqlConnection : DbConnection
         else
         {
             source = new ConnectionOperationSource(this, connectionSlot.Protocol);
-            current.SetNext(source);
+            current.Next = source;
         }
 
         return source;
     }
 
-    void CompleteOperation(ConnectionOperationSource completed, ConnectionOperationSource? next, Exception? exception)
+
+    void CompleteOperation(ConnectionOperationSource? next, Exception? exception)
     {
         if (exception is not null)
-            MoveToBroken(exception);
+            MoveToBroken(exception, next);
         else if (next is null)
             MoveToIdle();
-        else if (_breakException is not null)
-            next.TryComplete(_breakException);
         else
             next.Activate();
     }
@@ -295,20 +352,303 @@ public class NpgsqlConnection : DbConnection
 
         public void Activate() => ActivateCore();
 
-        public void SetNext(ConnectionOperationSource source)
+        public ConnectionOperationSource? Next
         {
-            if (Interlocked.CompareExchange(ref _next, source, null) == null)
-                return;
+            get => _next;
+            set
+            {
+                if (Interlocked.CompareExchange(ref _next, value, null) == null)
+                    return;
 
-            throw new InvalidOperationException("Next was already set.");
+                throw new InvalidOperationException("Next was already set.");
+            }
         }
 
         protected override void CompleteCore(PgProtocol protocol, Exception? exception)
-            => _connection.CompleteOperation(this, _next, exception);
+            => _connection.CompleteOperation(_next, exception);
 
         protected override void ResetCore()
         {
             _next = null;
         }
     }
+
+    async ValueTask DisposeCore(bool async)
+    {
+        if (_disposed)
+            return;
+        _disposed = true;
+        await CloseCore(async);
+    }
+
+    NpgsqlTransaction BeginTransactionCore(IsolationLevel isolationLevel)
+    {
+        // TODO
+        throw new NotImplementedException();
+    }
+
+    void OpenCore()
+    {
+        MoveToConnecting();
+        try
+        {
+            _operationSlot = DbDataSource.Open(exclusiveUse: true, DbDataSource.DefaultConnectionTimeout);
+            Debug.Assert(_operationSlot.Task.IsCompleted);
+            _operationSlot.Task.GetAwaiter().GetResult();
+            MoveToIdle();
+        }
+        catch
+        {
+            CloseCore(async: false).GetAwaiter().GetResult();
+            throw;
+        }
+    }
+
+    async Task OpenAsyncCore(CancellationToken cancellationToken)
+    {
+        MoveToConnecting();
+        try
+        {
+            // First we get a slot (could be a connection open but usually this is synchronous)
+            var slot = await DbDataSource.OpenAsync(exclusiveUse: true, DbDataSource.DefaultConnectionTimeout, cancellationToken).ConfigureAwait(false);
+            _operationSlot = slot;
+            // Then we await until the connection is fully ready for us (both tasks are covered by the same cancellationToken).
+            // In non exclusive cases we already start writing our message as well but we choose not to do so here.
+            // One of the reasons would be to be sure the connection is healthy once we transition to Open.
+            // If we're still stuck in a pipeline we won't know for sure.
+            await slot.Task;
+            MoveToIdle();
+        }
+        catch
+        {
+            await CloseCore(async: true);
+            throw;
+        }
+    }
+
+    public ValueTask ChangeDatabaseCore(bool async, string? connectionString, bool open = false)
+    {
+        if (connectionString is null)
+            throw new ArgumentNullException(nameof(connectionString));
+
+        // TODO change the datasource etc.
+        _connectionString = _dataSource?.ConnectionString;
+        throw new NotImplementedException();
+    }
+}
+
+// Public surface & ADO.NET
+public sealed partial class NpgsqlConnection : DbConnection, ICloneable, IComponent
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="NpgsqlConnection"/> class.
+    /// </summary>
+    public NpgsqlConnection()
+        => GC.SuppressFinalize(this);
+
+    /// <summary>
+    /// Initializes a new instance of <see cref="NpgsqlConnection"/> with the given connection string.
+    /// </summary>
+    /// <param name="connectionString">The connection used to open the PostgreSQL database.</param>
+    public NpgsqlConnection(string? connectionString) : this()
+        => ConnectionString = connectionString;
+
+    internal NpgsqlConnection(NpgsqlDataSource dataSource) => _dataSource = dataSource;
+
+    [AllowNull]
+    public override string ConnectionString
+    {
+        get => _connectionString ?? DbDataSource.ConnectionString;
+        set => ChangeDatabaseCore(async: false, value).GetAwaiter().GetResult();
+    }
+    public override string Database => DbDataSource.Database;
+    public override string DataSource => DbDataSource.EndPointRepresentation;
+    public override int ConnectionTimeout => (int)DbDataSource.DefaultConnectionTimeout.TotalSeconds;
+    public override string ServerVersion => DbDataSource.ServerVersion;
+    public override ConnectionState State => _state;
+
+    public override void Open() => OpenCore();
+    public override Task OpenAsync(CancellationToken cancellationToken) => OpenAsyncCore(cancellationToken);
+
+    public override void ChangeDatabase(string databaseName)
+    {
+        // Such a shitty concept to put in an api...
+        throw new NotImplementedException();
+    }
+
+#if !NETSTANDARD2_0
+    public override Task ChangeDatabaseAsync(string databaseName, CancellationToken cancellationToken = default)
+#else
+    public Task ChangeDatabaseAsync(string databaseName, CancellationToken cancellationToken = default)
+#endif
+    {
+        // Such a shitty concept to put in an api...
+        throw new NotImplementedException();
+    }
+
+    /// <summary>
+    /// Begins a database transaction.
+    /// </summary>
+    /// <returns>A <see cref="NpgsqlTransaction"/> object representing the new transaction.</returns>
+    /// <remarks>
+    /// Nested transactions are not supported.
+    /// Transactions created by this method will have the <see cref="IsolationLevel.ReadCommitted"/> isolation level.
+    /// </remarks>
+    public new NpgsqlTransaction BeginTransaction()
+        => BeginTransaction(IsolationLevel.Unspecified);
+
+    /// <summary>
+    /// Begins a database transaction with the specified isolation level.
+    /// </summary>
+    /// <param name="level">The isolation level under which the transaction should run.</param>
+    /// <returns>A <see cref="NpgsqlTransaction"/> object representing the new transaction.</returns>
+    /// <remarks>Nested transactions are not supported.</remarks>
+    public new NpgsqlTransaction BeginTransaction(IsolationLevel level)
+        => BeginTransactionCore(level);
+
+    /// <summary>
+    /// Begins a database transaction.
+    /// </summary>
+    /// <returns>A <see cref="NpgsqlTransaction"/> object representing the new transaction.</returns>
+    /// <remarks>
+    /// Nested transactions are not supported.
+    /// Transactions created by this method will have the <see cref="IsolationLevel.ReadCommitted"/> isolation level.
+    /// </remarks>
+#if !NETSTANDARD2_0
+    public new ValueTask<DbTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default)
+#else
+    public ValueTask<DbTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default)
+#endif
+        => new(BeginTransactionCore(IsolationLevel.Unspecified));
+
+    /// <summary>
+    /// Begins a database transaction with the specified isolation level.
+    /// </summary>
+    /// <param name="level">The isolation level under which the transaction should run.</param>
+    /// <param name="cancellationToken"></param>
+    /// <returns>A <see cref="NpgsqlTransaction"/> object representing the new transaction.</returns>
+    /// <remarks>Nested transactions are not supported.</remarks>
+#if !NETSTANDARD2_0
+    public new ValueTask<NpgsqlTransaction> BeginTransactionAsync(IsolationLevel level, CancellationToken cancellationToken = default)
+#else
+    public ValueTask<NpgsqlTransaction> BeginTransactionAsync(IsolationLevel level, CancellationToken cancellationToken = default)
+#endif
+        => new(BeginTransactionCore(IsolationLevel.Unspecified));
+
+    protected override DbTransaction BeginDbTransaction(IsolationLevel isolationLevel)
+        => BeginTransactionCore(isolationLevel);
+
+    protected override DbCommand CreateDbCommand() => new NpgsqlCommand(null, this);
+
+    public override void Close() => CloseCore(async: false).GetAwaiter().GetResult();
+
+#if !NETSTANDARD2_0
+    public override Task CloseAsync()
+#else
+    public Task CloseAsync()
+#endif
+        => CloseCore(async: true).AsTask();
+
+#if !NETSTANDARD2_0
+    public override ValueTask DisposeAsync()
+#else
+    public ValueTask DisposeAsync()
+#endif
+        => DisposeCore(async: true);
+
+    protected override void Dispose(bool disposing)
+        => DisposeCore(async: false).GetAwaiter().GetResult();
+
+    object ICloneable.Clone()
+    {
+        throw new NotImplementedException();
+    }
+
+    /// <summary>
+    /// This event is unsupported by Npgsql. Use <see cref="DbConnection.StateChange"/> instead.
+    /// </summary>
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public new event EventHandler? Disposed
+    {
+        add => throw new NotSupportedException("The Disposed event isn't supported by Npgsql. Use DbConnection.StateChange instead.");
+        remove => throw new NotSupportedException("The Disposed event isn't supported by Npgsql. Use DbConnection.StateChange instead.");
+    }
+
+    event EventHandler? IComponent.Disposed
+    {
+        add => Disposed += value;
+        remove => Disposed -= value;
+    }
+
+    /// <summary>
+    /// Returns the schema collection specified by the collection name.
+    /// </summary>
+    /// <param name="collectionName">The collection name.</param>
+    /// <returns>The collection specified.</returns>
+    public override DataTable GetSchema(string? collectionName) => GetSchema(collectionName, null);
+
+    /// <summary>
+    /// Returns the schema collection specified by the collection name filtered by the restrictions.
+    /// </summary>
+    /// <param name="collectionName">The collection name.</param>
+    /// <param name="restrictions">
+    /// The restriction values to filter the results.  A description of the restrictions is contained
+    /// in the Restrictions collection.
+    /// </param>
+    /// <returns>The collection specified.</returns>
+    public override DataTable GetSchema(string? collectionName, string?[]? restrictions)
+        => throw new NotImplementedException();
+
+    /// <summary>
+    /// Asynchronously returns the supported collections.
+    /// </summary>
+    /// <param name="cancellationToken">
+    /// An optional token to cancel the asynchronous operation. The default value is <see cref="CancellationToken.None"/>.
+    /// </param>
+    /// <returns>The collection specified.</returns>
+#if !NETSTANDARD2_0
+    public override Task<DataTable> GetSchemaAsync(CancellationToken cancellationToken = default)
+#else
+    public Task<DataTable> GetSchemaAsync(CancellationToken cancellationToken = default)
+#endif
+        => GetSchemaAsync("MetaDataCollections", null, cancellationToken);
+
+    /// <summary>
+    /// Asynchronously returns the schema collection specified by the collection name.
+    /// </summary>
+    /// <param name="collectionName">The collection name.</param>
+    /// <param name="cancellationToken">
+    /// An optional token to cancel the asynchronous operation. The default value is <see cref="CancellationToken.None"/>.
+    /// </param>
+    /// <returns>The collection specified.</returns>
+#if !NETSTANDARD2_0
+    public override Task<DataTable> GetSchemaAsync(string collectionName, CancellationToken cancellationToken = default)
+#else
+    public Task<DataTable> GetSchemaAsync(string collectionName, CancellationToken cancellationToken = default)
+#endif
+        => GetSchemaAsync(collectionName, null, cancellationToken);
+
+    /// <summary>
+    /// Asynchronously returns the schema collection specified by the collection name filtered by the restrictions.
+    /// </summary>
+    /// <param name="collectionName">The collection name.</param>
+    /// <param name="restrictions">
+    /// The restriction values to filter the results.  A description of the restrictions is contained
+    /// in the Restrictions collection.
+    /// </param>
+    /// <param name="cancellationToken">
+    /// An optional token to cancel the asynchronous operation. The default value is <see cref="CancellationToken.None"/>.
+    /// </param>
+    /// <returns>The collection specified.</returns>
+#if !NETSTANDARD2_0
+    public override Task<DataTable> GetSchemaAsync(string collectionName, string?[]? restrictions, CancellationToken cancellationToken = default)
+#else
+    public Task<DataTable> GetSchemaAsync(string collectionName, string?[]? restrictions, CancellationToken cancellationToken = default)
+#endif
+        => throw new NotImplementedException();
+
+    /// <summary>
+    /// DB provider factory.
+    /// </summary>
+    protected override DbProviderFactory DbProviderFactory => throw new NotImplementedException();
 }

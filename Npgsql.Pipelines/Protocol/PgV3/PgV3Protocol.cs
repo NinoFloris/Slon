@@ -50,7 +50,7 @@ class PgV3Protocol : PgProtocol
     {
         _protocolOptions = protocolOptions ?? DefaultPipeOptions;
         _pipeWriter = writer.PipeWriter;
-        _flushControl = new ResettableFlushControl(writer, _protocolOptions.WriteTimeout, Math.Max(BufferWriter.DefaultCommitThreshold, _protocolOptions.FlushThreshold));
+        _flushControl = new ResettableFlushControl(writer, _protocolOptions.WriteTimeout, Math.Max(MessageWriter.DefaultAdvisoryFlushThreshold , _protocolOptions.FlushThreshold));
         _defaultMessageWriter = new MessageWriter<IPipeWriterSyncSupport>(writer, _flushControl);
         _reader = new SimplePipeReader(reader, _protocolOptions.ReadTimeout);
         _operations = new();
@@ -194,7 +194,6 @@ class PgV3Protocol : PgProtocol
         }
     }
 
-
     // TODO this is not up-to-date with the async implementation.
     public void WriteMessage<T>(T message, TimeSpan timeout = default) where T : IFrontendMessage<PgV3FrontendHeader>
     {
@@ -230,17 +229,17 @@ class PgV3Protocol : PgProtocol
     // TODO Complete all with exception
     void MoveToComplete(Exception? exception = null)
     {
-        var shouldFlushPipeline = false;
+        var shouldDrain = false;
         lock (SyncObj)
         {
             if (_state is PgProtocolState.Completed)
                 return;
             _state = PgProtocolState.Completed;
             _completingException = exception;
-            shouldFlushPipeline = true;
+            shouldDrain = true;
         }
 
-        //if (shouldFlushPipeline)
+        //if (shouldDrain)
     }
 
     static ValueTask UnsynchronizedWriteMessage<TWriter, T>(MessageWriter<TWriter> writer, T message, CancellationToken cancellationToken = default)
@@ -296,19 +295,15 @@ class PgV3Protocol : PgProtocol
     static class Reader
     {
         // As MessageReader is a ref struct we need a small method to create it and pass a reference for the async versions.
-        static ReadStatus ReadCore<TMessage>(ref TMessage message, in ReadOnlySequence<byte> sequence, ref MessageReader<PgV3Header>.ResumptionData resumptionData, ref long consumed) where TMessage: IBackendMessage<PgV3Header>
+        static ReadStatus ReadCore<TMessage>(ref TMessage message, in ReadOnlySequence<byte> sequence, ref MessageReader<PgV3Header>.ResumptionData resumptionData, ref long consumed, bool resuming) where TMessage: IBackendMessage<PgV3Header>
         {
             scoped MessageReader<PgV3Header> reader;
-            if (resumptionData.IsDefault)
-            {
+            if (!resuming)
                 reader = MessageReader<PgV3Header>.Create(sequence);
-                if (consumed != 0)
-                    reader.Advance(consumed);
-            }
             else if (consumed == 0)
                 reader = MessageReader<PgV3Header>.Resume(sequence, resumptionData);
             else
-                reader = MessageReader<PgV3Header>.Create(sequence, resumptionData, consumed);
+                reader = MessageReader<PgV3Header>.Recreate(sequence, resumptionData, consumed);
 
             var status = message.Read(ref reader);
             consumed = reader.Consumed;
@@ -341,14 +336,14 @@ class PgV3Protocol : PgProtocol
         {
             // Try to read error response.
             Exception exception;
-            if (readerException is null && resumptionData.IsDefault == false && resumptionData.Header.Code == BackendCode.ErrorResponse)
+            if (readerException is null && !resumptionData.IsDefault && resumptionData.Header.Code == BackendCode.ErrorResponse)
             {
                 var errorResponse = new ErrorResponse();
                 Debug.Assert(resumptionData.MessageIndex <= int.MaxValue);
                 consumed -= resumptionData.MessageIndex;
                 // Let it start clean, as if it has to MoveNext for the first time.
                 MessageReader<PgV3Header>.ResumptionData emptyResumptionData = default;
-                var errorResponseStatus = ReadCore(ref errorResponse, buffer, ref emptyResumptionData, ref consumed);
+                var errorResponseStatus = ReadCore(ref errorResponse, buffer, ref emptyResumptionData, ref consumed, false);
                 if (errorResponseStatus != ReadStatus.Done)
                     exception = new Exception($"Unexpected error on message: {typeof(T).FullName}, could not read full error response, terminated connection.");
                 else
@@ -356,7 +351,7 @@ class PgV3Protocol : PgProtocol
             }
             else
             {
-                exception = new Exception($"Protocol desync on message: {typeof(T).FullName}, expected different response{(resumptionData.Header.IsDefault ? "" : ", actual code: " + resumptionData.Header.Code)}.", readerException);
+                exception = new Exception($"Protocol desync on message: {typeof(T).FullName}, expected different response{(resumptionData.IsDefault ? "" : ", actual code: " + resumptionData.Header.Code)}.", readerException);
             }
             return exception;
         }
@@ -383,7 +378,7 @@ class PgV3Protocol : PgProtocol
             //
             // void HandleAsyncResponseCore
             //
-            var reader = consumed == 0 ? MessageReader<PgV3Header>.Resume(buffer, resumptionData) : MessageReader<PgV3Header>.Create(buffer, resumptionData, consumed);
+            var reader = consumed == 0 ? MessageReader<PgV3Header>.Resume(buffer, resumptionData) : MessageReader<PgV3Header>.Recreate(buffer, resumptionData, consumed);
 
             consumed = (int)reader.Consumed;
             throw new NotImplementedException();
@@ -397,13 +392,14 @@ class PgV3Protocol : PgProtocol
             Exception? readerExn = null;
             var readTimeout = timeout != Timeout.InfiniteTimeSpan ? timeout : protocol._protocolOptions.ReadTimeout;
             var start = TickCount64Shim.Get();
+            var resumed = false;
             do
             {
                 var buffer =protocol._reader.ReadAtLeast(ComputeMinimumSize(consumed, resumptionData, protocol._protocolOptions.MaximumMessageChunkSize), readTimeout);
 
                 try
                 {
-                    status = ReadCore(ref message, buffer, ref resumptionData, ref consumed);
+                    status = ReadCore(ref message, buffer, ref resumptionData, ref consumed, resumed);
                 }
                 catch(Exception ex)
                 {
@@ -437,6 +433,8 @@ class PgV3Protocol : PgProtocol
                     var elapsed = TimeSpan.FromMilliseconds(TickCount64Shim.Get() - start);
                     readTimeout -= elapsed;
                 }
+
+                resumed = true;
             } while (status != ReadStatus.Done);
 
             return message;
@@ -451,13 +449,15 @@ class PgV3Protocol : PgProtocol
             MessageReader<PgV3Header>.ResumptionData resumptionData = default;
             long consumed = 0;
             Exception? readerExn = null;
+            var resuming = false;
             do
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var buffer = await protocol._reader.ReadAtLeastAsync(ComputeMinimumSize(consumed, resumptionData, protocol._protocolOptions.MaximumMessageChunkSize), cancellationToken);
 
                 try
                 {
-                    status = ReadCore(ref message, buffer, ref resumptionData, ref consumed);
+                    status = ReadCore(ref message, buffer, ref resumptionData, ref consumed, resuming);
                 }
                 catch(Exception ex)
                 {
@@ -485,6 +485,8 @@ class PgV3Protocol : PgProtocol
                         await HandleAsyncResponse(buffer, ref resumptionData, ref consumed);
                         break;
                 }
+
+                resuming = true;
             } while (status != ReadStatus.Done);
 
             return message;
@@ -686,9 +688,11 @@ class PgV3Protocol : PgProtocol
             }
         }
 
-        if (exception is not null)
+        if (exception is not null && _completingException is null)
         {
-            // As long as _completingException is null we don't really care that an operation ended on an exception, we can log it here though.
+            _completingException = exception;
+            // TODO Mhmmm
+            var _ = Task.Run(() => CompleteAsync(exception));
         }
 
         // Activate the next uncompleted one, outside the lock.
@@ -707,7 +711,7 @@ class PgV3Protocol : PgProtocol
         }
     }
 
-    public override async Task CompleteAsync(CancellationToken cancellationToken = default)
+    public override async Task CompleteAsync(Exception? exception = null, CancellationToken cancellationToken = default)
     {
         PgV3OperationSource? source;
         lock (SyncObj)
@@ -723,7 +727,7 @@ class PgV3Protocol : PgProtocol
                 EnqueueUnsynchronized(source, CancellationToken.None);
         }
 
-        Exception? opException = null;
+        Exception? opException = exception;
         try
         {
             if (source is not null)
@@ -731,7 +735,8 @@ class PgV3Protocol : PgProtocol
         }
         catch(Exception ex)
         {
-            opException = ex;
+            if (opException is null)
+                opException = ex;
         }
         finally
         {

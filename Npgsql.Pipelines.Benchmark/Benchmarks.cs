@@ -59,7 +59,7 @@ namespace Npgsql.Pipelines.Benchmark
             var dataSource = new NpgsqlDataSource(Options with {PoolSize = 1}, ProtocolOptions);
             _conn = new NpgsqlConnection(dataSource);
             await _conn.OpenAsync();
-            _pipeliningCommand = new NpgsqlCommand(_conn) { CommandText = _commandText };
+            _pipeliningCommand = new NpgsqlCommand(_commandText, _conn);
 
             var dataSource2 = new NpgsqlDataSource(Options with {PoolSize = 1}, ProtocolOptions);
             _multiplexedPipeliningCommand = dataSource2.CreateCommand(_commandText);

@@ -5,12 +5,6 @@ using System.Text;
 
 namespace System.Buffers;
 
-static class BufferWriter
-{
-    // About the default MTU payload size, not sure how much, if any, it helps.
-    public const int DefaultCommitThreshold = 1450;
-}
-
 interface ICopyableBufferWriter<T> : IBufferWriter<T>
 {
     void CopyTo(IBufferWriter<T> destination);

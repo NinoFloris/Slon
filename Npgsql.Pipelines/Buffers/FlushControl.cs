@@ -110,7 +110,6 @@ class ResettableFlushControl: FlushControl
 
     TimeSpan GetTimeout()
     {
-        ThrowIfDisposed();
         if (_start != -1)
         {
             var remaining = _userTimeout - TimeSpan.FromMilliseconds(TickCount64Shim.Get() - _start);
@@ -125,15 +124,14 @@ class ResettableFlushControl: FlushControl
 
     CancellationToken GetToken(CancellationToken cancellationToken)
     {
-        ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
-        if (FlushTimeout != default && FlushTimeout != Timeout.InfiniteTimeSpan)
-        {
-            _timeoutSource!.CancelAfter(FlushTimeout);
-            _registration = cancellationToken.UnsafeRegister(static state => ((CancellationTokenSource)state!).Cancel(), _timeoutSource);
-            return _timeoutSource.Token;
-        }
-        return cancellationToken;
+        var flushTimeout = FlushTimeout;
+        if (flushTimeout == default || flushTimeout == Timeout.InfiniteTimeSpan)
+            return cancellationToken;
+
+        _timeoutSource!.CancelAfter(flushTimeout);
+        _registration = cancellationToken.UnsafeRegister(static state => ((CancellationTokenSource)state!).Cancel(), _timeoutSource);
+        return _timeoutSource.Token;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -151,6 +149,8 @@ class ResettableFlushControl: FlushControl
 
     public override ValueTask<FlushResult> FlushAsync(bool observeFlushThreshold = true, CancellationToken cancellationToken = default)
     {
+        ThrowIfDisposed();
+
         if (observeFlushThreshold && FlushThreshold != -1 && FlushThreshold > _pipeWriter.UnflushedBytes)
             return new ValueTask<FlushResult>(new FlushResult(isCanceled: false, isCompleted: WriterCompleted));
 

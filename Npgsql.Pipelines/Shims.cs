@@ -1,8 +1,38 @@
 using System;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
+using System.Threading;
 
 namespace Npgsql.Pipelines;
+
+// See https://github.com/dotnet/runtime/issues/65184
+static class InterlockedShim
+{
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static T Exchange<T>(ref T location, T value) where T: unmanaged
+        => Unsafe.SizeOf<T>() switch
+        {
+            sizeof(int) => Unsafe.As<int, T>(ref Unsafe.AsRef(Interlocked.Exchange(ref Unsafe.As<T, int>(ref location), Unsafe.As<T, int>(ref value)))),
+            _ => throw new NotSupportedException("This type cannot be handled atomically")
+        };
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static T CompareExchange<T>(ref T location, T value, T comparand) where T: unmanaged
+        => Unsafe.SizeOf<T>() switch
+        {
+            sizeof(int) => Unsafe.As<int, T>(ref Unsafe.AsRef(Interlocked.CompareExchange(ref Unsafe.As<T, int>(ref location), Unsafe.As<T, int>(ref value), Unsafe.As<T, int>(ref comparand)))),
+            _ => throw new NotSupportedException("This type cannot be handled atomically")
+        };
+}
+
+static class DebugShim
+{
+    // Debug.Assert that is annotated for ns2.0 to take nullability into account.
+    [Conditional("DEBUG")]
+    public static void Assert([DoesNotReturnIf(false)] bool condition) =>
+        Debug.Assert(condition, string.Empty, string.Empty);
+}
 
 static class ConvertShim
 {
@@ -45,6 +75,7 @@ static class UnsafeShim
 
 static class TickCount64Shim
 {
+    /// Gets the number of milliseconds elapsed since the system started.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static long Get()
     {

@@ -2,6 +2,7 @@ using System;
 using System.Data;
 using System.Data.Common;
 using System.Net;
+using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -19,11 +20,14 @@ record PgOptions
 
 record NpgsqlDataSourceOptions
 {
+    internal static TimeSpan DefaultCommandTimeout = TimeSpan.FromSeconds(30);
+
     public required EndPoint EndPoint { get; init; }
     public required string Username { get; init; }
     public string? Password { get; init; }
     public string? Database { get; init; }
     public TimeSpan ConnectionTimeout { get; init; } = TimeSpan.FromSeconds(10);
+    public TimeSpan CancellationTimeout { get; init; } = TimeSpan.FromSeconds(10);
     public int MinPoolSize { get; init; } = 1;
     public int MaxPoolSize { get; init; } = 10;
     public int PoolSize
@@ -39,7 +43,7 @@ record NpgsqlDataSourceOptions
     /// CommandTimeout affects the first IO read after writing out a command.
     /// Default is infinite, where behavior purely relies on read and write timeouts of the underlying protocol.
     /// </summary>
-    public TimeSpan CommandTimeout { get; init; } = Timeout.InfiniteTimeSpan;
+    public TimeSpan CommandTimeout { get; init; } = DefaultCommandTimeout;
 
     internal PgOptions ToPgOptions() => new()
     {
@@ -61,41 +65,63 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>
     readonly PgOptions _pgOptions;
     readonly PgV3ProtocolOptions _pgV3ProtocolOptions;
     readonly ConnectionSource<PgV3Protocol> _connectionSource;
-    readonly Channel<(OperationSource Source, ICommandInfo Command, CommandBehavior Behavior, CancellationToken CancellationToken)> _channel;
+    readonly ChannelWriter<MultiplexingItem> _channelWriter;
 
     internal NpgsqlDataSource(NpgsqlDataSourceOptions options, PgV3ProtocolOptions pgV3ProtocolOptions)
     {
         options.Validate();
         _options = options;
+        EndPointRepresentation = options.EndPoint.AddressFamily is AddressFamily.InterNetwork or AddressFamily.InterNetworkV6 ? $"tcp://{options.EndPoint}" : options.EndPoint.ToString()!;
         _pgOptions = options.ToPgOptions();
         _pgV3ProtocolOptions = pgV3ProtocolOptions;
         _connectionSource = new ConnectionSource<PgV3Protocol>(this, options.MaxPoolSize);
-        _channel = Channel.CreateBounded<(OperationSource Source, ICommandInfo Command, CommandBehavior Behavior, CancellationToken CancellationToken)>(new BoundedChannelOptions(4096));
-        var _ = Task.Run(() => MultiplexingCommandWriter()).ContinueWith(t => t.Exception, TaskContinuationOptions.OnlyOnFaulted);
+
+        var channel = Channel.CreateUnbounded<MultiplexingItem>();
+        _channelWriter = channel.Writer;
+        // Make sure to always start on the threadpool.
+        var _ = Task.Factory.StartNew(() => MultiplexingCommandWriter(channel.Reader, _connectionSource, options).ContinueWith(t => t.Exception, TaskContinuationOptions.OnlyOnFaulted), CancellationToken.None, TaskCreationOptions.DenyChildAttach, scheduler: TaskScheduler.Default);
     }
 
     internal TimeSpan DefaultConnectionTimeout => _options.ConnectionTimeout;
+    internal TimeSpan DefaultCancellationTimeout => _options.CancellationTimeout;
     internal TimeSpan DefaultCommandTimeout => _options.CommandTimeout;
+    internal string Database => _options.Database ?? _options.Username;
+    internal string EndPointRepresentation { get; }
 
-    internal IOCompletionPair WriteMultiplexingCommand(ICommandInfo command, CommandBehavior behavior, CancellationToken cancellationToken = default)
+    // TODO should be populated by Start and returned as a a result, cache only once on the datasource, not per connection.
+    internal string ServerVersion => throw new NotImplementedException();
+
+    internal void PerformUserCancellation(PgProtocol protocol, TimeSpan timeout)
+    {
+        // TODO
+        // spin up a connection and write out cancel
+    }
+
+    internal Command WriteMultiplexingCommand(ICommandInfo command, CommandBehavior behavior, CancellationToken cancellationToken = default)
     {
         var source = PgV3Protocol.CreateUnboundOperationSource(cancellationToken);
-        if (_channel.Writer.TryWrite((source, command, behavior, cancellationToken)))
-            return new IOCompletionPair(new ValueTask<WriteResult>(new WriteResult(WriteResult.UnknownBytesWritten)), source.Task);
+        if (_channelWriter.TryWrite(new MultiplexingItem(source, command, behavior, cancellationToken)))
+            return Command.Create(command, new IOCompletionPair(new ValueTask<WriteResult>(new WriteResult(WriteResult.UnknownBytesWritten)), source.Task));
 
-        return new IOCompletionPair(WriteCore(this, source, command, behavior, cancellationToken), source.Task);
+        return Command.Create(command, new IOCompletionPair(WriteCore(this, source, command, behavior, cancellationToken), source.Task));
 
         static async ValueTask<WriteResult> WriteCore(NpgsqlDataSource instance, OperationSource source, ICommandInfo command, CommandBehavior behavior, CancellationToken cancellationToken)
         {
-            await instance._channel.Writer.WriteAsync((source, command, behavior, cancellationToken), cancellationToken);
+            await instance._channelWriter.WriteAsync(new MultiplexingItem(source, command, behavior, cancellationToken), cancellationToken);
             return new WriteResult(WriteResult.UnknownBytesWritten);
         }
     }
 
-    internal IOCompletionPair WriteCommand(OperationSlot slot, ICommandInfo command, CommandBehavior behavior, CancellationToken cancellationToken = default) 
-        => WriteCommand(slot, command, behavior, flushHint: true, cancellationToken);
+    internal Command WriteCommand(OperationSlot slot, ICommandInfo command, CommandBehavior behavior)
+    {
+        // TODO SingleThreadSynchronizationContext for sync writes happening async.
+        return WriteCommandAsync(slot, command, behavior, CancellationToken.None);
+    }
 
-    static IOCompletionPair WriteCommand(OperationSlot slot, ICommandInfo command, CommandBehavior behavior, bool flushHint = true, CancellationToken cancellationToken = default)
+    internal Command WriteCommandAsync(OperationSlot slot, ICommandInfo command, CommandBehavior behavior, CancellationToken cancellationToken = default)
+        => Command.Create(command, WriteCommandAsync(slot, command, behavior, flushHint: true, cancellationToken));
+
+    static IOCompletionPair WriteCommandAsync(OperationSlot slot, ICommandInfo command, CommandBehavior behavior, bool flushHint = true, CancellationToken cancellationToken = default)
     {
         return CommandWriter.WriteExtendedAsync(slot, command, flushHint, cancellationToken);
     }
@@ -138,31 +164,30 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>
     }
 
     protected override DbCommand CreateDbCommand(string? commandText = null)
-        => new NpgsqlCommand(this, true) { CommandText = commandText };
+        => new NpgsqlCommand(commandText, this);
 
     public new NpgsqlCommand CreateCommand(string? commandText = null)
         => (NpgsqlCommand)CreateDbCommand(commandText);
 
     protected override void Dispose(bool disposing)
     {
-        _channel.Writer.Complete();
+        _channelWriter.Complete();
     }
 
-    async Task MultiplexingCommandWriter()
+    record struct MultiplexingItem(OperationSource Source, ICommandInfo Command, CommandBehavior Behavior, CancellationToken CancellationToken);
+
+    static async Task MultiplexingCommandWriter(ChannelReader<MultiplexingItem> reader, ConnectionSource<PgV3Protocol> connectionSource, NpgsqlDataSourceOptions options)
     {
-        var reader = _channel.Reader;
         var failedToEnqueue = false;
-        var writeThreshold = 1000;
-        var options = _options;
-        var connectionSource = _connectionSource;
+        var writeThreshold = MessageWriter.DefaultAdvisoryFlushThreshold;
         while (failedToEnqueue || await reader.WaitToReadAsync())
         {
             var bytesWritten = 0L;
             PgV3Protocol? protocol = null;
-            (OperationSource Source, ICommandInfo Command, CommandBehavior Behavior, CancellationToken CancellationToken) item = default;
+            MultiplexingItem item = default;
             if (failedToEnqueue || reader.TryRead(out item))
             {
-                // Bind
+                // Bind slot.
                 try
                 {
                     await connectionSource.BindAsync(item.Source!, options.ConnectionTimeout, item.CancellationToken);
@@ -182,12 +207,12 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>
             }
             while (protocol is not null && !failedToEnqueue)
             {
-                // Write
-                IOCompletionPair pair;
+                // Write command.
+                ValueTask<WriteResult> writeTask;
                 var fewPending = protocol.Pending <= 2;
                 try
                 {
-                    pair = WriteCommand(item.Source!, item.Command!, item.Behavior, flushHint: fewPending, item.CancellationToken);
+                    writeTask = WriteCommandAsync(item.Source!, item.Command!, item.Behavior, flushHint: fewPending, item.CancellationToken).Write;
                 }
                 catch (Exception ex)
                 {
@@ -195,26 +220,26 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>
                     break;
                 }
 
-                // Flush (if necessary)
-                if (fewPending || !pair.Write.IsCompleted || (bytesWritten += pair.Write.Result.BytesWritten) >= writeThreshold || !reader.TryRead(out item))
+                // Flush (if necessary).
+                if (fewPending || !writeTask.IsCompleted || (bytesWritten += writeTask.Result.BytesWritten) >= writeThreshold || !reader.TryRead(out item))
                 {
                     if (!fewPending)
                     {
-                        var _ = Flush(pair.Write, protocol);
+                        var _ = Flush(writeTask, protocol);
                     }
                     protocol = null;
                 }
-                // Next
+                // Next.
                 else if (!protocol.TryStartOperation(item.Source, cancellationToken: item.CancellationToken))
                     failedToEnqueue = true;
             }
         }
 
-        async ValueTask Flush(ValueTask<WriteResult> write, PgV3Protocol protocol)
+        async ValueTask Flush(ValueTask<WriteResult> writeTask, PgV3Protocol protocol)
         {
             try
             {
-                await write;
+                await writeTask;
                 await protocol.FlushAsync();
             }
             catch (Exception ex)

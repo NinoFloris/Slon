@@ -6,7 +6,6 @@ namespace Npgsql.Pipelines;
 
 class ObjectPool<T>
 {
-    // Modest number to re-use. We only really care about reuse for short lived scopes
     public const int DefaultMaxPoolSize = 128;
 
     int _count;
