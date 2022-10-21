@@ -10,6 +10,14 @@ namespace System.Diagnostics.CodeAnalysis
     sealed class SetsRequiredMembersAttribute : Attribute
     {
     }
+    [AttributeUsageAttribute(AttributeTargets.Method | AttributeTargets.Property | AttributeTargets.Parameter, AllowMultiple = false, Inherited = false)]
+    sealed class UnscopedRefAttribute : Attribute
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="UnscopedRefAttribute"/> class.
+        /// </summary>
+        public UnscopedRefAttribute() { }
+    }
 #endif
 #if NETSTANDARD2_0
     [AttributeUsageAttribute(AttributeTargets.Field | AttributeTargets.Parameter | AttributeTargets.Property)]

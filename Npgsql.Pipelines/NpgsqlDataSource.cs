@@ -221,14 +221,14 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>
                 }
 
                 // Flush (if necessary).
-                if (fewPending || !writeTask.IsCompleted || (bytesWritten += writeTask.Result.BytesWritten) >= writeThreshold || !reader.TryRead(out item))
+                var didFlush = fewPending;
+                if (!didFlush && (!writeTask.IsCompleted || (bytesWritten += writeTask.Result.BytesWritten) >= writeThreshold || !reader.TryRead(out item)))
                 {
-                    if (!fewPending)
-                    {
-                        var _ = Flush(writeTask, protocol);
-                    }
+                    var _ = Flush(writeTask, protocol);
                     protocol = null;
                 }
+                else if (didFlush)
+                    protocol = null;
                 // Next.
                 else if (!protocol.TryStartOperation(item.Source, cancellationToken: item.CancellationToken))
                     failedToEnqueue = true;

@@ -797,7 +797,7 @@ class PgV3Protocol : PgProtocol
             }
         }
 
-        public bool IsUnbound => Protocol is null;
+        public bool IsUnbound => !IsCompleted && Protocol is null && !IsPooled;
 
         public void Bind(PgV3Protocol protocol, bool exclusiveUse, CancellationToken cancellationToken)
         {

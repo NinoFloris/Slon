@@ -14,12 +14,6 @@ namespace Npgsql.Pipelines;
 // Implementation
 public sealed partial class NpgsqlCommand: ICommandInfo
 {
-    static ObjectPool<NpgsqlDataReader> ReaderPool { get; } = new(pool =>
-    {
-        var returnAction = pool.Return;
-        return () => new NpgsqlDataReader(returnAction);
-    });
-
     bool _shouldPrepare;
     object? _dataSourceOrConnection;
     CommandKind _commandKind = CommandKind.Unprepared;
@@ -103,7 +97,7 @@ public sealed partial class NpgsqlCommand: ICommandInfo
         if (TryGetDataSource(out var dataSource))
         {
             var command = dataSource.WriteMultiplexingCommand(this, behavior, cancellationToken);
-            return ReaderPool.Rent().Intialize(async: true, command, behavior, _commandTimeout, cancellationToken);
+            return NpgsqlDataReader.Create(async: true, CommandBatch.Create(command), behavior, _commandTimeout, null, cancellationToken);
         }
         else
         {
@@ -111,7 +105,7 @@ public sealed partial class NpgsqlCommand: ICommandInfo
             // We store the last operation to know when it's completed, as a connection is at most a single
             // pipeline this is sufficient to know whether all previous commands were also completed.
             _pendingConnectionOp = command.GetProtocol();
-            return ReaderPool.Rent().Intialize(async: true, command, behavior, _commandTimeout, cancellationToken);
+            return NpgsqlDataReader.Create(async: true, CommandBatch.Create(command), behavior, _commandTimeout, null, cancellationToken);
         }
     }
 

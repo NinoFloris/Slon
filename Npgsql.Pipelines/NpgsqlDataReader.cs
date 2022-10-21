@@ -4,6 +4,7 @@ using System.Data;
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Protocol;
@@ -14,7 +15,6 @@ namespace Npgsql.Pipelines;
 enum ReaderState
 {
     Uninitialized = 0,
-    BeforeFirstMove,
     Active,
     Completed,
     Exhausted,
@@ -24,48 +24,82 @@ enum ReaderState
 // Implementation
 public sealed partial class NpgsqlDataReader
 {
+    static ObjectPool<NpgsqlDataReader>? _sharedPool;
+    static ObjectPool<NpgsqlDataReader> SharedPool =>
+        _sharedPool ??= new(pool =>
+        {
+            var returnAction = pool.Return;
+            return () => new NpgsqlDataReader(returnAction);
+        });
+
     readonly Action<NpgsqlDataReader>? _returnAction;
 
     // Will be set during initialization.
     CommandReader? _commandReader;
-    Command _command;
+    CommandBatch.Enumerator _commandEnumerator;
 
     ReaderState _state;
-    int _fieldCount;
-    bool _hasRows;
     ulong? _recordsAffected;
 
-    Command GetCurrent() => _command;
+    Command GetCurrent() => _commandEnumerator.Current;
     ValueTask<Operation> GetProtocol() => GetCurrent().GetProtocol();
 
-    // Returns itself to limit the amount of statemachines required to be allocated to pipeline commands.
-    // This is also why this async method is not pooled, it won't help as we'll quickly use the pooled instances (while paying for the lookups coming up empty every time).
-    internal async ValueTask<NpgsqlDataReader> Intialize(bool async, Command command, CommandBehavior behavior, TimeSpan commandTimeout, CancellationToken cancellationToken = default)
+    internal static async ValueTask<NpgsqlDataReader> Create(bool async, CommandBatch batch, CommandBehavior behavior, TimeSpan commandTimeout, ObjectPool<NpgsqlDataReader>? pool = null, CancellationToken cancellationToken = default)
     {
-        _state = ReaderState.BeforeFirstMove;
+        pool ??= SharedPool;
+        var reader = pool.Rent();
 
         // This is an inlined version of NextResultAsyncCore to save on async overhead.
-        CommandReader commandReader;
+        CommandReader? commandReader = null;
+        Operation op = default;
+        ExceptionDispatchInfo? initException = null;
+        var enumerator = batch.GetEnumerator();
         try
         {
-            commandReader = (await command.GetProtocol().ConfigureAwait(false)).Protocol.GetCommandReader();
-            // _commandEnumerator = commands.GetEnumerator();
+            enumerator.MoveNext();
+            op = await enumerator.Current.GetProtocol().ConfigureAwait(false);
+            commandReader = op.Protocol.GetCommandReader();
             // Immediately initialize the first command, we're supposed to be positioned there at the start.
-            await commandReader.InitializeAsync(command, cancellationToken).ConfigureAwait(false);
+            await commandReader.InitializeAsync(enumerator.Current, cancellationToken).ConfigureAwait(false);
         }
-        catch
+        catch(Exception ex)
         {
-            // TODO maybe init should be a static method that has access to a pool?
-            // We need to dispose right away as we won't even hand out the reader.
-            await DisposeCore(true).ConfigureAwait(false);
-            // Likely that Dispose throws errors but just in case that doesn't happen we'll rethrow our own.
-            throw;
+            initException = ExceptionDispatchInfo.Capture(ex);
         }
 
-        _command = command;
-        _commandReader = commandReader;
+        if (initException is not null || commandReader is null)
+            return await HandleUncommon();
+
+        reader.Initialize(commandReader, enumerator);
+        return reader;
+
+        async ValueTask<NpgsqlDataReader> HandleUncommon()
+        {
+            try
+            {
+                await ConsumeBatch(enumerator, commandReader).ConfigureAwait(false);
+            }
+            catch
+            {
+                // We swallow any remaining exceptions (maybe we want to aggregate though).
+            }
+            // Does not return.
+            initException?.Throw();
+            return null!;
+        }
+    }
+
+    static ValueTask ConsumeBatch(CommandBatch.Enumerator enumerator, CommandReader? activeReader = null)
+    {
+        return default;
+    }
+
+    void Initialize(CommandReader reader, CommandBatch.Enumerator enumerator)
+    {
+        _state = ReaderState.Active;
+        _commandReader = reader;
+        _commandEnumerator = enumerator;
         SyncStates();
-        return this;
     }
 
     void SyncStates()
@@ -73,6 +107,9 @@ public sealed partial class NpgsqlDataReader
         DebugShim.Assert(_commandReader is not null);
         switch (_commandReader.State)
         {
+            case CommandReaderState.Initialized:
+                _state = ReaderState.Active;
+                break;
             case CommandReaderState.Completed:
                 HandleCompleted();
                 break;
@@ -96,16 +133,20 @@ public sealed partial class NpgsqlDataReader
     }
 
     [MemberNotNull(nameof(_commandReader))]
-    void ThrowIfClosedOrDisposed(ReaderState? readerState = null)
+    Exception? ThrowIfClosedOrDisposed(ReaderState? readerState = null, bool returnException = false)
     {
-        switch (readerState ?? _state)
-        {
-            case ReaderState.Uninitialized:
-                throw new ObjectDisposedException(nameof(NpgsqlDataReader));
-            case ReaderState.Closed:
-                throw new InvalidOperationException("Reader is closed.");
-        }
         DebugShim.Assert(_commandReader is not null);
+        var exception = (readerState ?? _state) switch
+        {
+            ReaderState.Uninitialized => new ObjectDisposedException(nameof(NpgsqlDataReader)),
+            ReaderState.Closed => new InvalidOperationException("Reader is closed."),
+            _ => null
+        };
+
+        if (exception is null)
+            return null;
+
+        return returnException ? exception : throw exception;
     }
 
     // Any updates should be reflected in Initialize.
@@ -114,7 +155,7 @@ public sealed partial class NpgsqlDataReader
         // TODO walk the commands array and move to exhausted once done.
         try
         {
-            await _commandReader!.InitializeAsync(GetCurrent(), cancellationToken).ConfigureAwait(false);
+            await _commandReader!.InitializeAsync(GetCurrent(), cancellationToken: cancellationToken).ConfigureAwait(false);
             return true;
         }
         finally
@@ -146,12 +187,13 @@ public sealed partial class NpgsqlDataReader
         {
             var op = GetProtocol();
             // _commandReader?.Dispose();
-            _commandReader = null;
             // _commandEnumerator.Dispose();
             // _commandEnumerator = default;
-            _returnAction?.Invoke(this);
             // TODO
             op.Result.Complete();
+            _commandReader = null;
+
+            _returnAction?.Invoke(this);
         }
     }
 }
@@ -162,30 +204,64 @@ public sealed partial class NpgsqlDataReader: DbDataReader
     internal NpgsqlDataReader(Action<NpgsqlDataReader>? returnAction = null) => _returnAction = returnAction;
 
     public override int Depth => 0;
-    public override int FieldCount => _fieldCount;
+    public override int FieldCount
+    {
+        get
+        {
+            ThrowIfClosedOrDisposed();
+            return _commandReader.FieldCount;
+        }
+    }
     public override object this[int ordinal] => throw new NotImplementedException();
     public override object this[string name] => throw new NotImplementedException();
+
     public override int RecordsAffected
-        => !_recordsAffected.HasValue
-            ? -1
-        : _recordsAffected > int.MaxValue
-            ? throw new OverflowException(
-            $"The number of records affected exceeds int.MaxValue. Use {nameof(Rows)}.")
-            : (int)_recordsAffected;
-    public ulong Rows => _recordsAffected ?? 0;
-    public override bool HasRows => _hasRows;
+    {
+        get
+        {
+            ThrowIfClosedOrDisposed();
+            return !_recordsAffected.HasValue
+                ? -1
+                : _recordsAffected > int.MaxValue
+                    ? throw new OverflowException(
+                        $"The number of records affected exceeds int.MaxValue. Use {nameof(Rows)}.")
+                    : (int)_recordsAffected;
+        }
+    }
+
+    public ulong Rows
+    {
+        get
+        {
+            ThrowIfClosedOrDisposed();
+            return _recordsAffected ?? 0;
+        }
+    }
+
+    public override bool HasRows
+    {
+        get
+        {
+            ThrowIfClosedOrDisposed();
+            return _commandReader.HasRows;
+        }
+    }
     public override bool IsClosed => _state is ReaderState.Closed or ReaderState.Uninitialized;
 
-    public override async Task<bool> ReadAsync(CancellationToken cancellationToken)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public override Task<bool> ReadAsync(CancellationToken cancellationToken)
     {
-        if (_state is ReaderState.Closed or ReaderState.Uninitialized)
-            ThrowIfClosedOrDisposed();
-
-        return await _commandReader!.ReadAsync(cancellationToken).ConfigureAwait(false);
+        if (_state is ReaderState.Closed or ReaderState.Uninitialized && ThrowIfClosedOrDisposed(returnException: true) is { } ex)
+            Task.FromException(ex);
+        return _commandReader!.ReadAsync(cancellationToken);
     }
 
     public override Task<bool> NextResultAsync(CancellationToken cancellationToken)
-        => NextResultAsyncCore(cancellationToken);
+    {
+        if (_state is ReaderState.Closed or ReaderState.Uninitialized && ThrowIfClosedOrDisposed(returnException: true) is { } ex)
+            Task.FromException(ex);
+        return NextResultAsyncCore(cancellationToken);
+    }
 
     public override Task<bool> IsDBNullAsync(int ordinal, CancellationToken cancellationToken)
     {
@@ -313,9 +389,7 @@ public sealed partial class NpgsqlDataReader: DbDataReader
     }
 
     public override void Close() => CloseCore(false).GetAwaiter().GetResult();
-
-    protected override void Dispose(bool disposing)
-        => DisposeCore(false).GetAwaiter().GetResult();
+    protected override void Dispose(bool disposing) => DisposeCore(false).GetAwaiter().GetResult();
 
 #if NETSTANDARD2_0
     public Task CloseAsync()

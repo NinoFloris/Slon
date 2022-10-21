@@ -90,17 +90,19 @@ ref struct MessageReader<THeader> where THeader : struct, IHeader<THeader>, IEqu
     public readonly ReadOnlySequence<byte> Sequence => _reader.Sequence;
     public readonly ReadOnlySequence<byte> UnconsumedSequence => _reader.Sequence.Slice(_reader.Position);
     public readonly long Consumed => _reader.Consumed;
+    public readonly long Remaining => _reader.Remaining;
 
     public bool HasCurrent => !_current.IsDefault;
 
-    public readonly THeader Current
+    [UnscopedRef]
+    public readonly ref readonly THeader Current
     {
         get
         {
             if (_current.IsDefault)
                 ThrowEnumOpCantHappen();
 
-            return _current;
+            return ref _current;
         }
     }
 
@@ -430,7 +432,7 @@ static class MessageReaderExtensions
         return reader.IsExpected(matchingHeader, out status, ensureBuffered);
     }
 
-    public static bool ReadMessage<THeader, T>(this ref MessageReader<THeader> reader, T message, out ReadStatus status) 
+    public static bool ReadMessage<THeader, T>(this ref MessageReader<THeader> reader, scoped ref T message, out ReadStatus status)
         where T : IBackendMessage<THeader> where THeader : struct, IHeader<THeader>
     {
         status = message.Read(ref reader);

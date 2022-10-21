@@ -13,7 +13,7 @@ class RowDescription: IPgV3BackendMessage
 
     public RowDescription(int fields = 10)
     {
-        _fields = new ArraySegment<FieldDescription>(new FieldDescription[fields]);
+        _fields = new ArraySegment<FieldDescription>(new FieldDescription[fields], 0, 0);
     }
 
     public ArraySegment<FieldDescription> Fields => _fields;

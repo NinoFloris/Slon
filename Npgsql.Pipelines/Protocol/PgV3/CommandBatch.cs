@@ -38,6 +38,8 @@ readonly struct CommandBatch: IEnumerable<Command>
     public static CommandBatch Create(Command command)
         => new(new[] { command });
 
+    public int Length => _commands.Length;
+
     public struct Enumerator: IEnumerator<Command>
     {
         readonly CommandBatch _batch;
