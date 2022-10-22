@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Runtime.CompilerServices;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
@@ -44,7 +45,8 @@ struct PgV3FrontendHeader: IFrontendHeader<PgV3FrontendHeader>
         }
     }
 
-    public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public readonly void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
     {
         buffer.WriteByte((byte)_code);
         buffer.WriteInt(_length + sizeof(int));
@@ -53,9 +55,11 @@ struct PgV3FrontendHeader: IFrontendHeader<PgV3FrontendHeader>
     public static PgV3FrontendHeader Create(FrontendCode code, int length)
     {
         if (length < 0)
-            throw new ArgumentOutOfRangeException(nameof(length), "Length cannot be negative");
+            ThrowArgumentOutOfRange();
 
         return new PgV3FrontendHeader(code, length);
+
+        void ThrowArgumentOutOfRange() => throw new ArgumentOutOfRangeException(nameof(length), "Length cannot be negative");
     }
 }
 

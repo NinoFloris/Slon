@@ -51,16 +51,24 @@ public sealed partial class NpgsqlConnection
             throw new ObjectDisposedException(nameof(NpgsqlConnection));
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     OperationSlot GetSlotUnsynchronized()
     {
-        ThrowIfDisposed();
-        if (_state is ConnectionState.Broken)
-            throw new InvalidOperationException("Connection is in a broken state.", _breakException);
-
-        if (_state is not (ConnectionState.Open or ConnectionState.Executing or ConnectionState.Fetching))
-            throw new InvalidOperationException("Connection is not open or ready.");
+        if (_disposed || _state is ConnectionState.Broken or not (ConnectionState.Open or ConnectionState.Executing or ConnectionState.Fetching))
+            HandleUncommon();
 
         return _operationSlot;
+
+        void HandleUncommon()
+        {
+            ThrowIfDisposed();
+
+            if (_state is ConnectionState.Broken)
+                throw new InvalidOperationException("Connection is in a broken state.", _breakException);
+
+            if (_state is not (ConnectionState.Open or ConnectionState.Executing or ConnectionState.Fetching))
+                throw new InvalidOperationException("Connection is not open or ready.");
+        }
     }
 
     void MoveToConnecting()
@@ -247,8 +255,8 @@ public sealed partial class NpgsqlConnection
             try
             {
                 _instance.MoveToExecuting();
-                var command = _instance.DbDataSource.WriteCommandAsync(connectionSlot, commandInfo, behavior, cancellationToken);
-                return await command.WriteTask;
+                var completionPair = _instance.DbDataSource.WriteCommandAsync(connectionSlot, commandInfo, behavior, cancellationToken);
+                return await completionPair.Write;
             }
             finally
             {
@@ -279,12 +287,13 @@ public sealed partial class NpgsqlConnection
             {
                 var value = new SemaphoreSlim(1);
 #pragma warning disable CS0197
-                if (Interlocked.CompareExchange(ref _instance._pipeliningWriteLock, value, null) is null)
+                writeLock = Interlocked.CompareExchange(ref _instance._pipeliningWriteLock, value, null);
 #pragma warning restore CS0197
+                if (writeLock is null)
                     writeLock = value;
             }
 
-            if (!writeLock!.Wait(0))
+            if (!writeLock.Wait(0))
                 return writeLock.WaitAsync(cancellationToken);
 
             return Task.CompletedTask;
@@ -328,6 +337,7 @@ public sealed partial class NpgsqlConnection
     }
 
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     void CompleteOperation(ConnectionOperationSource? next, Exception? exception)
     {
         if (exception is not null)
@@ -357,7 +367,7 @@ public sealed partial class NpgsqlConnection
             get => _next;
             set
             {
-                if (Interlocked.CompareExchange(ref _next, value, null) == null)
+                if (Interlocked.CompareExchange(ref _next, value, null) is null)
                     return;
 
                 throw new InvalidOperationException("Next was already set.");

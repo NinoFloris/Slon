@@ -14,10 +14,10 @@ namespace Npgsql.Pipelines.Protocol.PgV3;
 
 record PgV3ProtocolOptions
 {
-    public TimeSpan ReadTimeout { get; init; } = TimeSpan.FromSeconds(1);
-    public TimeSpan WriteTimeout { get; init;  } = TimeSpan.FromSeconds(1);
-    public int ReaderSegmentSize { get; init; } = 8192;
-    public int WriterSegmentSize { get; init; } = 8192;
+    public TimeSpan ReadTimeout { get; init; } = TimeSpan.FromSeconds(10);
+    public TimeSpan WriteTimeout { get; init;  } = TimeSpan.FromSeconds(10);
+    // public int ReaderSegmentSize { get; init; } = 8192;
+    // public int WriterSegmentSize { get; init; } = 8192;
     public int MaximumMessageChunkSize { get; init; } = 8192 / 2;
     public int FlushThreshold { get; init; } = 8192 / 2;
 }
@@ -28,6 +28,7 @@ class PgV3Protocol : PgProtocol
     readonly PgV3ProtocolOptions _protocolOptions;
     readonly SimplePipeReader _reader;
     readonly PipeWriter _pipeWriter;
+    readonly IPipeReaderSyncSupport _pipeReader;
 
     readonly ResettableFlushControl _flushControl;
     readonly MessageWriter<IPipeWriterSyncSupport> _defaultMessageWriter;
@@ -52,6 +53,7 @@ class PgV3Protocol : PgProtocol
         _pipeWriter = writer.PipeWriter;
         _flushControl = new ResettableFlushControl(writer, _protocolOptions.WriteTimeout, Math.Max(MessageWriter.DefaultAdvisoryFlushThreshold , _protocolOptions.FlushThreshold));
         _defaultMessageWriter = new MessageWriter<IPipeWriterSyncSupport>(writer, _flushControl);
+        _pipeReader = reader;
         _reader = new SimplePipeReader(reader, _protocolOptions.ReadTimeout);
         _operations = new();
         _operationSourceSingleton = new PgV3OperationSource(this, exclusiveUse: false, pooled: true);
@@ -93,13 +95,22 @@ class PgV3Protocol : PgProtocol
 
     }
 
-    public override async ValueTask FlushAsync(CancellationToken cancellationToken = default)
+    public override ValueTask FlushAsync(CancellationToken cancellationToken = default)
     {
-        ThrowIfDisposed();
+        return FlushAsyncCore(null, cancellationToken);
+    }
+
+    public override ValueTask FlushAsync(OperationSlot op, CancellationToken cancellationToken = default)
+    {
+        return FlushAsyncCore(op, cancellationToken);
+    }
+
+    async ValueTask FlushAsyncCore(OperationSlot? op = null, CancellationToken cancellationToken = default)
+    {
         if (_pipeWriter.UnflushedBytes == 0)
             return;
 
-        if (!_messageWriteLock.Wait(0))
+        if (op is null && !_messageWriteLock.Wait(0))
             await _messageWriteLock.WaitAsync(cancellationToken);
 
         _flushControl.Initialize();
@@ -121,7 +132,7 @@ class PgV3Protocol : PgProtocol
                 _flushControl.Reset();
             }
 
-            if (!_disposed)
+            if (op is null && !_disposed)
                 _messageWriteLock.Release();
         }
     }
@@ -143,7 +154,7 @@ class PgV3Protocol : PgProtocol
         }
 
         public ValueTask WriteMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IFrontendMessage<PgV3FrontendHeader>
-            => UnsynchronizedWriteMessage(_protocol._defaultMessageWriter, message, cancellationToken);
+            => WriteMessageUnsynchronized(_protocol._defaultMessageWriter, message, cancellationToken);
 
         public long UnflushedBytes => _protocol._defaultMessageWriter.UnflushedBytes;
         public ValueTask<FlushResult> FlushAsync(bool observeFlushThreshold = true, CancellationToken cancellationToken = default)
@@ -188,6 +199,7 @@ class PgV3Protocol : PgProtocol
                     instance._flushControl.Reset();
                 }
 
+                // TODO not sure I'm happy with ending writes *automatically* after one write.
                 if (!instance._disposed)
                     source.EndWrites(instance._messageWriteLock);
             }
@@ -204,7 +216,7 @@ class PgV3Protocol : PgProtocol
         _flushControl.InitializeAsBlocking(timeout);
         try
         {
-            UnsynchronizedWriteMessage(_defaultMessageWriter, message).GetAwaiter().GetResult();
+            WriteMessageUnsynchronized(_defaultMessageWriter, message).GetAwaiter().GetResult();
             if (_flushControl.WriterCompleted)
                 MoveToComplete();
             else
@@ -242,7 +254,8 @@ class PgV3Protocol : PgProtocol
         //if (shouldDrain)
     }
 
-    static ValueTask UnsynchronizedWriteMessage<TWriter, T>(MessageWriter<TWriter> writer, T message, CancellationToken cancellationToken = default)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static ValueTask WriteMessageUnsynchronized<TWriter, T>(MessageWriter<TWriter> writer, T message, CancellationToken cancellationToken = default)
         where TWriter : IBufferWriter<byte> where T : IFrontendMessage<PgV3FrontendHeader>
     {
         if (message.TryPrecomputeHeader(out var header))
@@ -288,11 +301,11 @@ class PgV3Protocol : PgProtocol
         await _reader.ReadAtLeastAsync(minimumSize, cancellationToken).ConfigureAwait(false);
     }
 
-    public ValueTask<T> ReadMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IBackendMessage<PgV3Header> => Reader.ReadAsync(this, message, cancellationToken);
-    public ValueTask<T> ReadMessageAsync<T>(CancellationToken cancellationToken = default) where T : struct, IBackendMessage<PgV3Header> => Reader.ReadAsync(this, new T(), cancellationToken);
-    public T ReadMessage<T>(T message, TimeSpan timeout = default) where T : IBackendMessage<PgV3Header> => Reader.Read(this, message, timeout);
-    public T ReadMessage<T>(TimeSpan timeout = default) where T : struct, IBackendMessage<PgV3Header> => Reader.Read(this, new T(), timeout);
-    static class Reader
+    public ValueTask<T> ReadMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IBackendMessage<PgV3Header> => ProtocolReader.ReadAsync(this, message, cancellationToken);
+    public ValueTask<T> ReadMessageAsync<T>(CancellationToken cancellationToken = default) where T : struct, IBackendMessage<PgV3Header> => ProtocolReader.ReadAsync(this, new T(), cancellationToken);
+    public T ReadMessage<T>(T message, TimeSpan timeout = default) where T : IBackendMessage<PgV3Header> => ProtocolReader.Read(this, message, timeout);
+    public T ReadMessage<T>(TimeSpan timeout = default) where T : struct, IBackendMessage<PgV3Header> => ProtocolReader.Read(this, new T(), timeout);
+    static class ProtocolReader
     {
         // As MessageReader is a ref struct we need a small method to create it and pass a reference for the async versions.
         static ReadStatus ReadCore<TMessage>(ref TMessage message, in ReadOnlySequence<byte> sequence, ref MessageReader<PgV3Header>.ResumptionData resumptionData, ref long consumed, bool resuming) where TMessage: IBackendMessage<PgV3Header>
@@ -498,7 +511,7 @@ class PgV3Protocol : PgProtocol
         _flushControl.Initialize();
         try
         {
-            await UnsynchronizedWriteMessage(_defaultMessageWriter, message, cancellationToken).ConfigureAwait(false);
+            await WriteMessageUnsynchronized(_defaultMessageWriter, message, cancellationToken).ConfigureAwait(false);
             if (_flushControl.WriterCompleted)
                 MoveToComplete();
             else

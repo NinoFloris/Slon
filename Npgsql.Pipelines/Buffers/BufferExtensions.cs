@@ -25,6 +25,13 @@ static class BufferExtensions
         buffer.Write(value);
     }
 
+    public static void WriteUShort<T>(ref this BufferWriter<T> buffer, ushort value)  where T : IBufferWriter<byte>
+    {
+        buffer.Ensure(sizeof(short));
+        BinaryPrimitives.WriteUInt16BigEndian(buffer.Span, value);
+        buffer.Advance(sizeof(short));
+    }
+
     public static void WriteShort<T>(ref this BufferWriter<T> buffer, short value)  where T : IBufferWriter<byte>
     {
         buffer.Ensure(sizeof(short));
@@ -48,8 +55,7 @@ static class BufferExtensions
 
     public static void WriteCString<T>(ref this BufferWriter<T> buffer, string value) where T : IBufferWriter<byte>
     {
-        if (value is not "")
-            buffer.WriteEncoded(value.AsSpan(), Encoding.UTF8);
+        buffer.WriteEncoded(value.AsSpan(), Encoding.UTF8);
         buffer.WriteByte(0);
     }
 

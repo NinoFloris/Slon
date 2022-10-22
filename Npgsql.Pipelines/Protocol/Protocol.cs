@@ -291,6 +291,7 @@ abstract class PgProtocol: IDisposable
     // TODO deliberate whether cancellation makes sense.
     public abstract Task CompleteAsync(Exception? exception = null, CancellationToken cancellationToken = default);
     public abstract ValueTask FlushAsync(CancellationToken cancellationToken = default);
+    public abstract ValueTask FlushAsync(OperationSlot op, CancellationToken cancellationToken = default);
 
     // TODO CommandReader is part of PgV3 atm.
     public abstract PgV3.CommandReader GetCommandReader();

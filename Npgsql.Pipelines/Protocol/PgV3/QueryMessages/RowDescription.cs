@@ -23,7 +23,7 @@ class RowDescription: IPgV3BackendMessage
         if (!reader.MoveNextAndIsExpected(BackendCode.RowDescription, out var status, ensureBuffered: true))
             return status;
 
-        reader.TryReadUShort(out var columnCount);
+        reader.TryReadShort(out var columnCount);
         if (_fields.Array!.Length >= columnCount)
             _fields = new ArraySegment<FieldDescription>(_fields.Array, 0, columnCount);
         else
@@ -31,7 +31,7 @@ class RowDescription: IPgV3BackendMessage
         var fields = _fields.Array!;
         Dictionary<string, int>? nameIndex = null;
         if (columnCount > ColumnCountLookupThreshold)
-            nameIndex = new Dictionary<string, int>(columnCount, StringComparer.Ordinal);
+            nameIndex ??= new Dictionary<string, int>(columnCount, StringComparer.Ordinal);
 
         for (var i = 0; i < fields.Length && i < columnCount; i++)
         {
@@ -64,6 +64,7 @@ class RowDescription: IPgV3BackendMessage
     public void Reset()
     {
         _fields = new ArraySegment<FieldDescription>(_fields.Array!, 0, 0);
+        _nameIndex?.Clear();
     }
 }
 

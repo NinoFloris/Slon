@@ -51,7 +51,7 @@ internal struct BufferWriter<T> where T : IBufferWriter<byte>
     /// <summary>
     /// Gets the result of the last call to <see cref="IBufferWriter{T}.GetSpan(int)"/>.
     /// </summary>
-    public readonly Span<byte> Span => _memory.Span;
+    public readonly Span<byte> Span => _memory.Span.Slice(BufferedBytes);
 
     /// <summary>
     /// Gets the total number of bytes written with this writer.
@@ -62,7 +62,8 @@ internal struct BufferWriter<T> where T : IBufferWriter<byte>
     {
         _bytesCommitted += count;
         // Get new memory, if we advanced outside this bufferwriter then what we have is not valid memory anymore.
-        _memory = _output.GetMemory();
+        if (count > 0)
+            _memory = _output.GetMemory();
     }
 
     /// <summary>
@@ -90,7 +91,6 @@ internal struct BufferWriter<T> where T : IBufferWriter<byte>
     public void Advance(int count)
     {
         BufferedBytes += count;
-        _memory = _memory.Slice(count);
     }
 
     /// <summary>
@@ -118,7 +118,7 @@ internal struct BufferWriter<T> where T : IBufferWriter<byte>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Ensure(int count = 1)
     {
-        if (_memory.Length < count)
+        if (_memory.Length - BufferedBytes < count)
         {
             EnsureMore(count);
         }

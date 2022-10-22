@@ -34,7 +34,7 @@ readonly struct Parse: IPgV3FrontendMessage
     {
         buffer.WriteCString(_preparedStatementName);
         buffer.WriteCString(_commandText);
-        buffer.WriteShort((short)_parameters.Count);
+        buffer.WriteUShort((ushort)_parameters.Count);
 
         for (var i = _parameters.Offset; i < _parameters.Count; i++)
         {

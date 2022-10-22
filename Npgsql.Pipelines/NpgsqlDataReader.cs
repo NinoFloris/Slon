@@ -179,22 +179,29 @@ public sealed partial class NpgsqlDataReader
             return;
         _state = ReaderState.Uninitialized;
 
+        ExceptionDispatchInfo? edi = null;
+        var op = GetProtocol();
         try
         {
             await CloseCore(async, _state).ConfigureAwait(false);
         }
+        catch (Exception e)
+        {
+            edi = ExceptionDispatchInfo.Capture(e);
+        }
         finally
         {
-            var op = GetProtocol();
             // _commandReader?.Dispose();
             // _commandEnumerator.Dispose();
             // _commandEnumerator = default;
             // TODO
-            op.Result.Complete();
             _commandReader = null;
 
             _returnAction?.Invoke(this);
         }
+        // Do last, sometimes this is followed by a sync continuation of the next op.
+        op.Result.Complete(edi?.SourceException);
+        edi?.Throw();
     }
 }
 

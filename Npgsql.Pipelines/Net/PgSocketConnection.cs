@@ -17,8 +17,8 @@ abstract class PgSocketConnection
     public abstract IPipeReaderSyncSupport Reader { get; }
     public abstract IPipeWriterSyncSupport Writer { get; }
 
-    protected const int DefaultWriterSegmentSize = 8192;
     protected const int DefaultReaderSegmentSize = 8192;
+    protected const int DefaultWriterSegmentSize = DefaultReaderSegmentSize;
 
     protected static Socket CreateUnconnectedSocket(EndPoint endPoint)
     {
@@ -32,7 +32,7 @@ abstract class PgSocketConnection
 
     static Socket WithDefaultSocketOptions(Socket socket)
     {
-        if (socket.AddressFamily == AddressFamily.InterNetwork || socket.AddressFamily == AddressFamily.InterNetworkV6)
+        if (socket.AddressFamily is AddressFamily.InterNetwork or AddressFamily.InterNetworkV6)
             socket.NoDelay = true;
         return socket;
     }
@@ -102,16 +102,18 @@ sealed class PgPipeConnection: PgSocketConnection, IDisposable
     const int MaxWriteBufferingOnPipe = 1024 * 1024;
     const int ResumeWriteBufferingOnPipe = MaxWriteBufferingOnPipe / 2;
     static PipeScheduler IOScheduler { get; } = PipeScheduler.Inline;
-    static System.IO.Pipelines.PipeOptions DefaultSendPipeOptions { get; } =
-        new(null, IOScheduler, PipeScheduler.Inline, MaxWriteBufferingOnPipe, ResumeWriteBufferingOnPipe, DefaultWriterSegmentSize, false);
-    static System.IO.Pipelines.PipeOptions DefaultReceivePipeOptions { get; } =
-        new(null, PipeScheduler.Inline, IOScheduler, minimumSegmentSize: DefaultReaderSegmentSize, useSynchronizationContext: false);
+    static PipeScheduler AppScheduler { get; } = PipeScheduler.Inline;
+    static PipeOptions DefaultSendPipeOptions { get; } =
+        new(null, IOScheduler, AppScheduler, MaxWriteBufferingOnPipe, ResumeWriteBufferingOnPipe, DefaultWriterSegmentSize, false);
+    static PipeOptions DefaultReceivePipeOptions { get; } =
+        new(null, PipeScheduler.Inline, PipeScheduler.ThreadPool, minimumSegmentSize: DefaultReaderSegmentSize, useSynchronizationContext: false);
 
     public static async ValueTask<PgPipeConnection> ConnectAsync(EndPoint endPoint, CancellationToken cancellationToken = default)
     {
         var socket = CreateUnconnectedSocket(endPoint);
         await socket.ConnectAsync(endPoint, cancellationToken);
-        return new(SocketConnection.Create(socket, DefaultSendPipeOptions, DefaultReceivePipeOptions));
+        var sendOptions = new PipeOptions(DefaultSendPipeOptions.Pool, PipeScheduler.ThreadPool, new IOQueue(), DefaultSendPipeOptions.PauseWriterThreshold, DefaultSendPipeOptions.ResumeWriterThreshold, DefaultSendPipeOptions.MinimumSegmentSize);
+        return new(SocketConnection.Create(socket, sendOptions, DefaultReceivePipeOptions));
     }
 
     public void Dispose()
@@ -127,7 +129,7 @@ sealed class PgStreamConnection : PgSocketConnection, IDisposable, IAsyncDisposa
     PgStreamConnection(SealedNetworkStream stream)
     {
         _stream = stream;
-        Reader = new StreamPipeReader(stream, new StreamPipeReaderOptions(bufferSize: DefaultReaderSegmentSize, useZeroByteReads: false));
+        Reader = new StreamPipeReaderSyncSupport(stream, new StreamPipeReaderOptions(bufferSize: DefaultReaderSegmentSize, useZeroByteReads: false));
         var writer = new StreamPipeWriter(stream, new StreamPipeWriterOptions(minimumBufferSize: DefaultWriterSegmentSize));
         Writer = writer;
     }

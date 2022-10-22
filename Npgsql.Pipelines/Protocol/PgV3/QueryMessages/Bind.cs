@@ -35,8 +35,9 @@ readonly struct Bind: IPgV3StreamingFrontendMessage
 
     public Bind(string portalName, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, ResultColumnCodes resultColumnCodes, string? preparedStatementName)
     {
-        if (FrontendMessage.DebugEnabled && _parameters.Count > short.MaxValue)
-            throw new InvalidOperationException($"Cannot accept more than short.MaxValue ({short.MaxValue} parameters.");
+        // See https://github.com/postgres/postgres/blob/a7192326c74da417d024a189da4d33c1bf1b40b6/src/interfaces/libpq/libpq-fe.h#L441
+        if (FrontendMessage.DebugEnabled && _parameters.Count > ushort.MaxValue)
+            throw new InvalidOperationException($"Cannot accept more than ushort.MaxValue ({ushort.MaxValue} parameters.");
 
         if (FrontendMessage.DebugEnabled && _resultColumnCodes.IsPerColumnCodes && _resultColumnCodes.PerColumnCodes.Count > short.MaxValue)
             throw new InvalidOperationException($"Cannot accept more than short.MaxValue ({short.MaxValue} result columns.");
@@ -84,18 +85,21 @@ readonly struct Bind: IPgV3StreamingFrontendMessage
         WriteParameterCodes(ref buffer);
 
         var parameters = _parameters;
-        buffer.WriteShort((short)parameters.Count);
-        var lastBuffered = buffer.BufferedBytes;
-        var lastCommitted = buffer.BytesCommitted + lastBuffered;
-        for (var i = parameters.Offset; i < parameters.Count; i++)
+        buffer.WriteUShort((ushort)parameters.Count);
+        if (parameters.Count != 0)
         {
-            var p = parameters.Array![i];
-            p.Value.Write(ref buffer, p.Key.FormatCode, p.Key.Value);
-            if (FrontendMessage.DebugEnabled)
-                CheckParameterWriterOutput(p.Key.Length, lastBuffered, lastCommitted, buffer);
+            var lastBuffered = buffer.BufferedBytes;
+            var lastCommitted = buffer.BytesCommitted + lastBuffered;
+            for (var i = parameters.Offset; i < parameters.Count; i++)
+            {
+                var p = parameters.Array![i];
+                p.Value.Write(ref buffer, p.Key.FormatCode, p.Key.Value);
+                if (FrontendMessage.DebugEnabled)
+                    CheckParameterWriterOutput(p.Key.Length, lastBuffered, lastCommitted, buffer);
 
-            lastCommitted += buffer.BufferedBytes - lastBuffered;
-            lastBuffered = buffer.BufferedBytes;
+                lastCommitted += buffer.BufferedBytes - lastBuffered;
+                lastBuffered = buffer.BufferedBytes;
+            }
         }
 
         WriteResultColumnCodes(ref buffer);
@@ -112,28 +116,31 @@ readonly struct Bind: IPgV3StreamingFrontendMessage
         WriteParameterCodes(ref writer.Writer);
 
         var parameters = _parameters;
-        writer.WriteShort((short)parameters.Count);
-        var lastBuffered = writer.BufferedBytes;
-        var lastCommitted = writer.BytesCommitted + lastBuffered;
-        for (var i = parameters.Offset; i < parameters.Count; i++)
+        writer.WriteUShort((ushort)parameters.Count);
+        if (parameters.Count != 0)
         {
-            var p = parameters.Array![i];
-            p.Value.Write(ref writer.Writer, p.Key.FormatCode, p.Key.Value);
-            if (FrontendMessage.DebugEnabled)
-                CheckParameterWriterOutput(p.Key.Length, lastBuffered, lastCommitted, writer.Writer);
-
-            // Make sure we don't commit too often, as this requires a memory slice in the pipe
-            // additionally any writer loop may start writing small packets if we let it know certain memory is returned.
-            if (writer.BufferedBytes > writer.AdvisoryFlushThreshold)
+            var lastBuffered = writer.BufferedBytes;
+            var lastCommitted = writer.BytesCommitted + lastBuffered;
+            for (var i = parameters.Offset; i < parameters.Count; i++)
             {
-                var result = await writer.FlushAsync(cancellationToken);
-                if (result.IsCanceled || result.IsCompleted) return result;
-                lastCommitted = writer.BytesCommitted;
-                lastBuffered = 0;
-            }
+                var p = parameters.Array![i];
+                p.Value.Write(ref writer.Writer, p.Key.FormatCode, p.Key.Value);
+                if (FrontendMessage.DebugEnabled)
+                    CheckParameterWriterOutput(p.Key.Length, lastBuffered, lastCommitted, writer.Writer);
 
-            lastCommitted += writer.BufferedBytes - lastBuffered;
-            lastBuffered = writer.BufferedBytes;
+                // Make sure we don't commit too often, as this requires a memory slice in the pipe
+                // additionally any writer loop may start writing small packets if we let it know certain memory is returned.
+                if (writer.BufferedBytes > writer.AdvisoryFlushThreshold)
+                {
+                    var result = await writer.FlushAsync(cancellationToken);
+                    if (result.IsCanceled || result.IsCompleted) return result;
+                    lastCommitted = writer.BytesCommitted;
+                    lastBuffered = 0;
+                }
+
+                lastCommitted += writer.BufferedBytes - lastBuffered;
+                lastBuffered = writer.BufferedBytes;
+            }
         }
 
         WriteResultColumnCodes(ref writer.Writer);
@@ -172,6 +179,7 @@ readonly struct Bind: IPgV3StreamingFrontendMessage
             throw new InvalidOperationException("The parameter writer output was not consistent with the parameter length.");
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     void WriteParameterCodes<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
     {
         if (_parameters.Count == 0)
@@ -195,6 +203,7 @@ readonly struct Bind: IPgV3StreamingFrontendMessage
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     void WriteResultColumnCodes<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
     {
         if (_resultColumnCodes.IsOverallCode)

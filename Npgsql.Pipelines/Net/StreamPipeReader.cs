@@ -4,20 +4,20 @@ using Npgsql.Pipelines;
 
 namespace System.IO.Pipelines;
 
-sealed class StreamPipeReader: PipeReader, IPipeReaderSyncSupport
+sealed class StreamPipeReaderSyncSupport: PipeReader, IPipeReaderSyncSupport
 {
-    readonly Stream _stream;
+    public Stream UnderlyingStream { get; }
     readonly bool _canTimeout;
     readonly int? _readTimeout;
     bool _reading;
 
-    public StreamPipeReader(Stream stream, StreamPipeReaderOptions options)
+    public StreamPipeReaderSyncSupport(Stream stream, StreamPipeReaderOptions options)
     {
         PipeReader = Create(stream, options);
-        _stream = stream;
+        UnderlyingStream = stream;
         _canTimeout = stream.CanTimeout;
         // Reading this is somewhat expensive so we cache it if leave open is false, as it conveys some amount of ownership (admittedly it's not perfect).
-        _readTimeout = _canTimeout && !options.LeaveOpen ? _stream.ReadTimeout : null;
+        _readTimeout = _canTimeout && !options.LeaveOpen ? UnderlyingStream.ReadTimeout : null;
     }
 
     public PipeReader PipeReader {get; }
@@ -39,9 +39,9 @@ sealed class StreamPipeReader: PipeReader, IPipeReaderSyncSupport
             {
                 if (timeout != Timeout.InfiniteTimeSpan)
                     timeoutMillis = (int)timeout.TotalMilliseconds;
-                previousTimeout = _readTimeout ?? _stream.ReadTimeout;
+                previousTimeout = _readTimeout ?? UnderlyingStream.ReadTimeout;
                 if (timeoutMillis != previousTimeout && timeoutMillis != 0 && timeoutMillis != Timeout.Infinite)
-                    _stream.ReadTimeout = timeoutMillis;
+                    UnderlyingStream.ReadTimeout = timeoutMillis;
                 start = TickCount64Shim.Get();
             }
 
@@ -49,9 +49,9 @@ sealed class StreamPipeReader: PipeReader, IPipeReaderSyncSupport
             {
                 // TODO test whether zero byte reads actually work on netfx (test at least ssl and network stream).
 #if NETSTANDARD2_0
-                read = _stream.Read(Array.Empty<byte>(), 0, 0);
+                read = UnderlyingStream.Read(Array.Empty<byte>(), 0, 0);
 #else
-                read = _stream.Read(Span<byte>.Empty);
+                read = UnderlyingStream.Read(Span<byte>.Empty);
 #endif
             }
             catch (Exception ex) when (ex is ObjectDisposedException || (ex is IOException ioEx && ioEx.InnerException is ObjectDisposedException))
@@ -71,7 +71,7 @@ sealed class StreamPipeReader: PipeReader, IPipeReaderSyncSupport
         finally
         {
             if (start != -1)
-                _stream.ReadTimeout = previousTimeout;
+                UnderlyingStream.ReadTimeout = previousTimeout;
             _reading = false;
         }
 

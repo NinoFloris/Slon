@@ -112,14 +112,14 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>
         }
     }
 
-    internal Command WriteCommand(OperationSlot slot, ICommandInfo command, CommandBehavior behavior)
+    internal IOCompletionPair WriteCommand(OperationSlot slot, ICommandInfo command, CommandBehavior behavior)
     {
         // TODO SingleThreadSynchronizationContext for sync writes happening async.
         return WriteCommandAsync(slot, command, behavior, CancellationToken.None);
     }
 
-    internal Command WriteCommandAsync(OperationSlot slot, ICommandInfo command, CommandBehavior behavior, CancellationToken cancellationToken = default)
-        => Command.Create(command, WriteCommandAsync(slot, command, behavior, flushHint: true, cancellationToken));
+    internal IOCompletionPair WriteCommandAsync(OperationSlot slot, ICommandInfo command, CommandBehavior behavior, CancellationToken cancellationToken = default)
+        => WriteCommandAsync(slot, command, behavior, flushHint: false, cancellationToken);
 
     static IOCompletionPair WriteCommandAsync(OperationSlot slot, ICommandInfo command, CommandBehavior behavior, bool flushHint = true, CancellationToken cancellationToken = default)
     {

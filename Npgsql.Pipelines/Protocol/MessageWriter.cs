@@ -40,6 +40,7 @@ class MessageWriter<T> where T : IBufferWriter<byte>
 
     public void WriteRaw(ReadOnlySpan<byte> value) => _writer.Write(value);
     public void WriteByte(byte value) => _writer.WriteByte(value);
+    public void WriteUShort(ushort value) => _writer.WriteUShort(value);
     public void WriteShort(short value) => _writer.WriteShort(value);
     public void WriteInt(int value) => _writer.WriteInt(value);
     public void WriteCString(string value) => _writer.WriteCString(value);

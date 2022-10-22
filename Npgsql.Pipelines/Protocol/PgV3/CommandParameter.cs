@@ -1,6 +1,5 @@
 using System;
 using System.Buffers;
-using System.Collections.Generic;
 using Microsoft.AspNetCore.Internal;
 
 namespace Npgsql.Pipelines.Protocol;
