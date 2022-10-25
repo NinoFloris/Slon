@@ -24,7 +24,7 @@ readonly struct ResultColumnCodes
     public static ResultColumnCodes CreatePerColumn(ArraySegment<FormatCode> codes) => new(codes);
 }
 
-readonly struct Bind: IPgV3StreamingFrontendMessage
+readonly struct Bind: IFrontendMessage
 {
     readonly string _portalName;
     readonly ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> _parameters;
@@ -64,21 +64,12 @@ readonly struct Bind: IPgV3StreamingFrontendMessage
         _precomputedMessageLength = PrecomputeMessageLength();
     }
 
-    public bool TryPrecomputeHeader(out PgV3FrontendHeader header)
-    {
-        // Whatever, something like segment size can come via the constructor too, if we want to get fancy.
-        if (_precomputedMessageLength < 2048)
-        {
-            header = PgV3FrontendHeader.Create(FrontendCode.Bind, _precomputedMessageLength);
-            return true;
-        }
-
-        header = default;
-        return false;
-    }
+    // Whatever, something like segment size can come via the constructor too, if we want to get fancy.
+    public bool CanWrite => _precomputedMessageLength < 2048;
 
     public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
     {
+        PgV3FrontendHeader.Create(FrontendCode.Bind, _precomputedMessageLength).Write(ref buffer);
         buffer.WriteCString(_portalName);
         buffer.WriteCString(_preparedStatementName);
 
@@ -105,7 +96,7 @@ readonly struct Bind: IPgV3StreamingFrontendMessage
         WriteResultColumnCodes(ref buffer);
     }
 
-    public async ValueTask<FlushResult> WriteWithHeaderAsync<T>(MessageWriter<T> writer, CancellationToken cancellationToken = default) where T : IBufferWriter<byte>
+    public async ValueTask<FlushResult> WriteAsync<T>(MessageWriter<T> writer, CancellationToken cancellationToken = default) where T : IBufferWriter<byte>
     {
         writer.WriteByte((byte)FrontendCode.Bind);
         writer.WriteInt(_precomputedMessageLength + MessageWriter.IntByteCount);

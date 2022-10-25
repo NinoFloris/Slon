@@ -4,11 +4,12 @@ using System.Collections.Generic;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
-readonly struct Parse: IPgV3FrontendMessage
+readonly struct Parse: IFrontendMessage
 {
     readonly string _commandText;
     readonly ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> _parameters;
     readonly string _preparedStatementName;
+    readonly int _precomputedLength;
 
     public Parse(string commandText, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, string? preparedStatementName)
     {
@@ -18,20 +19,17 @@ readonly struct Parse: IPgV3FrontendMessage
         _commandText = commandText;
         _parameters = parameters;
         _preparedStatementName = preparedStatementName ?? string.Empty;
+        _precomputedLength =
+            MessageWriter.GetCStringByteCount(_preparedStatementName) +
+            MessageWriter.GetCStringByteCount(_commandText) +
+            MessageWriter.ShortByteCount +
+            (MessageWriter.IntByteCount * _parameters.Count);
     }
 
-    public bool TryPrecomputeHeader(out PgV3FrontendHeader header)
-    {
-        var length = MessageWriter.GetCStringByteCount(_preparedStatementName) +
-                     MessageWriter.GetCStringByteCount(_commandText) +
-                     MessageWriter.ShortByteCount +
-                     (MessageWriter.IntByteCount * _parameters.Count);
-        header = PgV3FrontendHeader.Create(FrontendCode.Parse, length);
-        return true;
-    }
-
+    public bool CanWrite => true;
     public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
     {
+        PgV3FrontendHeader.Create(FrontendCode.Parse, _precomputedLength).Write(ref buffer);
         buffer.WriteCString(_preparedStatementName);
         buffer.WriteCString(_commandText);
         buffer.WriteUShort((ushort)_parameters.Count);

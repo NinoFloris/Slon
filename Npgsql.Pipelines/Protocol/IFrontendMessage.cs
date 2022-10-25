@@ -1,3 +1,4 @@
+using System;
 using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -24,13 +25,13 @@ interface IFrontendHeader<THeader> where THeader: struct, IFrontendHeader<THeade
     void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>;
 }
 
-interface IFrontendMessage<THeader> where THeader: struct, IFrontendHeader<THeader>
+interface IFrontendMessage
 {
-    bool TryPrecomputeHeader(out THeader header);
+    bool CanWrite { get; }
     void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>;
 }
 
-interface IStreamingFrontendMessage<THeader>: IFrontendMessage<THeader> where THeader : struct, IFrontendHeader<THeader>
+interface IStreamingFrontendMessage: IFrontendMessage
 {
-    ValueTask<FlushResult> WriteWithHeaderAsync<T>(MessageWriter<T> writer, CancellationToken cancellationToken = default) where T : IBufferWriter<byte>;
+    ValueTask<FlushResult> WriteAsync<T>(MessageWriter<T> writer, CancellationToken cancellationToken = default) where T : IBufferWriter<byte>;
 }

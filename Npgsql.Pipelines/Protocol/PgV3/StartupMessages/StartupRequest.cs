@@ -8,7 +8,7 @@ using Npgsql.Pipelines.Buffers;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
-class StartupRequest: IPgV3StreamingFrontendMessage
+class StartupRequest: IStreamingFrontendMessage
 {
     readonly List<KeyValuePair<string, string>> _parameters;
 
@@ -22,10 +22,10 @@ class StartupRequest: IPgV3StreamingFrontendMessage
             _parameters.Add(new KeyValuePair<string, string>("database", options.Database));
     }
 
+    public bool CanWrite => false;
     public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte> => throw new NotSupportedException();
-    public bool TryPrecomputeHeader(out PgV3FrontendHeader header) => FrontendMessage.CannotPrecomputeHeader(out header);
 
-    public ValueTask<FlushResult> WriteWithHeaderAsync<T>(MessageWriter<T> writer, CancellationToken cancellationToken = default) where T : IBufferWriter<byte>
+    public ValueTask<FlushResult> WriteAsync<T>(MessageWriter<T> writer, CancellationToken cancellationToken = default) where T : IBufferWriter<byte>
     {
         // Getting the thread static is safe as long as we don't go async before returning it.
         var memWriter = new BufferWriter<MemoryBufferWriter>(MemoryBufferWriter.Get());

@@ -17,7 +17,7 @@ readonly struct DescribeName
     public static DescribeName CreateForPortal(string portalName) => new(portalName, true);
 }
 
-readonly struct Describe: IPgV3FrontendMessage
+readonly struct Describe: IFrontendMessage
 {
     enum StatementOrPortal : byte
     {
@@ -29,14 +29,10 @@ readonly struct Describe: IPgV3FrontendMessage
 
     public Describe(DescribeName name) => _name = name;
 
-    public bool TryPrecomputeHeader(out PgV3FrontendHeader header)
-    {
-        header =  PgV3FrontendHeader.Create(FrontendCode.Describe, MessageWriter.ByteByteCount + MessageWriter.GetCStringByteCount(_name.Name));
-        return true;
-    }
-
+    public bool CanWrite => true;
     public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
     {
+        PgV3FrontendHeader.Create(FrontendCode.Describe, MessageWriter.ByteByteCount + MessageWriter.GetCStringByteCount(_name.Name)).Write(ref buffer);
         buffer.WriteByte((byte)(_name.IsPortalName ? StatementOrPortal.Portal : StatementOrPortal.Statement));
         buffer.WriteCString(_name.Name);
     }

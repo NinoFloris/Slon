@@ -141,7 +141,7 @@ class PgV3Protocol : PgProtocol
     public override CommandReader GetCommandReader() => _commandReaderSingleton;
     public RowDescription GetRowDescription() => _rowDescriptionSingleton;
 
-    public IOCompletionPair WriteMessageAsync<T>(OperationSlot slot, T message, CancellationToken cancellationToken = default) where T : IFrontendMessage<PgV3FrontendHeader>
+    public IOCompletionPair WriteMessageAsync<T>(OperationSlot slot, T message, CancellationToken cancellationToken = default) where T : IFrontendMessage
         => WriteMessageBatchAsync(slot, (batchWriter, message, cancellationToken) => batchWriter.WriteMessageAsync(message, cancellationToken), message, flushHint: true, cancellationToken);
 
     public readonly struct BatchWriter
@@ -153,7 +153,7 @@ class PgV3Protocol : PgProtocol
             _protocol = protocol;
         }
 
-        public ValueTask WriteMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IFrontendMessage<PgV3FrontendHeader>
+        public ValueTask WriteMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IFrontendMessage
             => WriteMessageUnsynchronized(_protocol._defaultMessageWriter, message, cancellationToken);
 
         public long UnflushedBytes => _protocol._defaultMessageWriter.UnflushedBytes;
@@ -207,7 +207,7 @@ class PgV3Protocol : PgProtocol
     }
 
     // TODO this is not up-to-date with the async implementation.
-    public void WriteMessage<T>(T message, TimeSpan timeout = default) where T : IFrontendMessage<PgV3FrontendHeader>
+    public void WriteMessage<T>(T message, TimeSpan timeout = default) where T : IFrontendMessage
     {
         // TODO probably want to pass the remaining timeout to flush control.
         if (!_messageWriteLock.Wait(timeout))
@@ -256,44 +256,25 @@ class PgV3Protocol : PgProtocol
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static ValueTask WriteMessageUnsynchronized<TWriter, T>(MessageWriter<TWriter> writer, T message, CancellationToken cancellationToken = default)
-        where TWriter : IBufferWriter<byte> where T : IFrontendMessage<PgV3FrontendHeader>
+        where TWriter : IBufferWriter<byte> where T : IFrontendMessage
     {
-        if (message.TryPrecomputeHeader(out var header))
+        if (message.CanWrite)
         {
-            writer.Writer.Ensure(header.Length);
-            header.Write(ref writer.Writer);
             message.Write(ref writer.Writer);
             writer.Writer.Commit();
+            return new ValueTask();
         }
-        else if (message is IStreamingFrontendMessage<PgV3FrontendHeader> streamingMessage)
+
+        if (message is IStreamingFrontendMessage streamingMessage)
         {
-            var result =  streamingMessage.WriteWithHeaderAsync(writer, cancellationToken);
+            var result =  streamingMessage.WriteAsync(writer, cancellationToken);
             return result.IsCompletedSuccessfully ? new ValueTask() : new ValueTask(result.AsTask());
         }
-        else
-        {
-            WriteBufferedMessage(message, new HeaderBufferWriter<PgV3FrontendHeader>(), writer, header);
-        }
 
+        ThrowCannotWrite();
         return new ValueTask();
 
-        static void WriteBufferedMessage(T message, HeaderBufferWriter<PgV3FrontendHeader> headerBufferWriter, MessageWriter<TWriter> writer, PgV3FrontendHeader header)
-        {
-            try
-            {
-                var bufferWriter = new BufferWriter<HeaderBufferWriter<PgV3FrontendHeader>>(headerBufferWriter);
-                message.Write(ref bufferWriter);
-                bufferWriter.Commit();
-                header.Length = (int)bufferWriter.BytesCommitted;
-                bufferWriter.Output.SetHeader(header);
-                bufferWriter.CopyTo(ref writer.Writer);
-                writer.Writer.Commit();
-            }
-            finally
-            {
-                headerBufferWriter.Reset();
-            }
-        }
+        void ThrowCannotWrite() => throw new InvalidOperationException("Either CanWrite should return true or IStreamingFrontendMessage should be implemented to write this message.");
     }
 
     public async ValueTask WaitForDataAsync(int minimumSize, CancellationToken cancellationToken = default)
@@ -506,7 +487,7 @@ class PgV3Protocol : PgProtocol
         }
     }
 
-    async ValueTask WriteInternalAsync<T>(T message, CancellationToken cancellationToken = default) where T : IFrontendMessage<PgV3FrontendHeader>
+    async ValueTask WriteInternalAsync<T>(T message, CancellationToken cancellationToken = default) where T : IFrontendMessage
     {
         _flushControl.Initialize();
         try

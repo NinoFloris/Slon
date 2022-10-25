@@ -5,7 +5,7 @@ using System.Text;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
-class PasswordMessage : IPgV3FrontendMessage
+class PasswordMessage : IFrontendMessage
 {
     readonly string _hashedPassword;
 
@@ -14,17 +14,11 @@ class PasswordMessage : IPgV3FrontendMessage
         _hashedPassword = HashPassword(username, plainPassword, salt);
     }
 
-    public FrontendCode FrontendCode => FrontendCode.Password;
-
+    public bool CanWrite => true;
     public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
     {
+        PgV3FrontendHeader.Create(FrontendCode.Password, MessageWriter.GetCStringByteCount(_hashedPassword)).Write(ref buffer);
         buffer.WriteCString(_hashedPassword);
-    }
-
-    public bool TryPrecomputeHeader(out PgV3FrontendHeader header)
-    {
-        header = PgV3FrontendHeader.Create(FrontendCode.Password, MessageWriter.GetCStringByteCount(_hashedPassword));
-        return true;
     }
 
     string HashPassword(string username, string plainPassword, ReadOnlySpan<byte> salt)

@@ -2,7 +2,7 @@ using System.Buffers;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
-readonly struct Execute: IPgV3FrontendMessage
+readonly struct Execute: IFrontendMessage
 {
     readonly string _portalName;
     readonly int _rowCountLimit;
@@ -13,14 +13,10 @@ readonly struct Execute: IPgV3FrontendMessage
         _rowCountLimit = rowCountLimit;
     }
 
-    public bool TryPrecomputeHeader(out PgV3FrontendHeader header)
-    {
-        header = PgV3FrontendHeader.Create(FrontendCode.Execute, MessageWriter.GetCStringByteCount(_portalName) + MessageWriter.IntByteCount);
-        return true;
-    }
-
+    public bool CanWrite => true;
     public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
     {
+        PgV3FrontendHeader.Create(FrontendCode.Execute, MessageWriter.GetCStringByteCount(_portalName) + MessageWriter.IntByteCount).Write(ref buffer);
         buffer.WriteCString(_portalName);
         buffer.WriteInt(_rowCountLimit);
     }

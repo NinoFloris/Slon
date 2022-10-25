@@ -62,11 +62,3 @@ struct PgV3FrontendHeader: IFrontendHeader<PgV3FrontendHeader>
         void ThrowArgumentOutOfRange() => throw new ArgumentOutOfRangeException(nameof(length), "Length cannot be negative");
     }
 }
-
-interface IPgV3FrontendMessage: IFrontendMessage<PgV3FrontendHeader>
-{
-}
-
-interface IPgV3StreamingFrontendMessage: IStreamingFrontendMessage<PgV3FrontendHeader>
-{
-}
