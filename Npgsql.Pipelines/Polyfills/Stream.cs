@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace System.IO.Pipelines;
+namespace System.IO;
 
 #if NETSTANDARD2_0
 
@@ -13,7 +13,7 @@ static class StreamExtensions
     {
         if (MemoryMarshal.TryGetArray(buffer, out ArraySegment<byte> array))
         {
-            stream.Write(array.Array, array.Offset, array.Count);
+            stream.Write(array.Array!, array.Offset, array.Count);
         }
         else
         {
@@ -53,6 +53,23 @@ static class StreamExtensions
         finally
         {
             ArrayPool<byte>.Shared.Return(localBuffer);
+        }
+    }
+
+    public static async ValueTask<int> ReadAsync(this Stream stream, Memory<byte> buffer, CancellationToken cancellationToken = default)
+    {
+        if (MemoryMarshal.TryGetArray(buffer, out ArraySegment<byte> array))
+        {
+            return await stream.ReadAsync(array.Array!, array.Offset, array.Count, cancellationToken);
+        }
+        else
+        {
+            var localArray = ArrayPool<byte>.Shared.Rent(buffer.Length);
+            var read = await stream.ReadAsync(localArray, 0, buffer.Length, cancellationToken);
+            localArray.AsSpan(0, read).CopyTo(buffer.Span);
+            buffer.Span.CopyTo(localArray);
+            ArrayPool<byte>.Shared.Return(localArray);
+            return read;
         }
     }
 }

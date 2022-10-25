@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 
 namespace System.Buffers;
@@ -9,7 +10,7 @@ namespace System.Buffers;
 /// A fast access struct that wraps <see cref="IBufferWriter{T}"/>.
 /// </summary>
 /// <typeparam name="T">The type of element to be written.</typeparam>
-internal struct BufferWriter<T> where T : IBufferWriter<byte>
+internal struct BufferWriter<T> : IBufferWriter<byte> where T : IBufferWriter<byte>
 {
     /// <summary>
     /// The underlying <see cref="IBufferWriter{T}"/>.
@@ -54,17 +55,14 @@ internal struct BufferWriter<T> where T : IBufferWriter<byte>
     public readonly Span<byte> Span => _memory.Span.Slice(BufferedBytes);
 
     /// <summary>
+    /// Gets the result of the last call to <see cref="IBufferWriter{T}.GetSpan(int)"/>.
+    /// </summary>
+    public readonly Memory<byte> Memory => _memory.Slice(BufferedBytes);
+
+    /// <summary>
     /// Gets the total number of bytes written with this writer.
     /// </summary>
     public readonly long BytesCommitted => _bytesCommitted;
-
-    public void AdvanceCommitted(long count)
-    {
-        _bytesCommitted += count;
-        // Get new memory, if we advanced outside this bufferwriter then what we have is not valid memory anymore.
-        if (count > 0)
-            _memory = _output.GetMemory();
-    }
 
     /// <summary>
     /// Calls <see cref="IBufferWriter{T}.Advance(int)"/> on the underlying writer
@@ -91,6 +89,18 @@ internal struct BufferWriter<T> where T : IBufferWriter<byte>
     public void Advance(int count)
     {
         BufferedBytes += count;
+    }
+
+    public Memory<byte> GetMemory(int sizeHint = 0)
+    {
+        Ensure(sizeHint);
+        return Memory;
+    }
+
+    public Span<byte> GetSpan(int sizeHint = 0)
+    {
+        Ensure(sizeHint);
+        return Span;
     }
 
     /// <summary>

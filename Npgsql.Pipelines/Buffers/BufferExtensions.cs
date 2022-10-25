@@ -5,19 +5,18 @@ using System.Text;
 
 namespace System.Buffers;
 
-interface ICopyableBufferWriter<T> : IBufferWriter<T>
+interface ICopyableBuffer<T>
 {
-    void CopyTo(IBufferWriter<T> destination);
+    void CopyTo<TWriter>(TWriter destination) where TWriter: IBufferWriter<T>;
 }
 
 static class BufferExtensions
 {
-    public static void CopyTo<T, TWriter>(ref this BufferWriter<T> buffer, ref BufferWriter<TWriter> otherBuffer) where T : ICopyableBufferWriter<byte> where TWriter : IBufferWriter<byte>
+    // Copies whatever is committed to the given writer.
+    public static void CopyTo<T, TOutput>(ref this BufferWriter<T> buffer, ref BufferWriter<TOutput> output) where T : ICopyableBuffer<byte>, IBufferWriter<byte> where TOutput : IBufferWriter<byte>
     {
-        buffer.Commit();
-        otherBuffer.Commit();
-        buffer.Output.CopyTo(otherBuffer.Output);
-        otherBuffer.AdvanceCommitted(buffer.BytesCommitted);
+        buffer.Output.CopyTo(output);
+        output.Advance((int)buffer.BytesCommitted);
     }
 
     public static void WriteRaw<T>(ref this BufferWriter<T> buffer, ReadOnlySpan<byte> value) where T : IBufferWriter<byte>

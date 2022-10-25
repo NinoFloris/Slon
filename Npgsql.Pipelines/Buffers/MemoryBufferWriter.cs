@@ -12,7 +12,7 @@ using System.Threading.Tasks;
 
 namespace Microsoft.AspNetCore.Internal;
 
-internal sealed class MemoryBufferWriter : Stream, ICopyableBufferWriter<byte>
+internal sealed class MemoryBufferWriter : Stream, IBufferWriter<byte>, ICopyableBuffer<byte>
 {
     [ThreadStatic]
     private static MemoryBufferWriter? _cachedInstance;
@@ -118,7 +118,7 @@ internal sealed class MemoryBufferWriter : Stream, ICopyableBufferWriter<byte>
         return _currentSegment.AsSpan(_position, _currentSegment.Length - _position);
     }
 
-    public void CopyTo(IBufferWriter<byte> destination)
+    public void CopyTo<TWriter>(TWriter destination) where TWriter : IBufferWriter<byte>
     {
         if (_completedSegments != null)
         {

@@ -22,6 +22,7 @@ enum FrontendCode: byte
 
 struct PgV3FrontendHeader: IFrontendHeader<PgV3FrontendHeader>
 {
+    const int ByteCount = PgV3Header.ByteCount;
     readonly FrontendCode _code;
     int _length;
 
@@ -31,11 +32,9 @@ struct PgV3FrontendHeader: IFrontendHeader<PgV3FrontendHeader>
         _length = length;
     }
 
-    public int HeaderLength => PgV3Header.ByteCount;
-
     public int Length
     {
-        get => _length + HeaderLength;
+        get => _length + ByteCount;
         set
         {
             if (value < 0)
