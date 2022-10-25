@@ -152,10 +152,15 @@ public sealed partial class NpgsqlDataReader
     // Any updates should be reflected in Initialize.
     async Task<bool> NextResultAsyncCore(CancellationToken cancellationToken = default)
     {
-        // TODO walk the commands array and move to exhausted once done.
+        if (_state is ReaderState.Exhausted || !_commandEnumerator.MoveNext())
+        {
+            _state = ReaderState.Exhausted;
+            return false;
+        }
+
         try
         {
-            await _commandReader!.InitializeAsync(GetCurrent(), cancellationToken: cancellationToken).ConfigureAwait(false);
+            await _commandReader!.InitializeAsync(_commandEnumerator.Current, cancellationToken).ConfigureAwait(false);
             return true;
         }
         finally
