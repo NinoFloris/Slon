@@ -1,22 +1,21 @@
 using System;
 using System.Collections.Generic;
+using Npgsql.Pipelines.Protocol.PgV3.Types;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
-class RowDescription: IPgV3BackendMessage
+struct RowDescription: IPgV3BackendMessage
 {
-    static int ColumnCountLookupThreshold => 10;
     public const int MaxColumns = ushort.MaxValue;
+    static int ColumnCountLookupThreshold => 10;
 
-    ArraySegment<FieldDescription> _fields;
+    ArraySegment<Field> _fields;
     Dictionary<string, int>? _nameIndex;
 
-    public RowDescription(int fields = 10)
-    {
-        _fields = new ArraySegment<FieldDescription>(new FieldDescription[fields], 0, 0);
-    }
+    public RowDescription(int initialCapacity)
+        => _fields = new ArraySegment<Field>(new Field[initialCapacity], 0, 0);
 
-    public ArraySegment<FieldDescription> Fields => _fields;
+    public ReadOnlyMemory<Field> Fields => new(_fields.Array, _fields.Offset, _fields.Count);
 
     public ReadStatus Read(ref MessageReader<PgV3Header> reader)
     {
@@ -24,10 +23,10 @@ class RowDescription: IPgV3BackendMessage
             return status;
 
         reader.TryReadShort(out var columnCount);
-        if (_fields.Array!.Length >= columnCount)
-            _fields = new ArraySegment<FieldDescription>(_fields.Array, 0, columnCount);
+        if (_fields.Array?.Length >= columnCount)
+            _fields = new ArraySegment<Field>(_fields.Array, 0, columnCount);
         else
-            _fields = new ArraySegment<FieldDescription>(new FieldDescription[columnCount], 0, columnCount);
+            _fields = new ArraySegment<Field>(new Field[columnCount], 0, columnCount);
         var fields = _fields.Array!;
         Dictionary<string, int>? nameIndex = null;
         if (columnCount > ColumnCountLookupThreshold)
@@ -43,13 +42,13 @@ class RowDescription: IPgV3BackendMessage
             reader.TryReadInt(out var typeModifier);
             reader.TryReadShort(out var formatCode);
             fields[i] = new(
-                name:                  name!,
-                tableOid:              new Oid(tableOid),
-                columnAttributeNumber: columnAttributeNumber,
-                oid:                   new Oid(oid),
-                typeSize:              typeSize,
-                typeModifier:          typeModifier,
-                formatCode:            (FormatCode)formatCode
+                Name:                  name!,
+                TableOid:              new Oid(tableOid),
+                ColumnAttributeNumber: columnAttributeNumber,
+                Oid:                   new Oid(oid),
+                TypeSize:              typeSize,
+                TypeModifier:          typeModifier,
+                FormatCode:            (FormatCode)formatCode
             );
             if (nameIndex is not null)
                 nameIndex.TryAdd(name!, i);
@@ -63,99 +62,7 @@ class RowDescription: IPgV3BackendMessage
 
     public void Reset()
     {
-        _fields = new ArraySegment<FieldDescription>(_fields.Array!, 0, 0);
+        _fields = new ArraySegment<Field>(_fields.Array!, 0, 0);
         _nameIndex?.Clear();
     }
-}
-
-
-/// <summary>
-/// A descriptive record on a single field received from PostgreSQL.
-/// See RowDescription in https://www.postgresql.org/docs/current/static/protocol-message-formats.html
-/// </summary>
-public struct FieldDescription
-{
-    internal FieldDescription(
-        string name, Oid tableOid, short columnAttributeNumber,
-        Oid oid, short typeSize, int typeModifier, FormatCode formatCode)
-    {
-        Name = name;
-        TableOid = tableOid;
-        ColumnAttributeNumber = columnAttributeNumber;
-        TypeOid = oid;
-        TypeSize = typeSize;
-        TypeModifier = typeModifier;
-        FormatCode = formatCode;
-    }
-
-    /// <summary>
-    /// The field name.
-    /// </summary>
-    internal string Name { get; set; }
-
-    /// <summary>
-    /// The object ID of the field's data type.
-    /// </summary>
-    internal Oid TypeOid { get; }
-
-    /// <summary>
-    /// The data type size (see pg_type.typlen). Note that negative values denote variable-width types.
-    /// </summary>
-    public short TypeSize { get; }
-
-    /// <summary>
-    /// The type modifier (see pg_attribute.atttypmod). The meaning of the modifier is type-specific.
-    /// </summary>
-    public int TypeModifier { get; }
-
-    /// <summary>
-    /// If the field can be identified as a column of a specific table, the object ID of the table; otherwise zero.
-    /// </summary>
-    internal Oid TableOid { get; }
-
-    /// <summary>
-    /// If the field can be identified as a column of a specific table, the attribute number of the column; otherwise zero.
-    /// </summary>
-    internal short ColumnAttributeNumber { get; }
-
-    /// <summary>
-    /// The format code being used for the field.
-    /// Currently will be zero (text) or one (binary).
-    /// In a RowDescription returned from the statement variant of Describe, the format code is not yet known and will always be zero.
-    /// </summary>
-    internal FormatCode FormatCode { get; }
-
-    // internal string TypeDisplayName => PostgresType.GetDisplayNameWithFacets(TypeModifier);
-
-    // /// <summary>
-    // /// The Npgsql type handler assigned to handle this field.
-    // /// Returns <see cref="UnknownTypeHandler"/> for fields with format text.
-    // /// </summary>
-    // internal NpgsqlTypeHandler Handler { get; private set; }
-    //
-    // internal PostgresType PostgresType
-    //     => _typeMapper.DatabaseInfo.ByOID.TryGetValue(TypeOID, out var postgresType)
-    //         ? postgresType
-    //         : UnknownBackendType.Instance;
-    //
-    // internal Type FieldType => Handler.GetFieldType(this);
-    //
-    // internal void ResolveHandler()
-    //     => Handler = IsBinaryFormat ? _typeMapper.ResolveByOID(TypeOID) : _typeMapper.UnrecognizedTypeHandler;
-    //
-    // ConnectorTypeMapper _typeMapper;
-
-    internal bool IsBinaryFormat => FormatCode == FormatCode.Binary;
-    internal bool IsTextFormat => FormatCode == FormatCode.Text;
-
-    internal FieldDescription Clone()
-    {
-        var field = new FieldDescription(Name, TableOid, ColumnAttributeNumber, TypeOid, TypeSize, TypeModifier, FormatCode);
-        return field;
-    }
-
-    /// <summary>
-    /// Returns a string that represents the current object.
-    /// </summary>
-    // public override string ToString() => Name + (Handler == null ? "" : $"({Handler.PgDisplayName})");
 }

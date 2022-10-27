@@ -8,7 +8,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Protocol;
-using Npgsql.Pipelines.Protocol.PgV3;
+using Npgsql.Pipelines.Protocol.PgV3.Commands;
 
 namespace Npgsql.Pipelines;
 
@@ -28,15 +28,12 @@ public sealed partial class NpgsqlConnection
     ConnectionOperationSource? _operationSingleton;
     TaskCompletionSource<bool>? _closingTcs;
 
-    NpgsqlDataSource DbDataSource
+    internal NpgsqlDataSource DbDataSource
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
         {
-            if (_dataSource is not null)
-                return _dataSource;
-
-            return LookupDataSource();
+            return _dataSource ?? LookupDataSource();
 
             NpgsqlDataSource LookupDataSource()
             {
@@ -233,7 +230,11 @@ public sealed partial class NpgsqlConnection
             _instance = instance;
         }
 
-        public Command WriteCommand(bool allowPipelining, NpgsqlCommand command, CommandBehavior behavior, CancellationToken cancellationToken = default)
+        // This will almost always complete synchronously, but if it won't the chances a pooled instance isn't available is almost unthinkable.
+#if !NETSTANDARD2_0
+        [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+#endif
+        public async ValueTask<CommandContextBatch> WriteCommand(bool allowPipelining, ICommand command, CommandBehavior behavior, CancellationToken cancellationToken = default)
         {
             OperationSlot slot;
             ConnectionOperationSource subSlot;
@@ -246,21 +247,19 @@ public sealed partial class NpgsqlConnection
                 subSlot = EnqueueReadUnsynchronized(slot, allowPipelining);
             }
 
-            return Command.Create(command, new IOCompletionPair(WriteCommandCore(slot, command, behavior, cancellationToken), subSlot.Task));
-        }
-
-        async ValueTask<WriteResult> WriteCommandCore(OperationSlot connectionSlot, NpgsqlCommand commandInfo, CommandBehavior behavior, CancellationToken cancellationToken = default)
-        {
-            await BeginWrite(cancellationToken);
+            await BeginWrite(cancellationToken).ConfigureAwait(false);
+            ValueTask<WriteResult> writeTask = new ValueTask<WriteResult>();
             try
             {
                 _instance.MoveToExecuting();
-                var completionPair = _instance.DbDataSource.WriteCommandAsync(connectionSlot, commandInfo, behavior, cancellationToken);
-                return await completionPair.Write;
+                var result = _instance.DbDataSource.WriteCommandAsync(slot, command, behavior, cancellationToken);
+                writeTask = result.WriteTask;
+                return CommandContextBatch.Create(CommandContext.Create(new IOCompletionPair(writeTask, subSlot.Task), result.ExecutionFlags, result.Session));
             }
             finally
             {
-                EndWrite();
+                // This will usually finish synchronously, but we can't await it, otherwise we're awaiting the entire write before we can start reading.
+                var _ = EndWrite(writeTask);
             }
         }
 
@@ -299,12 +298,24 @@ public sealed partial class NpgsqlConnection
             return Task.CompletedTask;
         }
 
-        void EndWrite()
+#if !NETSTANDARD2_0
+        [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
+#endif
+        async ValueTask EndWrite(ValueTask<WriteResult> writeTask)
         {
+            try
+            {
+                await writeTask.ConfigureAwait(false);
+            }
+            catch
+            {
+                // TODO kill the connection.
+            }
             var writeLock = _instance._pipeliningWriteLock;
             if (writeLock?.CurrentCount == 0)
                 writeLock.Release();
             else
+                // TODO don't throw, break the connection with this reason.
                 throw new InvalidOperationException("No write to end.");
         }
     }

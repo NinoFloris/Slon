@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace Npgsql.Pipelines.Protocol;
 
-internal abstract class OperationSlot
+abstract class OperationSlot
 {
     /// <summary>
     /// The connection the slot belongs to, can be null once completed or when not yet bound.
@@ -22,7 +22,7 @@ internal abstract class OperationSlot
     public abstract ValueTask<Operation> Task { get; }
 }
 
-internal abstract class OperationSource: OperationSlot
+abstract class OperationSource: OperationSlot
 {
     [Flags]
     enum OperationSourceFlags
@@ -37,16 +37,13 @@ internal abstract class OperationSource: OperationSlot
 
     OperationSourceFlags _state;
     TaskCompletionSource<Operation> _tcs;
-    CancellationTokenRegistration? _cancellationRegistration;
+    CancellationTokenRegistration _cancellationRegistration;
     PgProtocol? _protocol;
-    // Could fold this into flags if we wanted to save more space;
-    readonly bool _asyncContinuations;
 
     protected OperationSource(PgProtocol? protocol, bool asyncContinuations = true, bool pooled = false)
     {
         _tcs = new TaskCompletionSource<Operation>(asyncContinuations ? TaskCreationOptions.RunContinuationsAsynchronously : TaskCreationOptions.None);
         _protocol = protocol;
-        _asyncContinuations = asyncContinuations;
         if (pooled)
         {
             if (protocol is null)
@@ -98,7 +95,6 @@ internal abstract class OperationSource: OperationSlot
     [MemberNotNullWhen(true, nameof(_cancellationRegistration))]
     public bool IsCanceled => (_state & OperationSourceFlags.Canceled) != 0;
     public bool IsCompletedSuccessfully => IsCompleted && (_state & OperationSourceFlags.Faulted) != 0;
-    protected bool RunContinuationsAsynchronously => _asyncContinuations;
     protected abstract void CompleteCore(PgProtocol protocol, Exception? exception);
 
     protected virtual void ResetCore() {}
@@ -116,7 +112,7 @@ internal abstract class OperationSource: OperationSlot
         if (!cancellationToken.CanBeCanceled)
             return;
 
-        if (_cancellationRegistration is not null)
+        if (_cancellationRegistration != default)
             throw new InvalidOperationException("Cancellation already registered.");
 
         _cancellationRegistration = cancellationToken.UnsafeRegister((state, token) =>
@@ -139,7 +135,7 @@ internal abstract class OperationSource: OperationSlot
                 ThrowAlreadyActivated();
                 break;
             case OperationSourceFlags.Created:
-                _cancellationRegistration?.Dispose();
+                _cancellationRegistration.Dispose();
                 // Can be false when we were raced by cancellation completing the source right after we transitioned to the activated state.
                 _tcs.TrySetResult(new Operation(this, _protocol));
                 break;
@@ -191,13 +187,16 @@ readonly record struct Operation: IDisposable
     public PgProtocol Protocol { get; }
 
     public bool IsCompleted => _source.IsCompleted;
+    // TODO if we couldn't complete with an exception we probably want to have the completing code kill the protocol instead.
+    // Check how feasible it is that this (not being able to complete) would happen.
     public void Complete(Exception? exception = null) => _source?.TryComplete(exception);
     public void Dispose() => Complete();
 }
 
 readonly struct WriteResult
 {
-    public const long UnknownBytesWritten = long.MinValue;
+    const long UnknownBytesWritten = long.MinValue;
+    public static WriteResult Unknown => new WriteResult(UnknownBytesWritten);
 
     public WriteResult(long bytesWritten)
     {

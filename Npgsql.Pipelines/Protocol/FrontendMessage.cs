@@ -66,6 +66,7 @@ interface IFrontendHeader<THeader> where THeader: struct, IFrontendHeader<THeade
 
 interface IFrontendMessage
 {
+    // TODO bit of a weird api now
     bool CanWrite { get; }
     void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>;
 }

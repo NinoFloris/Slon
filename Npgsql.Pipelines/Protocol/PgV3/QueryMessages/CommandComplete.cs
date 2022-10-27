@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.Buffers.Text;
+using Npgsql.Pipelines.Protocol.PgV3.Types;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
@@ -32,7 +33,7 @@ struct CommandComplete: IPgV3BackendMessage
             'D' when bytes.StartsWith("DELETE "u8) => (StatementType.Delete, "DELETE ".Length),
             'M' when bytes.StartsWith("MERGE "u8) => (StatementType.Merge, "MERGE ".Length),
             'C' when bytes.StartsWith("COPY "u8) => (StatementType.Copy, "COPY ".Length),
-            'C' when bytes.StartsWith("CALL"u8) => (StatementType.Call, "CALL".Length),
+            'C' when bytes.StartsWith("CALL "u8) => (StatementType.Call, "CALL ".Length),
             'M' when bytes.StartsWith("MOVE "u8) => (StatementType.Move, "MOVE ".Length),
             'F' when bytes.StartsWith("FETCH "u8) => (StatementType.Fetch, "FETCH ".Length),
             'C' when bytes.StartsWith("CREATE TABLE AS "u8) => (StatementType.CreateTableAs, "CREATE TABLE AS ".Length),
@@ -47,7 +48,7 @@ struct CommandComplete: IPgV3BackendMessage
             case StatementType.Insert:
                 if (!Utf8Parser.TryParse(arguments, out int oid, out var nextArgumentOffset))
                     return ReadStatus.InvalidData;
-                Oid = new Oid(oid);
+                Oid = new(oid);
                 arguments = bytes.Slice(nextArgumentOffset);
                 goto default;
             default:

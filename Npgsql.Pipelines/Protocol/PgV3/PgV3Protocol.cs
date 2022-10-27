@@ -8,6 +8,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Buffers;
+using Npgsql.Pipelines.Protocol.PgV3.Commands;
 using FlushResult = Npgsql.Pipelines.Buffers.FlushResult;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
@@ -147,11 +148,8 @@ class PgV3Protocol : PgProtocol
     public readonly struct BatchWriter
     {
         readonly PgV3Protocol _protocol;
+        internal BatchWriter(PgV3Protocol protocol) => _protocol = protocol;
 
-        internal BatchWriter(PgV3Protocol protocol)
-        {
-            _protocol = protocol;
-        }
 
         public ValueTask WriteMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IFrontendMessage
             => WriteMessageUnsynchronized(_protocol._defaultMessageWriter, message, cancellationToken);
@@ -761,15 +759,16 @@ class PgV3Protocol : PgProtocol
 
     sealed class PgV3OperationSource : OperationSource
     {
+        // Will be initialized during TakeWriteLock.
+        volatile Task? _writeSlot;
+
+        bool _exclusiveUse;
+
         public PgV3OperationSource(PgV3Protocol? protocol, bool exclusiveUse, bool pooled)
             : base(protocol, asyncContinuations: true, pooled)
         {
             _exclusiveUse = exclusiveUse;
         }
-
-        // Will be initialized during TakeWriteLock.
-        volatile Task? _writeSlot;
-        bool _exclusiveUse;
 
         PgV3Protocol? GetProtocol()
         {
@@ -834,6 +833,36 @@ class PgV3Protocol : PgProtocol
             // Null out the completed task before we release.
             _writeSlot = null!;
             writelock.Release();
+            return true;
+        }
+    }
+
+    long _statementCounter = 0;
+    Dictionary<Guid, string> _trackedStatements { get; } = new();
+
+    /// <summary>
+    /// 
+    /// </summary>
+    /// <param name="statement"></param>
+    /// <param name="name"></param>
+    /// <returns>True if added, false if it was already added.</returns>
+    /// <exception cref="NotImplementedException"></exception>
+    public bool GetOrAddStatementName(in Statement statement, out string name)
+    {
+        lock (_trackedStatements)
+        {
+            if (_trackedStatements.TryGetValue(statement.Id, out name!))
+                return false;
+
+            name = statement.Kind switch
+            {
+                PreparationKind.Auto => $"A${_statementCounter++}",
+                PreparationKind.Command => $"C${_statementCounter++}",
+                PreparationKind.Global => $"G${_statementCounter++}",
+                _ => throw new ArgumentOutOfRangeException()
+            };
+
+            _trackedStatements[statement.Id] = name;
             return true;
         }
     }

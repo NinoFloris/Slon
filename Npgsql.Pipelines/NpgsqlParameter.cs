@@ -2,6 +2,7 @@ using System.Data;
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using Npgsql.Pipelines.Protocol;
+using Npgsql.Pipelines.Protocol.PgV3.Types;
 
 namespace Npgsql.Pipelines;
 
@@ -25,5 +26,5 @@ public class NpgsqlParameter: DbParameter
     public override int Size { get; set; }
 
     internal FormatCode FormatCode { get; }
-    internal Oid Oid { get; }
+    internal Parameter Parameter { get; }
 }

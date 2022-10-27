@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Protocol;
 using Npgsql.Pipelines.Protocol.PgV3;
+using Npgsql.Pipelines.Protocol.PgV3.Commands;
 
 namespace Npgsql.Pipelines;
 
@@ -35,29 +36,25 @@ public sealed partial class NpgsqlDataReader
     readonly Action<NpgsqlDataReader>? _returnAction;
 
     // Will be set during initialization.
-    CommandReader? _commandReader;
-    CommandBatch.Enumerator _commandEnumerator;
+    CommandReader _commandReader = null!;
+    CommandContextBatch.Enumerator _commandEnumerator;
 
     ReaderState _state;
     ulong? _recordsAffected;
 
-    Command GetCurrent() => _commandEnumerator.Current;
-    ValueTask<Operation> GetProtocol() => GetCurrent().GetProtocol();
+    CommandContext GetCurrent() => _commandEnumerator.Current;
+    PgProtocol GetProtocol() => GetCurrent().GetOperation().Result.Protocol;
 
-    internal static async ValueTask<NpgsqlDataReader> Create(bool async, CommandBatch batch, CommandBehavior behavior, TimeSpan commandTimeout, ObjectPool<NpgsqlDataReader>? pool = null, CancellationToken cancellationToken = default)
+    internal static async ValueTask<NpgsqlDataReader> Create(bool async, ValueTask<CommandContextBatch> batch, CommandBehavior behavior, TimeSpan commandTimeout, ObjectPool<NpgsqlDataReader>? pool = null, CancellationToken cancellationToken = default)
     {
-        pool ??= SharedPool;
-        var reader = pool.Rent();
-
         // This is an inlined version of NextResultAsyncCore to save on async overhead.
         CommandReader? commandReader = null;
-        Operation op = default;
         ExceptionDispatchInfo? initException = null;
-        var enumerator = batch.GetEnumerator();
+        var enumerator = (await batch).GetEnumerator();
         try
         {
             enumerator.MoveNext();
-            op = await enumerator.Current.GetProtocol().ConfigureAwait(false);
+            var op = await enumerator.Current.GetOperation().ConfigureAwait(false);
             commandReader = op.Protocol.GetCommandReader();
             // Immediately initialize the first command, we're supposed to be positioned there at the start.
             await commandReader.InitializeAsync(enumerator.Current, cancellationToken).ConfigureAwait(false);
@@ -70,8 +67,7 @@ public sealed partial class NpgsqlDataReader
         if (initException is not null || commandReader is null)
             return await HandleUncommon();
 
-        reader.Initialize(commandReader, enumerator);
-        return reader;
+        return (pool ?? SharedPool).Rent().Initialize(commandReader, enumerator);
 
         async ValueTask<NpgsqlDataReader> HandleUncommon()
         {
@@ -89,17 +85,18 @@ public sealed partial class NpgsqlDataReader
         }
     }
 
-    static ValueTask ConsumeBatch(CommandBatch.Enumerator enumerator, CommandReader? activeReader = null)
+    static ValueTask ConsumeBatch(CommandContextBatch.Enumerator enumerator, CommandReader? activeReader = null)
     {
         return default;
     }
 
-    void Initialize(CommandReader reader, CommandBatch.Enumerator enumerator)
+    NpgsqlDataReader Initialize(CommandReader reader, CommandContextBatch.Enumerator enumerator)
     {
         _state = ReaderState.Active;
         _commandReader = reader;
         _commandEnumerator = enumerator;
         SyncStates();
+        return this;
     }
 
     void SyncStates()
@@ -132,6 +129,7 @@ public sealed partial class NpgsqlDataReader
         }
     }
 
+    // If this changes make sure to expand any inlined checks in Read/ReadAsync etc.
     [MemberNotNull(nameof(_commandReader))]
     Exception? ThrowIfClosedOrDisposed(ReaderState? readerState = null, bool returnException = false)
     {
@@ -149,7 +147,7 @@ public sealed partial class NpgsqlDataReader
         return returnException ? exception : throw exception;
     }
 
-    // Any updates should be reflected in Initialize.
+    // Any changes to this method should be reflected in Create.
     async Task<bool> NextResultAsyncCore(CancellationToken cancellationToken = default)
     {
         if (_state is ReaderState.Exhausted || !_commandEnumerator.MoveNext())
@@ -160,7 +158,7 @@ public sealed partial class NpgsqlDataReader
 
         try
         {
-            await _commandReader!.InitializeAsync(_commandEnumerator.Current, cancellationToken).ConfigureAwait(false);
+            await _commandReader.InitializeAsync(_commandEnumerator.Current, cancellationToken).ConfigureAwait(false);
             return true;
         }
         finally
@@ -185,7 +183,7 @@ public sealed partial class NpgsqlDataReader
         _state = ReaderState.Uninitialized;
 
         ExceptionDispatchInfo? edi = null;
-        var op = GetProtocol();
+        var commandContext = GetCurrent();
         try
         {
             await CloseCore(async, _state).ConfigureAwait(false);
@@ -196,16 +194,14 @@ public sealed partial class NpgsqlDataReader
         }
         finally
         {
-            // _commandReader?.Dispose();
-            // _commandEnumerator.Dispose();
-            // _commandEnumerator = default;
-            // TODO
-            _commandReader = null;
-
+            _commandReader.Reset();
+            _commandEnumerator.Dispose();
+            _commandEnumerator = default;
+            _commandReader = null!;
             _returnAction?.Invoke(this);
         }
         // Do last, sometimes this is followed by a sync continuation of the next op.
-        op.Result.Complete(edi?.SourceException);
+        commandContext.GetOperation().Result.Complete(edi?.SourceException);
         edi?.Throw();
     }
 }
@@ -265,7 +261,7 @@ public sealed partial class NpgsqlDataReader: DbDataReader
     {
         if (_state is ReaderState.Closed or ReaderState.Uninitialized && ThrowIfClosedOrDisposed(returnException: true) is { } ex)
             Task.FromException(ex);
-        return _commandReader!.ReadAsync(cancellationToken);
+        return _commandReader.ReadAsync(cancellationToken);
     }
 
     public override Task<bool> NextResultAsync(CancellationToken cancellationToken)

@@ -1,17 +1,21 @@
 using System;
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Buffers;
+using Npgsql.Pipelines.Protocol.PgV3.Types;
+using Npgsql.Pipelines.Protocol.PgV3.Commands;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
 enum CommandReaderState
 {
-    None = 0,
+    None = default,
     Initialized,
     Active,
     Completed,
@@ -24,7 +28,7 @@ enum CommandReaderState
 enum StatementType
 {
 #pragma warning disable 1591
-    Unknown,
+    Unknown = default,
     Select,
     Insert,
     Delete,
@@ -41,15 +45,26 @@ enum StatementType
 
 class CommandReader
 {
-    Operation _op;
-    RowDescription? _rowDescription;
     CommandReaderState _state;
-    DataRowReader _rowReader;
-    CommandComplete _commandComplete;
-    bool _hasRfq;
+
+    // Set during InitializeAsync.
+    CommandContext _commandContext;
+
+    // Recycled instances.
+    readonly StartCommand _startCommand; // Quite big so it's a class.
+    RowDescription _rowDescription; // Mutable struct, don't make readonly.
+    CommandComplete _commandComplete; // Mutable struct, don't make readonly.
+    DataRowReader _rowReader; // Mutable struct, don't make readonly.
+
+    public CommandReader()
+    {
+        _startCommand = new(this);
+        _rowDescription = new(initialCapacity: 10);
+        _commandComplete = new();
+    }
 
     public CommandReaderState State => _state;
-    public int FieldCount => ThrowIfNotInitialized()._rowDescription?.Fields.Count ?? 0;
+    public int FieldCount => ThrowIfNotInitialized()._startCommand.Fields.Length;
     public bool HasRows => ThrowIfNotInitialized()._rowReader.ResumptionData.IsDefault;
 
     public StatementType StatementType => ThrowIfNotCompleted()._commandComplete.StatementType;
@@ -86,60 +101,74 @@ class CommandReader
         }
     }
 
-    public async ValueTask InitializeAsync(Command command, CancellationToken cancellationToken = default)
+#if !NETSTANDARD2_0
+        [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
+#endif
+    public async ValueTask InitializeAsync(CommandContext commandContext, CancellationToken cancellationToken = default)
     {
-        var op = await command.GetProtocol().ConfigureAwait(false);
-        if (op.IsCompleted)
+        if (_state is not CommandReaderState.None)
+            ThrowNotReset();
+
+        var opTask = commandContext.GetOperation();
+        if (!opTask.IsCompleted)
+            ThrowOpTaskNotCompleted();
+
+        if (opTask.Result.IsCompleted)
             ThrowOpCompleted();
 
-        // TODO if write task is not completed we may want to keep checking its status every x rows.
-
-        _hasRfq = command.CommandInfo.AppendErrorBarrier;
-        try
+        var start = await ReadMessageAsync(_startCommand, cancellationToken, commandContext).ConfigureAwait(false);
+        if (start.TryGetCompleteResult(out var result))
         {
-            _op = op;
-            var protocol = (PgV3Protocol)op.Protocol; // Doing a normal cast once so GetProtocol can do an unsafe cast.
-            _rowDescription = protocol.GetRowDescription();
-            var result = await protocol.ReadMessageAsync(new StartCommand(_rowDescription, _hasRfq), cancellationToken).ConfigureAwait(false);
-            if (result.IsCompleted)
+            Complete(result.CommandComplete);
+            return;
+        }
+
+        if (commandContext.Session?.ExecutionFlags.HasPreparing() == true)
+            commandContext.Session.CompletePreparation(commandContext.Session.Statement! with
             {
-                Reset();
-                Complete(result.CompleteCommand.CommandComplete);
-                return;
-            }
-            _rowReader = new DataRowReader(result.Buffer, result.ResumptionData, _rowDescription);
-            _state = CommandReaderState.Initialized;
-        }
-        catch (Exception ex) when (ex is not TimeoutException && (ex is not OperationCanceledException || ex is OperationCanceledException oce && oce.CancellationToken != cancellationToken))
-        {
-            Complete(null);
-            throw;
-        }
+                Fields = ImmutableArray.Create(_startCommand.Fields.Span),
+            });
 
-        void ThrowOpCompleted() => throw new ArgumentException("Given operation is already completed.", nameof(command));
+        _commandContext = commandContext;
+        _rowReader = new(start.Buffer, start.ResumptionData, _startCommand.Fields);
+        _state = CommandReaderState.Initialized;
+
+        void ThrowOpTaskNotCompleted() => throw new ArgumentException("Operation task on given command context is not completed yet.", nameof(commandContext));
+        void ThrowOpCompleted() => throw new ArgumentException("Operation on given command context is already completed.", nameof(commandContext));
+        void ThrowNotReset() => throw new InvalidOperationException("CommandReader was not reset.");
     }
 
-    PgV3Protocol GetProtocol()
+
+    ValueTask<T> ReadMessageAsync<T>(T message, CancellationToken cancellationToken, in CommandContext? commandContext = null) where T : IBackendMessage<PgV3Header>
     {
-        var protocol = _op.Protocol;
-        return Unsafe.As<PgProtocol, PgV3Protocol>(ref protocol);
+        // https://github.com/dotnet/roslyn/issues/65091
+        if (!commandContext.HasValue)
+            ThrowIfNotInitialized();
+
+        var protocol = (PgV3Protocol)(commandContext ?? _commandContext).GetOperation().Result.Protocol;
+        return Core(this, protocol, message, cancellationToken);
+
+#if !NETSTANDARD2_0
+        [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+#endif
+        static async ValueTask<T> Core(CommandReader instance, PgV3Protocol protocol, T message, CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await protocol.ReadMessageAsync(message, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not TimeoutException && (ex is not OperationCanceledException || ex is OperationCanceledException oce && oce.CancellationToken != cancellationToken))
+            {
+                throw instance.Complete(null, ex);
+            }
+        }
     }
 
     CommandReader ThrowIfNotInitialized()
-    {
-        if (_state is CommandReaderState.None)
-            throw new InvalidOperationException("Command reader wasn't initialized properly, this is a bug.");
-
-        return this;
-    }
+        => _state is CommandReaderState.None ? throw new InvalidOperationException("Command reader wasn't initialized properly, this is a bug.") : this;
 
     CommandReader ThrowIfNotCompleted()
-    {
-        if (_state != CommandReaderState.Completed)
-            throw new InvalidOperationException("Command reader is not successfully completed.");
-
-        return this;
-    }
+        => _state != CommandReaderState.Completed ? throw new InvalidOperationException("Command reader is not successfully completed.") : this;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Task<bool> ReadAsync(CancellationToken cancellationToken = default)
@@ -159,10 +188,9 @@ class CommandReader
                         if (_rowReader.ReadNext(out status))
                             return Task.FromResult(true);
                     }
-                    catch (Exception)
+                    catch (Exception ex)
                     {
-                        Complete(null);
-                        throw;
+                        throw Complete(null, ex);
                     }
                 }
                 else if (_rowReader.ReadNext(out status))
@@ -199,10 +227,9 @@ class CommandReader
                                 if (!first && instance._rowReader.ReadNext(out status))
                                     return true;
                             }
-                            catch (Exception)
+                            catch (Exception ex)
                             {
-                                instance.Complete(null);
-                                throw;
+                                throw instance.Complete(null, ex);
                             }
                         }
                         else if (instance._rowReader.ReadNext(out status))
@@ -240,8 +267,7 @@ class CommandReader
                     instance.ThrowIfNotInitialized();
                     return Task.FromResult(false);
                 default:
-                    instance.Complete(null);
-                    return ThrowArgumentOutOfRange();
+                    return Task.FromException<bool>(instance.Complete(null, new ArgumentOutOfRangeException()));
             }
         }
 
@@ -250,16 +276,8 @@ class CommandReader
 #endif
         static async ValueTask BufferData(CommandReader instance, CancellationToken cancellationToken = default)
         {
-            try
-            {
-                var result = await instance.GetProtocol().ReadMessageAsync(new ExpandBuffer(instance._rowReader.ResumptionData, instance._rowReader.Consumed), cancellationToken).ConfigureAwait(false);
-                instance._rowReader.ExpandBuffer(result.Buffer);
-            }
-            catch (Exception ex) when (ex is not TimeoutException && (ex is not OperationCanceledException || ex is OperationCanceledException oce && oce.CancellationToken != cancellationToken))
-            {
-                instance.Complete(null);
-                throw;
-            }
+            var result = await instance.ReadMessageAsync(new ExpandBuffer(instance._rowReader.ResumptionData, instance._rowReader.Consumed), cancellationToken).ConfigureAwait(false);
+            instance._rowReader.ExpandBuffer(result.Buffer);
         }
 
 #if !NETSTANDARD2_0
@@ -269,52 +287,48 @@ class CommandReader
         {
             if (unexpected)
             {
+                // We don't need to pass an exception, InvalidData kills the connection.
                 instance.Complete(null);
                 return false;
             }
 
-            try
-            {
-                var result =  await instance.GetProtocol().ReadMessageAsync(new CompleteCommand(instance._rowReader.ResumptionData, instance._rowReader.Consumed, instance._hasRfq), cancellationToken).ConfigureAwait(false);
-                instance.Complete(result.CommandComplete);
-                return false;
-            }
-            catch (Exception ex) when (ex is not TimeoutException && (ex is not OperationCanceledException || ex is OperationCanceledException oce && oce.CancellationToken != cancellationToken))
-            {
-                instance.Complete(null);
-                throw;
-            }
+            var result =  await instance.ReadMessageAsync(new CompleteCommand(instance._rowReader.ResumptionData, instance._rowReader.Consumed, instance._commandContext.ExecutionFlags.HasErrorBarrier()), cancellationToken).ConfigureAwait(false);
+            instance.Complete(result.CommandComplete);
+            return false;
         }
 
         static ValueTask HandleAsyncResponse(CommandReader instance, CancellationToken cancellationToken = default)
         {
-            // TODO implement async response.
+            // TODO implement async response, even though technically the protocol as implemented in postgres never mixes async responses and rows (see pg docs).
             throw new NotImplementedException();
         }
 
         static Task<bool> ThrowArgumentOutOfRange() => Task.FromException<bool>(new ArgumentOutOfRangeException());
     }
 
-    void Complete(CommandComplete? commandComplete)
+    [return: NotNullIfNotNull(nameof(ex))]
+    Exception? Complete(CommandComplete? commandComplete, Exception? ex = null)
     {
-        if (commandComplete is null)
+        // https://github.com/dotnet/roslyn/issues/65091
+        if (!commandComplete.HasValue)
         {
-            // TODO needs the exception.
-            var ex = default(Exception);
             _state = CommandReaderState.UnrecoverablyCompleted;
-            _op.Complete(ex);
+            _commandContext.GetOperation().Result.Complete(ex);
         }
         else
         {
             _state = CommandReaderState.Completed;
             _commandComplete = commandComplete.Value;
         }
+
+        return ex;
     }
 
     public void Reset()
     {
         _state = CommandReaderState.None;
-        _rowDescription?.Reset();
+        _startCommand.Reset();
+        _rowDescription.Reset();
         _rowReader = default;
     }
 
@@ -358,11 +372,14 @@ class CommandReader
         }
     }
 
-    struct StartCommand: IPgV3BackendMessage
+    class StartCommand: IPgV3BackendMessage
     {
+        readonly CommandReader _instance;
+
         enum ReadState
         {
-            Parse = default,
+            Unstarted = default,
+            Parse,
             Bind,
             Describe,
             RowDescription,
@@ -372,25 +389,51 @@ class CommandReader
 
         ReadState _state;
         MessageReader<PgV3Header>.ResumptionData _resumptionData;
-        readonly bool _hasRfq;
-        RowDescription _rowDescription;
-        CompleteCommand _completeCommand;
+        ExecutionFlags _flags;
+        CompleteCommand _completeResult;
+        public ReadOnlyMemory<Field> Fields { get; private set; } = ReadOnlyMemory<Field>.Empty;
         public ReadOnlySequence<byte> Buffer { get; private set; }
         public MessageReader<PgV3Header>.ResumptionData ResumptionData => _resumptionData;
-        public RowDescription RowDescription => _rowDescription;
-        public CompleteCommand CompleteCommand => _completeCommand;
-        public bool IsCompleted => _resumptionData.IsDefault;
 
-        public StartCommand(RowDescription rowDescription, bool hasRfq)
+        public bool TryGetCompleteResult(out CompleteCommand result)
         {
-            _rowDescription = rowDescription;
-            _hasRfq = hasRfq;
+            if (_resumptionData.IsDefault)
+            {
+                result = _completeResult;
+                return true;
+            }
+
+            result = default;
+            return false;
+        }
+
+        public StartCommand(CommandReader instance) => _instance = instance;
+
+        public void Reset()
+        {
+            Buffer = default;
+            Fields = ReadOnlyMemory<Field>.Empty;
+            _state = default;
         }
 
         public ReadStatus Read(ref MessageReader<PgV3Header> reader)
         {
             switch (_state)
             {
+                case ReadState.Unstarted:
+                    // We have to read ExecutionFlags *after* the socket read is done and this Read is called.
+                    // As reads don't wait on writes (particularly true for multiplexing).
+                    // Once we can read a response do we know for sure that the value is settled.
+                    var flags = _flags = _instance._commandContext.ExecutionFlags;
+                    if (flags.HasPrepared())
+                    {
+                        // lol
+                        Fields = _instance._commandContext.Session!.Statement!.Fields!.Value.AsMemory();
+                        goto bind;
+                    }
+                    break;
+                case ReadState.Parse:
+                    goto parse;
                 case ReadState.Bind:
                     goto bind;
                 case ReadState.Describe:
@@ -401,8 +444,12 @@ class CommandReader
                     goto rowOrCompletion;
             }
 
+            parse:
             if (!reader.ReadMessage<ParseComplete>(out var status))
+            {
+                _state = ReadState.Parse;
                 return status;
+            }
 
             bind:
             if (!reader.ReadMessage<BindComplete>(out status))
@@ -410,6 +457,9 @@ class CommandReader
                 _state = ReadState.Bind;
                 return status;
             }
+
+            if (_flags.HasPrepared())
+                goto rowOrCompletion;
 
             describe:
             var readerCopy = reader;
@@ -430,11 +480,12 @@ class CommandReader
                     break;
                 default:
                     reader = readerCopy;
-                    if (!reader.ReadMessage(ref _rowDescription, out status))
+                    if (!reader.ReadMessage(ref _instance._rowDescription, out status))
                     {
                         _state = ReadState.RowDescription;
                         return status;
                     }
+                    Fields = _instance._rowDescription.Fields;
                     break;
             }
 
@@ -453,9 +504,9 @@ class CommandReader
                     break;
                 default:
                     if (_state is not ReadState.CommandComplete)
-                        _completeCommand = new CompleteCommand(reader.GetResumptionData(), reader.Consumed, _hasRfq);
+                        _completeResult = new CompleteCommand(reader.GetResumptionData(), reader.Consumed, _flags.HasErrorBarrier());
 
-                    if (!reader.ReadMessage(ref _completeCommand, out status))
+                    if (!reader.ReadMessage(ref _completeResult, out status))
                     {
                         _state = ReadState.CommandComplete;
                         return status;
@@ -518,7 +569,7 @@ class CommandReader
         ReadOnlySequence<byte> _buffer;
         long _bufferLength;
         MessageReader<PgV3Header>.ResumptionData _resumptionData;
-        readonly int _expectedColumnCount;
+        readonly int _expectedFieldCount;
         long _consumed;
         bool _messageNeedsMoreData;
 
@@ -527,12 +578,12 @@ class CommandReader
         public MessageReader<PgV3Header>.ResumptionData ResumptionData => _resumptionData;
         public ReadOnlySequence<byte> Buffer => _buffer;
 
-        public DataRowReader(ReadOnlySequence<byte> buffer, MessageReader<PgV3Header>.ResumptionData resumptionData, RowDescription rowDescription)
+        public DataRowReader(ReadOnlySequence<byte> buffer, MessageReader<PgV3Header>.ResumptionData resumptionData, ReadOnlyMemory<Field> fields)
         {
             _buffer = buffer;
             _bufferLength = buffer.Length;
             _resumptionData = resumptionData;
-            _expectedColumnCount = rowDescription.Fields.Count;
+            _expectedFieldCount = fields.Length;
             _consumed = 0;
         }
 
@@ -615,7 +666,7 @@ class CommandReader
                 return false;
             }
 
-            if (BinaryPrimitives.ReadInt16BigEndian(headerAndColumnCount.Slice(PgV3Header.ByteCount)) != _expectedColumnCount)
+            if (BinaryPrimitives.ReadInt16BigEndian(headerAndColumnCount.Slice(PgV3Header.ByteCount)) != _expectedFieldCount)
                 throw new InvalidDataException("DataRow returned a different number of columns than was expected from the row description.");
 
             status = default;

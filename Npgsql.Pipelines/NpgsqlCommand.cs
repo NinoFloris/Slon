@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Data;
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
@@ -7,21 +7,21 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Protocol;
-using Npgsql.Pipelines.Protocol.PgV3;
+using Npgsql.Pipelines.Protocol.PgV3.Commands;
+using Npgsql.Pipelines.Protocol.PgV3.Types;
 
 namespace Npgsql.Pipelines;
 
 // Implementation
-public sealed partial class NpgsqlCommand: ICommandInfo
+public sealed partial class NpgsqlCommand: ICommand
 {
-    bool _shouldPrepare;
+    bool _preparationRequested;
     object? _dataSourceOrConnection;
-    CommandKind _commandKind = CommandKind.Unprepared;
     CommandType _commandType = CommandType.Text;
     TimeSpan _commandTimeout = NpgsqlDataSourceOptions.DefaultCommandTimeout;
     NpgsqlTransaction? _transaction;
     string? _userCommandText;
-    ValueTask<Operation>? _pendingConnectionOp;
+    ValueTask<CommandContextBatch>? _pendingConnectionOp;
     bool _disposed;
 
     void Constructor(string? commandText, NpgsqlConnection? conn, NpgsqlTransaction? transaction, NpgsqlDataSource? dataSource = null)
@@ -41,14 +41,49 @@ public sealed partial class NpgsqlCommand: ICommandInfo
         }
     }
 
-    CommandKind ICommandInfo.CommandKind => _commandKind;
-    string? ICommandInfo.PreparedStatementName => _shouldPrepare ? Guid.NewGuid().ToString() : null;
-    ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> ICommandInfo.Parameters => new();
-    bool ICommandInfo.AppendErrorBarrier => true;
-    string? ICommandInfo.CommandText => _userCommandText;
+    void SetCommandText(string? value)
+    {
+        _preparationRequested = false;
+        _userCommandText = value;
+    }
+
+    Statement? GetDataSourceStatement()
+    {
+        // TODO consult the datasource statement tracker.
+        return null;
+    }
+
+    ICommand.Values ICommand.GetValues()
+    {
+        ImmutableArray<Parameter> parameterTypes = default;
+
+        var statement = _preparationRequested ? Statement.CreateUnprepared(PreparationKind.Command, parameterTypes) : GetDataSourceStatement();
+        var flags = ExecutionFlags.ErrorBarrier | statement switch
+        {
+            { IsComplete: true } => ExecutionFlags.Prepared,
+            { } => ExecutionFlags.Preparing,
+            _ => ExecutionFlags.Unprepared
+        };
+
+        return new()
+        {
+            Parameters = new(),
+            StatementText = _userCommandText ?? string.Empty,
+            ExecutionFlags = flags,
+            Statement = statement
+        };
+    }
+
+    ICommandSession ICommand.StartSession(in ICommand.Values values)
+    {
+        return new NpgsqlCommandSession(
+            dataSource: TryGetDataSource(out var dataSource) ? dataSource : GetConnection().DbDataSource,
+            values
+        );
+    }
 
     bool ConnectionOpInProgress
-        => _pendingConnectionOp?.IsCompleted == false || _pendingConnectionOp is { IsCompletedSuccessfully: true, Result.IsCompleted: false };
+        => _pendingConnectionOp is { IsCompletedSuccessfully: true, Result.AllCompleted: false };
 
     void ThrowIfDisposed()
     {
@@ -73,22 +108,21 @@ public sealed partial class NpgsqlCommand: ICommandInfo
 
     NpgsqlDataReader ExecuteDataReader(CommandBehavior behavior)
     {
-        // ThrowIfDisposed();
-        // if (TryGetDataSource(out var dataSource))
-        // {
-        //     // Pick a connection and do the write ourselves, connectionless command execution for sync paths :)
-        //     var slot = dataSource.Open(exclusiveUse: false, dataSource.DefaultConnectionTimeout);
-        //     var command = dataSource.WriteCommand(slot, this, behavior);
-        //     return ReaderPool.Rent().Intialize(async: false, command, behavior, _commandTimeout).GetAwaiter().GetResult();
-        // }
-        // else
-        // {
-        //     var command = GetCommandWriter().WriteCommand(allowPipelining: false, this, behavior);
-        //     // Store the active operation to know when it's completed.
-        //     _pendingConnectionOp = command.GetProtocol();
-        //     return ReaderPool.Rent().Intialize(async: false, command, behavior, _commandTimeout).GetAwaiter().GetResult();
-        // }
-        return null!;
+        ThrowIfDisposed();
+        if (TryGetDataSource(out var dataSource))
+        {
+            // Pick a connection and do the write ourselves, connectionless command execution for sync paths :)
+            var slot = dataSource.Open(exclusiveUse: false, dataSource.DefaultConnectionTimeout);
+            var command = dataSource.WriteCommand(slot, this, behavior);
+            return NpgsqlDataReader.Create(async: false, new ValueTask<CommandContextBatch>(CommandContextBatch.Create(command)), behavior, _commandTimeout).GetAwaiter().GetResult();
+        }
+        else
+        {
+            var command = GetCommandWriter().WriteCommand(allowPipelining: false, this, behavior);
+            // Store the active operation to know when it's completed.
+            _pendingConnectionOp = command;
+            return NpgsqlDataReader.Create(async: false, command, behavior, _commandTimeout).GetAwaiter().GetResult();
+        }
     }
 
     ValueTask<NpgsqlDataReader> ExecuteDataReaderAsync(CommandBehavior behavior, CancellationToken cancellationToken)
@@ -97,15 +131,15 @@ public sealed partial class NpgsqlCommand: ICommandInfo
         if (TryGetDataSource(out var dataSource))
         {
             var command = dataSource.WriteMultiplexingCommand(this, behavior, cancellationToken);
-            return NpgsqlDataReader.Create(async: true, CommandBatch.Create(command), behavior, _commandTimeout, null, cancellationToken);
+            return NpgsqlDataReader.Create(async: true, command, behavior, _commandTimeout, null, cancellationToken);
         }
         else
         {
             var command = GetCommandWriter().WriteCommand(allowPipelining: true, this, behavior, cancellationToken);
             // We store the last operation to know when it's completed, as a connection is at most a single
             // pipeline this is sufficient to know whether all previous commands were also completed.
-            _pendingConnectionOp = command.GetProtocol();
-            return NpgsqlDataReader.Create(async: true, CommandBatch.Create(command), behavior, _commandTimeout, null, cancellationToken);
+            _pendingConnectionOp = command;
+            return NpgsqlDataReader.Create(async: true, command, behavior, _commandTimeout, null, cancellationToken);
         }
     }
 
@@ -133,16 +167,16 @@ public sealed partial class NpgsqlCommand: DbCommand
     public override void Prepare()
     {
         ThrowIfDisposed();
-        _shouldPrepare = true;
+        _preparationRequested = true;
     }
 
     [AllowNull]
     public override string CommandText
     {
         get => _userCommandText ?? string.Empty;
-        set => _userCommandText = value;
+        set => SetCommandText(value);
     }
-    // TODO, what time span should CommandTimeout cover? The first read or the entire pipeline + first read (unusued today).
+    // TODO, what time span should CommandTimeout cover? The first read or the entire pipeline + first read (unused today).
     public override int CommandTimeout {
         get => (int)_commandTimeout.TotalSeconds;
         set
@@ -163,34 +197,24 @@ public sealed partial class NpgsqlCommand: DbCommand
         }
     }
 
-    // Literally not used, so it can stay in the ado partial.
-    UpdateRowSource _updateRowSource;
     /// <summary>
+    /// Setting this property is ignored by Npgsql as its values are not respected.
     /// Gets or sets how command results are applied to the DataRow when used by the
     /// DbDataAdapter.Update(DataSet) method.
     /// </summary>
     /// <value>One of the <see cref="System.Data.UpdateRowSource"/> values.</value>
     public override UpdateRowSource UpdatedRowSource
     {
-        get => _updateRowSource;
-        set
-        {
-            if (!EnumShim.IsDefined(value))
-                throw new ArgumentOutOfRangeException();
-            _updateRowSource = value;
-        }
+        get => UpdateRowSource.None;
+        set { }
     }
 
     /// <summary>
-    /// This property is ignored by Npgsql. PostgreSQL only supports a single transaction at a given time on
+    /// Setting this property is ignored by Npgsql. PostgreSQL only supports a single transaction at a given time on
     /// a given connection, and all commands implicitly run inside the current transaction started via
     /// <see cref="NpgsqlConnection.BeginTransaction()"/>
     /// </summary>
-    public new NpgsqlTransaction? Transaction
-    {
-        get => (NpgsqlTransaction?)DbTransaction;
-        set => DbTransaction = value;
-    }
+    public new NpgsqlTransaction? Transaction { get => _transaction; set {} }
 
     public override bool DesignTimeVisible { get; set; }
 
@@ -258,11 +282,7 @@ public sealed partial class NpgsqlCommand: DbCommand
     }
 
     protected override DbParameterCollection DbParameterCollection => throw new NotImplementedException();
-    protected override DbTransaction? DbTransaction
-    {
-        get => _transaction;
-        set => _transaction = (NpgsqlTransaction?)value;
-    }
+    protected override DbTransaction? DbTransaction { get => Transaction; set {} }
 
 #if !NETSTANDARD2_0
     public override ValueTask DisposeAsync()

@@ -1,69 +1,55 @@
 using System;
-using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Threading;
+using System.Threading.Tasks;
+using Npgsql.Pipelines.Protocol.PgV3.Commands;
+using Npgsql.Pipelines.Protocol.PgV3.Types;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
-public enum CommandKind
-{
-    Unprepared,
-    Prepared
-}
-
-interface ICommandInfo
-{
-    public CommandKind CommandKind { get; }
-    public ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> Parameters { get; }
-    public bool AppendErrorBarrier { get; }
-    public string? CommandText { get; }
-    public string? PreparedStatementName { get; }
-}
-
-static class CommandInfoExtensions
-{
-    public static void Validate(this ICommandInfo command)
-    {
-        switch (command.CommandKind)
-        {
-            case CommandKind.Prepared:
-                if (command.PreparedStatementName is null or "")
-                    throw new ArgumentException("PreparedStatementName cannot be null or empty for a prepared command.");
-                break;
-            case CommandKind.Unprepared:
-                if (command.CommandText is null)
-                    throw new ArgumentException("CommandText cannot be null for an unprepared command.");
-                break;
-        }
-    }
-}
-
 class CommandWriter
 {
-    public static IOCompletionPair WriteExtendedAsync(OperationSlot slot, ICommandInfo commandInfo, bool flushHint = true, CancellationToken cancellationToken = default)
+    public static CommandContext WriteExtendedAsync<TCommand>(OperationSlot slot, TCommand command, bool flushHint = true, CancellationToken cancellationToken = default)
+        where TCommand : ICommand
     {
-        commandInfo.Validate();
         if (slot.Protocol is not PgV3Protocol protocol)
             throw new ArgumentException($"Cannot write with a slot for a different protocol type, expected: {nameof(PgV3Protocol)}.", nameof(slot));
 
-        return protocol.WriteMessageBatchAsync(slot, static async (writer, commandInfo, cancellationToken) =>
-        {
-            var portal = string.Empty;
-            switch (commandInfo.CommandKind)
-            {
-                case CommandKind.Prepared:
-                    await writer.WriteMessageAsync(new Bind(portal, commandInfo.Parameters, ResultColumnCodes.CreateOverall(FormatCode.Binary), commandInfo.PreparedStatementName), cancellationToken).ConfigureAwait(false);
-                    await writer.WriteMessageAsync(new Execute(portal), cancellationToken).ConfigureAwait(false);
-                    break;
-                case CommandKind.Unprepared:
-                    await writer.WriteMessageAsync(new Parse(commandInfo.CommandText!, commandInfo.Parameters, commandInfo.PreparedStatementName), cancellationToken).ConfigureAwait(false);
-                    await writer.WriteMessageAsync(new Bind(portal, commandInfo.Parameters, ResultColumnCodes.CreateOverall(FormatCode.Binary), commandInfo.PreparedStatementName), cancellationToken).ConfigureAwait(false);
-                    await writer.WriteMessageAsync(new Describe(DescribeName.CreateForPortal(portal)), cancellationToken).ConfigureAwait(false);
-                    await writer.WriteMessageAsync(new Execute(portal), cancellationToken).ConfigureAwait(false);
-                    break;
-            }
+        var values = command.GetValues();
 
-            if (commandInfo.AppendErrorBarrier)
+        // If we have a statement *and* our connection still has to prepare, do so.
+        ICommandSession? session = null;
+        string? statementName = null;
+        if (values.Statement is not null && protocol.GetOrAddStatementName(values.Statement, out statementName))
+            session = command.StartSession(values);
+
+        return CommandContext.Create(
+            protocol.WriteMessageBatchAsync(slot, Core, (values, statementName), flushHint, cancellationToken),
+            values.ExecutionFlags,
+            session
+        );
+
+#if !NETSTANDARD2_0
+        [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
+#endif
+        static async ValueTask Core(PgV3Protocol.BatchWriter writer, (ICommand.Values, string?) state, CancellationToken cancellationToken)
+        {
+            var (values, statementName) = state;
+            var executionFlags = values.ExecutionFlags;
+            var portal = string.Empty;
+
+            if (executionFlags.HasPreparing())
+                await writer.WriteMessageAsync(new Parse(values.StatementText, values.Parameters, statementName), cancellationToken).ConfigureAwait(false);
+
+            await writer.WriteMessageAsync(new Bind(portal, values.Parameters, ResultColumnCodes.CreateOverall(FormatCode.Binary), statementName), cancellationToken).ConfigureAwait(false);
+
+            if (executionFlags.HasPreparing())
+                await writer.WriteMessageAsync(Describe.CreateForPortal(portal), cancellationToken).ConfigureAwait(false);
+
+            await writer.WriteMessageAsync(new Execute(portal), cancellationToken).ConfigureAwait(false);
+
+            if (executionFlags.HasErrorBarrier())
                 await writer.WriteMessageAsync(new Sync(), cancellationToken).ConfigureAwait(false);
-        }, commandInfo, flushHint, cancellationToken);
+        }
     }
 }

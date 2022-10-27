@@ -5,49 +5,49 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Buffers;
+using Npgsql.Pipelines.Protocol.PgV3.Types;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
 readonly struct ResultColumnCodes
 {
     ResultColumnCodes(FormatCode code) => OverallCode = code;
-    ResultColumnCodes(ArraySegment<FormatCode> codes) => PerColumnCodes = codes;
+    ResultColumnCodes(ReadOnlyMemory<FormatCode> codes) => PerColumnCodes = codes;
 
-    public bool IsOverallCode => PerColumnCodes.Array is null;
-    public bool IsPerColumnCodes => PerColumnCodes.Array is not null;
+    public bool IsOverallCode => PerColumnCodes.IsEmpty;
+    public bool IsPerColumnCodes => !IsOverallCode;
 
     public FormatCode OverallCode { get; }
-    public ArraySegment<FormatCode> PerColumnCodes { get; }
+    public ReadOnlyMemory<FormatCode> PerColumnCodes { get; }
 
-    public static ResultColumnCodes NoColumns => new(new ArraySegment<FormatCode>(Array.Empty<FormatCode>()));
+    public static ResultColumnCodes NoColumns => new(ReadOnlyMemory<FormatCode>.Empty);
     public static ResultColumnCodes CreateOverall(FormatCode code) => new(code);
-    public static ResultColumnCodes CreatePerColumn(ArraySegment<FormatCode> codes) => new(codes);
+    public static ResultColumnCodes CreatePerColumn(ReadOnlyMemory<FormatCode> codes) => new(codes);
 }
 
 readonly struct Bind: IFrontendMessage
 {
     readonly string _portalName;
-    readonly ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> _parameters;
+    readonly ReadOnlyMemory<KeyValuePair<CommandParameter, IParameterWriter>> _parameters;
     readonly FormatCode? _parametersOverallCode;
     readonly ResultColumnCodes _resultColumnCodes;
     readonly string _preparedStatementName;
     readonly int _precomputedMessageLength;
 
-    public Bind(string portalName, ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>> parameters, ResultColumnCodes resultColumnCodes, string? preparedStatementName)
+    public Bind(string portalName, ReadOnlyMemory<KeyValuePair<CommandParameter, IParameterWriter>> parameters, ResultColumnCodes resultColumnCodes, string? preparedStatementName)
     {
-        // See https://github.com/postgres/postgres/blob/a7192326c74da417d024a189da4d33c1bf1b40b6/src/interfaces/libpq/libpq-fe.h#L441
-        if (FrontendMessage.DebugEnabled && _parameters.Count > ushort.MaxValue)
-            throw new InvalidOperationException($"Cannot accept more than ushort.MaxValue ({ushort.MaxValue} parameters.");
+        if (FrontendMessage.DebugEnabled && _parameters.Length > Parameter.Maximum)
+            throw new InvalidOperationException($"Cannot accept more than ushort.MaxValue ({Parameter.Maximum} parameters.");
 
-        if (FrontendMessage.DebugEnabled && _resultColumnCodes.IsPerColumnCodes && _resultColumnCodes.PerColumnCodes.Count > short.MaxValue)
-            throw new InvalidOperationException($"Cannot accept more than short.MaxValue ({short.MaxValue} result columns.");
+        if (FrontendMessage.DebugEnabled && _resultColumnCodes.IsPerColumnCodes && _resultColumnCodes.PerColumnCodes.Length > Parameter.Maximum)
+            throw new InvalidOperationException($"Cannot accept more than short.MaxValue ({Parameter.Maximum} result columns.");
 
         var forall = true;
-        FormatCode? formatCode = _parameters.Array is null ? null : _parameters.Array![0].Key.FormatCode;
-        // Note offset + 1 to start at the second param.
-        for (var i = _parameters.Offset + 1; i < _parameters.Count; i++)
+        FormatCode? formatCode = _parameters.IsEmpty ? null : _parameters.Span[0].Key.FormatCode;
+        // Note i = 1 to start at the second param.
+        for (var i = 1; i < _parameters.Length; i++)
         {
-            if (formatCode != _parameters.Array![i].Key.FormatCode)
+            if (formatCode != _parameters.Span[0].Key.FormatCode)
             {
                 forall = false;
                 break;
@@ -76,17 +76,16 @@ readonly struct Bind: IFrontendMessage
         WriteParameterCodes(ref buffer);
 
         var parameters = _parameters;
-        buffer.WriteUShort((ushort)parameters.Count);
-        if (parameters.Count != 0)
+        buffer.WriteUShort((ushort)parameters.Length);
+        if (!parameters.IsEmpty)
         {
             var lastBuffered = buffer.BufferedBytes;
             var lastCommitted = buffer.BytesCommitted + lastBuffered;
-            for (var i = parameters.Offset; i < parameters.Count; i++)
+            foreach (var (key, value) in _parameters.Span)
             {
-                var p = parameters.Array![i];
-                p.Value.Write(ref buffer, p.Key.FormatCode, p.Key.Value);
+                value.Write(ref buffer, key);
                 if (FrontendMessage.DebugEnabled)
-                    CheckParameterWriterOutput(p.Key.Length, lastBuffered, lastCommitted, buffer);
+                    CheckParameterWriterOutput(key.Length, lastBuffered, lastCommitted, buffer);
 
                 lastCommitted += buffer.BufferedBytes - lastBuffered;
                 lastBuffered = buffer.BufferedBytes;
@@ -107,17 +106,17 @@ readonly struct Bind: IFrontendMessage
         WriteParameterCodes(ref writer.Writer);
 
         var parameters = _parameters;
-        writer.WriteUShort((ushort)parameters.Count);
-        if (parameters.Count != 0)
+        writer.WriteUShort((ushort)parameters.Length);
+        if (!parameters.IsEmpty)
         {
             var lastBuffered = writer.BufferedBytes;
             var lastCommitted = writer.BytesCommitted + lastBuffered;
-            for (var i = parameters.Offset; i < parameters.Count; i++)
+            for (var i = 0; i < _parameters.Span.Length; i++)
             {
-                var p = parameters.Array![i];
-                p.Value.Write(ref writer.Writer, p.Key.FormatCode, p.Key.Value);
+                var (key, value) = _parameters.Span[i];
+                value.Write(ref writer.Writer, key);
                 if (FrontendMessage.DebugEnabled)
-                    CheckParameterWriterOutput(p.Key.Length, lastBuffered, lastCommitted, writer.Writer);
+                    CheckParameterWriterOutput(key.Length, lastBuffered, lastCommitted, writer.Writer);
 
                 // Make sure we don't commit too often, as this requires a memory slice in the pipe
                 // additionally any writer loop may start writing small packets if we let it know certain memory is returned.
@@ -145,16 +144,14 @@ readonly struct Bind: IFrontendMessage
             MessageWriter.GetCStringByteCount(_portalName) +
             MessageWriter.GetCStringByteCount(_preparedStatementName) +
             MessageWriter.ShortByteCount + // Number of parameter codes
-            (_parametersOverallCode is not null ? MessageWriter.ShortByteCount : parameters.Count * MessageWriter.ShortByteCount) +
+            (_parametersOverallCode is not null ? MessageWriter.ShortByteCount : parameters.Length * MessageWriter.ShortByteCount) +
             MessageWriter.ShortByteCount + // Number of parameter values
             (_resultColumnCodes.IsOverallCode
                 ? MessageWriter.ShortByteCount * 2
-                : MessageWriter.ShortByteCount + _resultColumnCodes.PerColumnCodes.Count * MessageWriter.ShortByteCount);
+                : MessageWriter.ShortByteCount + _resultColumnCodes.PerColumnCodes.Length * MessageWriter.ShortByteCount);
 
-        for (var i = parameters.Offset; i < parameters.Count && i < parameters.Array!.Length; i++)
-        {
-            length += parameters.Array[i].Key.Length;
-        }
+        foreach (var (key, _) in _parameters.Span)
+            length += key.Length;
 
         return length;
     }
@@ -173,7 +170,7 @@ readonly struct Bind: IFrontendMessage
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     void WriteParameterCodes<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
     {
-        if (_parameters.Count == 0)
+        if (_parameters.Length == 0)
         {
             buffer.WriteShort(0);
             return;
@@ -186,11 +183,9 @@ readonly struct Bind: IFrontendMessage
         }
         else
         {
-            buffer.WriteShort((short)_parameters.Count);
-            for (var i = _parameters.Offset; i < _parameters.Count; i++)
-            {
-                buffer.WriteShort((short)_parameters.Array![i].Key.FormatCode);
-            }
+            buffer.WriteUShort((ushort)_parameters.Length);
+            foreach (var (key, _) in _parameters.Span)
+                buffer.WriteShort((short)key.FormatCode);
         }
     }
 
@@ -204,11 +199,9 @@ readonly struct Bind: IFrontendMessage
         }
         else
         {
-            buffer.WriteShort((short)_resultColumnCodes.PerColumnCodes.Count);
-            for (var i = _resultColumnCodes.PerColumnCodes.Offset; i < _resultColumnCodes.PerColumnCodes.Count; i++)
-            {
-                buffer.WriteShort((short)_resultColumnCodes.PerColumnCodes.Array![i]);
-            }
+            buffer.WriteShort((short)_resultColumnCodes.PerColumnCodes.Length);
+            foreach (var code in _resultColumnCodes.PerColumnCodes.Span)
+                buffer.WriteShort((short)code);
         }
     }
 }

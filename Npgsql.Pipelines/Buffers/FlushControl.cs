@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.IO.Pipelines;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -103,6 +104,7 @@ class ResettableFlushControl: FlushControl
     public override TimeSpan FlushTimeout { get; }
     public override int FlushThreshold { get; }
     public override CancellationToken TimeoutCancellationToken => _timeoutSource?.Token ?? CancellationToken.None;
+    [MemberNotNullWhen(false, nameof(_timeoutSource))]
     public override bool IsFlushBlocking => _timeoutSource is null;
     public override long UnflushedBytes => _pipeWriter.UnflushedBytes;
 
@@ -110,6 +112,9 @@ class ResettableFlushControl: FlushControl
 
     TimeSpan GetTimeout()
     {
+        if (!IsFlushBlocking)
+            throw new InvalidOperationException("Cannot create a token for a non-blocking implementation.");
+
         if (_start != -1)
         {
             var remaining = _userTimeout - TimeSpan.FromMilliseconds(TickCount64Shim.Get() - _start);
@@ -124,12 +129,15 @@ class ResettableFlushControl: FlushControl
 
     CancellationToken GetToken(CancellationToken cancellationToken)
     {
+        if (IsFlushBlocking)
+            throw new InvalidOperationException("Cannot create a token for a blocking implementation.");
+
         cancellationToken.ThrowIfCancellationRequested();
         var flushTimeout = FlushTimeout;
         if (flushTimeout == default || flushTimeout == Timeout.InfiniteTimeSpan)
             return cancellationToken;
 
-        _timeoutSource!.CancelAfter(flushTimeout);
+        _timeoutSource.CancelAfter(flushTimeout);
         _registration = cancellationToken.UnsafeRegister(static state => ((CancellationTokenSource)state!).Cancel(), _timeoutSource);
         return _timeoutSource.Token;
     }
@@ -142,7 +150,7 @@ class ResettableFlushControl: FlushControl
 
         if (!IsFlushBlocking)
         {
-            _timeoutSource!.CancelAfter(Timeout.Infinite);
+            _timeoutSource.CancelAfter(Timeout.Infinite);
             _registration?.Dispose();
         }
     }
