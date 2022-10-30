@@ -29,7 +29,6 @@ class PgV3Protocol : PgProtocol
     readonly PgV3ProtocolOptions _protocolOptions;
     readonly SimplePipeReader _reader;
     readonly PipeWriter _pipeWriter;
-    readonly IPipeReaderSyncSupport _pipeReader;
 
     readonly ResettableFlushControl _flushControl;
     readonly MessageWriter<IPipeWriterSyncSupport> _defaultMessageWriter;
@@ -41,7 +40,6 @@ class PgV3Protocol : PgProtocol
     readonly PgV3OperationSource _operationSourceSingleton;
     readonly PgV3OperationSource _exclusiveOperationSourceSingleton;
     readonly CommandReader _commandReaderSingleton;
-    readonly RowDescription _rowDescriptionSingleton;
 
     volatile PgProtocolState _state = PgProtocolState.Created;
     volatile bool _disposed;
@@ -54,13 +52,11 @@ class PgV3Protocol : PgProtocol
         _pipeWriter = writer.PipeWriter;
         _flushControl = new ResettableFlushControl(writer, _protocolOptions.WriteTimeout, Math.Max(MessageWriter.DefaultAdvisoryFlushThreshold , _protocolOptions.FlushThreshold));
         _defaultMessageWriter = new MessageWriter<IPipeWriterSyncSupport>(writer, _flushControl);
-        _pipeReader = reader;
         _reader = new SimplePipeReader(reader, _protocolOptions.ReadTimeout);
-        _operations = new();
+        _operations = new Queue<PgV3OperationSource>();
         _operationSourceSingleton = new PgV3OperationSource(this, exclusiveUse: false, pooled: true);
         _exclusiveOperationSourceSingleton = new PgV3OperationSource(this, exclusiveUse: true, pooled: true);
-        _commandReaderSingleton = new();
-        _rowDescriptionSingleton = new();
+        _commandReaderSingleton = new CommandReader();
     }
 
     PgV3Protocol(PipeWriter writer, PipeReader reader, PgV3ProtocolOptions? protocolOptions = null)
@@ -140,7 +136,6 @@ class PgV3Protocol : PgProtocol
 
     // TODO maybe add some ownership transfer logic here, allocating new instances if the singleton isn't back yet.
     public override CommandReader GetCommandReader() => _commandReaderSingleton;
-    public RowDescription GetRowDescription() => _rowDescriptionSingleton;
 
     public IOCompletionPair WriteMessageAsync<T>(OperationSlot slot, T message, CancellationToken cancellationToken = default) where T : IFrontendMessage
         => WriteMessageBatchAsync(slot, (batchWriter, message, cancellationToken) => batchWriter.WriteMessageAsync(message, cancellationToken), message, flushHint: true, cancellationToken);

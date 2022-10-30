@@ -1,8 +1,7 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
-using Npgsql.Pipelines.Protocol.PgV3.Commands;
-using Npgsql.Pipelines.Protocol.PgV3.Types;
+using Npgsql.Pipelines.Protocol.PgV3.Commands; // TODO clean up Statement
 
 namespace Npgsql.Pipelines.Protocol;
 
@@ -23,8 +22,6 @@ static class ExecutionFlagsExtensions
     public static bool HasPreparing(this ExecutionFlags flags) => (flags & ExecutionFlags.Preparing) != 0;
     public static bool HasPrepared(this ExecutionFlags flags) => (flags & ExecutionFlags.Prepared) != 0;
 }
-
-record struct CommandParameter(Parameter Parameter, FormatCode FormatCode, int Length, object Value);
 
 interface IParameterWriter
 {

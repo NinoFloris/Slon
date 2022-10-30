@@ -1,4 +1,3 @@
-using System;
 using Npgsql.Pipelines.Protocol.PgV3.Commands;
 
 namespace Npgsql.Pipelines.Protocol;
@@ -21,6 +20,4 @@ interface ICommandSession
     /// Thrown when <see cref="ICommandSession.ExecutionFlags">ExecutionFlags</see> does not have <see cref="ExecutionFlags.Preparing">Preparing</see> set.
     /// </exception>
     public void CompletePreparation(Statement statement);
-
-    public void SubmitOutputParameters(ReadOnlyMemory<CommandParameter> parameters);
 }

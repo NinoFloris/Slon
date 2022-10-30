@@ -16,7 +16,7 @@ namespace Npgsql.Pipelines;
 public sealed partial class NpgsqlConnection
 {
     NpgsqlDataSource? _dataSource;
-    OperationSlot _operationSlot = null!;
+    OperationSlot? _operationSlot;
     ConnectionState _state;
     Exception? _breakException;
     bool _disposed;
@@ -48,13 +48,20 @@ public sealed partial class NpgsqlConnection
             throw new ObjectDisposedException(nameof(NpgsqlConnection));
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     OperationSlot GetSlotUnsynchronized()
     {
-        if (_disposed || _state is ConnectionState.Broken or not (ConnectionState.Open or ConnectionState.Executing or ConnectionState.Fetching))
-            HandleUncommon();
+        ThrowIfNoSlot();
+        return _operationSlot!;
+    }
 
-        return _operationSlot;
+    [MemberNotNullWhen(true, nameof(SyncObj), nameof(_operationSlot))]
+    bool HasSlot => _operationSlot is not null;
+
+    [MemberNotNull(nameof(SyncObj), nameof(_operationSlot))]
+    void ThrowIfNoSlot()
+    {
+        if (!HasSlot || _disposed || _state is ConnectionState.Broken or not (ConnectionState.Open or ConnectionState.Executing or ConnectionState.Fetching))
+            HandleUncommon();
 
         void HandleUncommon()
         {
@@ -101,6 +108,8 @@ public sealed partial class NpgsqlConnection
 
     void MoveToBroken(Exception? exception = null, ConnectionOperationSource? pendingHead = null)
     {
+        ThrowIfNoSlot();
+
         OperationSlot slot;
         lock (SyncObj)
         {
@@ -126,7 +135,7 @@ public sealed partial class NpgsqlConnection
     async ValueTask CloseCore(bool async)
     {
         // The only time SyncObj (_operationSlot) is null, before the first successful open.
-        if (ReferenceEquals(SyncObj, null))
+        if (!HasSlot)
             return;
 
         OperationSlot slot;
@@ -154,6 +163,7 @@ public sealed partial class NpgsqlConnection
 
         // TODO, if somebody pipelines without reading and then Closes we'll wait forever for the commands to finish as their readers won't get disposed.
         // Probably want a timeout and then force complete them like in broken.
+        // This is important for pool starvation as well as contrary to npgsql we *do* schedule exclusive use operations onto pending/active exclusive use connections.
         if (async)
             await drainingTask;
         else
@@ -166,6 +176,13 @@ public sealed partial class NpgsqlConnection
 
     void MoveToIdle()
     {
+        // First open.
+        if (!HasSlot)
+        {
+            _state = ConnectionState.Open;
+            return;
+        }
+
         lock (SyncObj)
         {
             // No debug assert as completion can often happen in finally blocks, just check here.
@@ -184,10 +201,12 @@ public sealed partial class NpgsqlConnection
         _breakException = null;
     }
 
-    object SyncObj => _operationSlot;
+    object? SyncObj => _operationSlot;
 
     internal void PerformUserCancellation()
     {
+        ThrowIfNoSlot();
+
         var start = TickCount64Shim.Get();
         PgProtocol? protocol;
         SemaphoreSlim? writeLock;
@@ -236,6 +255,8 @@ public sealed partial class NpgsqlConnection
 #endif
         public async ValueTask<CommandContextBatch> WriteCommand(bool allowPipelining, ICommand command, CommandBehavior behavior, CancellationToken cancellationToken = default)
         {
+            _instance.ThrowIfNoSlot();
+
             OperationSlot slot;
             ConnectionOperationSource subSlot;
             lock (_instance.SyncObj)

@@ -43,11 +43,11 @@ readonly struct Bind: IFrontendMessage
             throw new InvalidOperationException($"Cannot accept more than short.MaxValue ({Parameter.Maximum} result columns.");
 
         var forall = true;
-        FormatCode? formatCode = _parameters.IsEmpty ? null : _parameters.Span[0].Key.FormatCode;
+        FormatCode? formatCode = _parameters.IsEmpty ? null : ((PgV3ProtocolParameterType)_parameters.Span[0].Key.Type).FormatCode;
         // Note i = 1 to start at the second param.
         for (var i = 1; i < _parameters.Length; i++)
         {
-            if (formatCode != _parameters.Span[0].Key.FormatCode)
+            if (formatCode != ((PgV3ProtocolParameterType)_parameters.Span[0].Key.Type).FormatCode)
             {
                 forall = false;
                 break;
@@ -84,8 +84,8 @@ readonly struct Bind: IFrontendMessage
             foreach (var (key, value) in _parameters.Span)
             {
                 value.Write(ref buffer, key);
-                if (FrontendMessage.DebugEnabled)
-                    CheckParameterWriterOutput(key.Length, lastBuffered, lastCommitted, buffer);
+                if (FrontendMessage.DebugEnabled && key.PrecomputedLength.HasValue)
+                    CheckParameterWriterOutput(key.PrecomputedLength.Value, lastBuffered, lastCommitted, buffer);
 
                 lastCommitted += buffer.BufferedBytes - lastBuffered;
                 lastBuffered = buffer.BufferedBytes;
@@ -115,8 +115,8 @@ readonly struct Bind: IFrontendMessage
             {
                 var (key, value) = _parameters.Span[i];
                 value.Write(ref writer.Writer, key);
-                if (FrontendMessage.DebugEnabled)
-                    CheckParameterWriterOutput(key.Length, lastBuffered, lastCommitted, writer.Writer);
+                if (FrontendMessage.DebugEnabled && key.PrecomputedLength.HasValue)
+                    CheckParameterWriterOutput(key.PrecomputedLength.Value, lastBuffered, lastCommitted, writer.Writer);
 
                 // Make sure we don't commit too often, as this requires a memory slice in the pipe
                 // additionally any writer loop may start writing small packets if we let it know certain memory is returned.
@@ -151,7 +151,11 @@ readonly struct Bind: IFrontendMessage
                 : MessageWriter.ShortByteCount + _resultColumnCodes.PerColumnCodes.Length * MessageWriter.ShortByteCount);
 
         foreach (var (key, _) in _parameters.Span)
-            length += key.Length;
+        {
+            if (!key.PrecomputedLength.HasValue)
+                throw new InvalidOperationException("Every postgres parameter requires a precomputed length.");
+            length += key.PrecomputedLength.Value;
+        }
 
         return length;
     }
@@ -185,7 +189,7 @@ readonly struct Bind: IFrontendMessage
         {
             buffer.WriteUShort((ushort)_parameters.Length);
             foreach (var (key, _) in _parameters.Span)
-                buffer.WriteShort((short)key.FormatCode);
+                buffer.WriteShort((short)((PgV3ProtocolParameterType)_parameters.Span[0].Key.Type).FormatCode);
         }
     }
 

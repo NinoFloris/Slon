@@ -15,7 +15,7 @@ enum PreparationKind
     Global
 }
 
-// TODO Somehow allow a handle to this to be passed into a npgsqlcommand (maybe just the id in a struct)
+// TODO Somehow allow a handle to this to be passed into a npgsqlcommand (maybe just the id in a struct, or as an object reference)
 record Statement
 {
     [SetsRequiredMembers]

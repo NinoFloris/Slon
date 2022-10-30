@@ -1,4 +1,6 @@
 using System;
+using System.Buffers;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Data;
 using System.Data.Common;
@@ -23,6 +25,7 @@ public sealed partial class NpgsqlCommand: ICommand
     string? _userCommandText;
     ValueTask<CommandContextBatch>? _pendingConnectionOp;
     bool _disposed;
+    NpgsqlParameterCollection? _parameterCollection;
 
     void Constructor(string? commandText, NpgsqlConnection? conn, NpgsqlTransaction? transaction, NpgsqlDataSource? dataSource = null)
     {
@@ -65,13 +68,43 @@ public sealed partial class NpgsqlCommand: ICommand
             _ => ExecutionFlags.Unprepared
         };
 
+        ReadOnlyMemory<KeyValuePair<CommandParameter, IParameterWriter>> parameters;
+        int count;
+        if (_parameterCollection is null || (count = _parameterCollection.Count) == 0)
+            parameters = new();
+        else
+        {
+            var array=  ArrayPool<KeyValuePair<CommandParameter, IParameterWriter>>.Shared.Rent(count);
+            var i = 0;
+            foreach (var p in _parameterCollection.GetFastEnumerator())
+            {
+                // Start session, lookup type info, writer etc.
+                var parameter = ToCommandParameter(p);
+                array[i] = new(parameter, LookupWriter(parameter));
+                i++;
+            }
+
+            parameters = new(array, 0, count);
+        }
+
         return new()
         {
-            Parameters = new(),
+            Parameters = parameters,
             StatementText = _userCommandText ?? string.Empty,
             ExecutionFlags = flags,
             Statement = statement
         };
+
+        CommandParameter ToCommandParameter(KeyValuePair<string, object?> keyValuePair)
+        {
+            throw new NotImplementedException();
+        }
+
+        // Probably want this writer to be a normal class.
+        IParameterWriter LookupWriter(CommandParameter commandParameter)
+        {
+            throw new NotImplementedException();
+        }
     }
 
     ICommandSession ICommand.StartSession(in ICommand.Values values)
@@ -209,6 +242,8 @@ public sealed partial class NpgsqlCommand: DbCommand
         set { }
     }
 
+    public new NpgsqlParameterCollection Parameters => _parameterCollection ??= new();
+
     /// <summary>
     /// Setting this property is ignored by Npgsql. PostgreSQL only supports a single transaction at a given time on
     /// a given connection, and all commands implicitly run inside the current transaction started via
@@ -217,12 +252,6 @@ public sealed partial class NpgsqlCommand: DbCommand
     public new NpgsqlTransaction? Transaction { get => _transaction; set {} }
 
     public override bool DesignTimeVisible { get; set; }
-
-    /// <summary>
-    /// Creates a new instance of a <see cref="NpgsqlParameter"/> object.
-    /// </summary>
-    /// <returns>An <see cref="NpgsqlParameter"/> object.</returns>
-    public new NpgsqlParameter CreateParameter() => new();
 
     public override void Cancel()
     {
@@ -262,7 +291,7 @@ public sealed partial class NpgsqlCommand: DbCommand
     protected override async Task<DbDataReader> ExecuteDbDataReaderAsync(CommandBehavior behavior, CancellationToken cancellationToken)
         => await ExecuteDataReaderAsync(behavior, cancellationToken);
 
-    protected override DbParameter CreateDbParameter() => CreateParameter();
+    protected override DbParameter CreateDbParameter() => NpgsqlDbParameter.Create();
     protected override DbConnection? DbConnection {
         get => _dataSourceOrConnection as NpgsqlConnection;
         set
@@ -281,7 +310,7 @@ public sealed partial class NpgsqlCommand: DbCommand
         }
     }
 
-    protected override DbParameterCollection DbParameterCollection => throw new NotImplementedException();
+    protected override DbParameterCollection DbParameterCollection => Parameters;
     protected override DbTransaction? DbTransaction { get => Transaction; set {} }
 
 #if !NETSTANDARD2_0

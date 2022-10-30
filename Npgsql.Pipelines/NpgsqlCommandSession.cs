@@ -12,8 +12,8 @@ class NpgsqlCommandSession: ICommandSession
     public NpgsqlCommandSession(NpgsqlDataSource dataSource, ICommand.Values values)
     {
         _dataSource = dataSource;
-        ExecutionFlags = values.ExecutionFlags;
         _statement = values.Statement;
+        ExecutionFlags = values.ExecutionFlags;
     }
 
     public Statement? Statement => _statement;
@@ -39,10 +39,5 @@ class NpgsqlCommandSession: ICommandSession
 
         _statement = statement;
         // TODO shuttle completion back to the datasource statement tracker.
-    }
-
-    public void SubmitOutputParameters(ReadOnlyMemory<CommandParameter> parameters)
-    {
-        throw new NotImplementedException();
     }
 }

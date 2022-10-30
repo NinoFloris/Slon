@@ -36,6 +36,6 @@ readonly struct Parse: IFrontendMessage
         buffer.WriteUShort((ushort)_parameters.Length);
 
         foreach (var (key, _) in _parameters.Span)
-            buffer.WriteInt(key.Parameter.Oid);
+            buffer.WriteInt(((PgV3ProtocolParameterType)key.Type).Parameter.Oid);
     }
 }

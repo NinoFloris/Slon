@@ -9,7 +9,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Protocol;
 using Npgsql.Pipelines.Protocol.PgV3;
-using Npgsql.Pipelines.Protocol.PgV3.Commands;
 
 namespace Npgsql.Pipelines;
 
@@ -48,11 +47,13 @@ public sealed partial class NpgsqlDataReader
     internal static async ValueTask<NpgsqlDataReader> Create(bool async, ValueTask<CommandContextBatch> batch, CommandBehavior behavior, TimeSpan commandTimeout, ObjectPool<NpgsqlDataReader>? pool = null, CancellationToken cancellationToken = default)
     {
         // This is an inlined version of NextResultAsyncCore to save on async overhead.
-        CommandReader? commandReader = null;
+        // Either commandReader is null and initException is not null or its always a valid reference.
+        CommandReader commandReader = null!;
         ExceptionDispatchInfo? initException = null;
-        var enumerator = (await batch).GetEnumerator();
+        CommandContextBatch.Enumerator enumerator = default;
         try
         {
+            enumerator = (await batch.ConfigureAwait(false)).GetEnumerator();
             enumerator.MoveNext();
             var op = await enumerator.Current.GetOperation().ConfigureAwait(false);
             commandReader = op.Protocol.GetCommandReader();
@@ -64,12 +65,12 @@ public sealed partial class NpgsqlDataReader
             initException = ExceptionDispatchInfo.Capture(ex);
         }
 
-        if (initException is not null || commandReader is null)
-            return await HandleUncommon();
+        if (initException is not null)
+            return await HandleUncommon(commandReader, initException, enumerator);
 
         return (pool ?? SharedPool).Rent().Initialize(commandReader, enumerator);
 
-        async ValueTask<NpgsqlDataReader> HandleUncommon()
+        static async ValueTask<NpgsqlDataReader> HandleUncommon(CommandReader commandReader, ExceptionDispatchInfo initException, CommandContextBatch.Enumerator enumerator)
         {
             try
             {
@@ -80,13 +81,14 @@ public sealed partial class NpgsqlDataReader
                 // We swallow any remaining exceptions (maybe we want to aggregate though).
             }
             // Does not return.
-            initException?.Throw();
+            initException.Throw();
             return null!;
         }
     }
 
     static ValueTask ConsumeBatch(CommandContextBatch.Enumerator enumerator, CommandReader? activeReader = null)
     {
+        enumerator.Current.GetOperation().Result.Dispose();
         return default;
     }
 

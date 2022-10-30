@@ -29,7 +29,9 @@ public class PgV3ProtocolTests
     public async Task PipeSimpleQueryAsync()
     {
         var dataSource = new NpgsqlDataSource(Options, ProtocolOptions);
-        var command = new NpgsqlCommand("SELECT pg_sleep(2)", new NpgsqlConnection(dataSource));
+        await using var conn = new NpgsqlConnection(dataSource);
+        await conn.OpenAsync();
+        var command = new NpgsqlCommand("SELECT pg_sleep(2)", conn);
         await using var dataReader = await command.ExecuteReaderAsync();
         while (await dataReader.ReadAsync().ConfigureAwait(false))
         {
