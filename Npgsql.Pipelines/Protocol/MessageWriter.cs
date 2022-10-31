@@ -45,27 +45,6 @@ class MessageWriter<T> where T : IBufferWriter<byte>
     public void WriteInt(int value) => _writer.WriteInt(value);
     public void WriteCString(string value) => _writer.WriteCString(value);
 
-    public async ValueTask<FlushResult> WriteHugeCStringAsync(string value, CancellationToken cancellationToken = default)
-    {
-        var offset = 0;
-        Encoder? encoder = null;
-        var writer = Writer;
-        while (offset < value.Length)
-        {
-            WriteChunk();
-            await FlushAsync(cancellationToken);
-        }
-        _writer.WriteByte(0);
-        return await FlushAsync(cancellationToken);
-
-        void WriteChunk()
-        {
-            var span = value.AsSpan().Slice(offset, Math.Min(value.Length - offset, writer.Span.Length));
-            encoder = writer.WriteEncoded(span, PgEncoding.UTF8, encoder);
-            offset += span.Length;
-        }
-    }
-
     public long BufferedBytes => Writer.BufferedBytes;
     public long BytesCommitted => Writer.BytesCommitted;
     public long UnflushedBytes => _flushControl.UnflushedBytes + Writer.BufferedBytes;

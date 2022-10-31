@@ -183,7 +183,7 @@ class ResettableFlushControl: FlushControl
                 {
                     try
                     {
-                        result = await instance._pipeWriter.FlushAsync(instance.GetToken(cancellationToken));
+                        result = await instance._pipeWriter.FlushAsync(instance.GetToken(cancellationToken)).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException ex) when (instance.TimeoutCancellationToken.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
                     {

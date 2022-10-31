@@ -60,12 +60,12 @@ static class StreamExtensions
     {
         if (MemoryMarshal.TryGetArray(buffer, out ArraySegment<byte> array))
         {
-            return await stream.ReadAsync(array.Array!, array.Offset, array.Count, cancellationToken);
+            return await stream.ReadAsync(array.Array!, array.Offset, array.Count, cancellationToken).ConfigureAwait(false);
         }
         else
         {
             var localArray = ArrayPool<byte>.Shared.Rent(buffer.Length);
-            var read = await stream.ReadAsync(localArray, 0, buffer.Length, cancellationToken);
+            var read = await stream.ReadAsync(localArray, 0, buffer.Length, cancellationToken).ConfigureAwait(false);
             localArray.AsSpan(0, read).CopyTo(buffer.Span);
             buffer.Span.CopyTo(localArray);
             ArrayPool<byte>.Shared.Return(localArray);

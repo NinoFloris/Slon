@@ -8,7 +8,6 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Protocol;
-using Npgsql.Pipelines.Protocol.PgV3.Commands;
 
 namespace Npgsql.Pipelines;
 
@@ -165,7 +164,7 @@ public sealed partial class NpgsqlConnection
         // Probably want a timeout and then force complete them like in broken.
         // This is important for pool starvation as well as contrary to npgsql we *do* schedule exclusive use operations onto pending/active exclusive use connections.
         if (async)
-            await drainingTask;
+            await drainingTask.ConfigureAwait(false);
         else
             // TODO we may want a latch to prevent sync and async capabilities (pipelining) mixing like this.
             // Best we can do, this will only happen if somebody closes synchronously while having executed commands asynchronously.
@@ -420,7 +419,7 @@ public sealed partial class NpgsqlConnection
         if (_disposed)
             return;
         _disposed = true;
-        await CloseCore(async);
+        await CloseCore(async).ConfigureAwait(false);;
     }
 
     NpgsqlTransaction BeginTransactionCore(IsolationLevel isolationLevel)
@@ -458,12 +457,12 @@ public sealed partial class NpgsqlConnection
             // In non exclusive cases we already start writing our message as well but we choose not to do so here.
             // One of the reasons would be to be sure the connection is healthy once we transition to Open.
             // If we're still stuck in a pipeline we won't know for sure.
-            await slot.Task;
+            await slot.Task.ConfigureAwait(false);
             MoveToIdle();
         }
         catch
         {
-            await CloseCore(async: true);
+            await CloseCore(async: true).ConfigureAwait(false);
             throw;
         }
     }

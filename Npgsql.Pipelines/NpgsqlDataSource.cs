@@ -118,7 +118,7 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>
 #endif
         static async ValueTask<CommandContextBatch> WriteAsync(NpgsqlDataSource instance, OperationSource source, ICommand.Values values, NpgsqlCommandSession session, CommandBehavior behavior, CancellationToken cancellationToken)
         {
-            await instance._channelWriter.WriteAsync(new MultiplexingCommand(source, values, session, cancellationToken), cancellationToken);
+            await instance._channelWriter.WriteAsync(new MultiplexingCommand(source, values, session, cancellationToken), cancellationToken).ConfigureAwait(false);
             return CommandContextBatch.Create(CommandContext.Create(
                 new IOCompletionPair(new ValueTask<WriteResult>(WriteResult.Unknown), source.Task),
                 values.ExecutionFlags,
@@ -204,7 +204,7 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>
                 // Bind slot.
                 try
                 {
-                    await connectionSource.BindAsync(command.Source, options.ConnectionTimeout, command.CancellationToken);
+                    await connectionSource.BindAsync(command.Source, options.ConnectionTimeout, command.CancellationToken).ConfigureAwait(false);
                     protocol = (PgV3Protocol)command.Source.Protocol!;
                 }
                 catch (Exception ex)
@@ -253,8 +253,8 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>
         {
             try
             {
-                await writeTask;
-                await protocol.FlushAsync();
+                await writeTask.ConfigureAwait(false);
+                await protocol.FlushAsync().ConfigureAwait(false);
             }
             catch (Exception ex)
             {

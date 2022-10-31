@@ -181,7 +181,8 @@ public sealed partial class NpgsqlCommand: ICommand
         if (_disposed)
             return;
         _disposed = true;
-        await new ValueTask();
+        // TODO
+        await new ValueTask().ConfigureAwait(false);
     }
 }
 

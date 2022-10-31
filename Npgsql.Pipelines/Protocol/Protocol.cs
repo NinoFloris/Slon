@@ -242,9 +242,9 @@ readonly struct IOCompletionPair
 #endif
         static async ValueTask<Operation> Core(IOCompletionPair instance)
         {
-            await Task.WhenAny(instance.Write.AsTask(), instance.Read.AsTask());
+            await Task.WhenAny(instance.Write.AsTask(), instance.Read.AsTask()).ConfigureAwait(false);
             if (instance.Write.IsCompletedSuccessfully || (!instance.Write.IsCompleted && instance.Read.IsCompleted))
-                return await instance.Read;
+                return await instance.Read.ConfigureAwait(false);
 
             if (instance.Write.IsFaulted || instance.Write.IsCanceled)
             {

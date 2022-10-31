@@ -81,7 +81,7 @@ sealed class SimplePipeReader
         }
         try
         {
-            var result = await _reader.ReadAtLeastAsync(minimumsize, cancellationToken);
+            var result = await _reader.ReadAtLeastAsync(minimumsize, cancellationToken).ConfigureAwait(false);
             HandleReadResult(result, minimumsize);
             return result.Buffer;
         }

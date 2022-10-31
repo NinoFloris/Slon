@@ -163,7 +163,7 @@ class ConnectionSource<T>: IDisposable where T : PgProtocol
         }
         try
         {
-            conn = await (async ? _factory.CreateAsync(cancellationToken) : new ValueTask<T>(_factory.Create(timeout)));
+            conn = await (async ? _factory.CreateAsync(cancellationToken) : new ValueTask<T>(_factory.Create(timeout))).ConfigureAwait(false);
         }
         catch (OperationCanceledException ex) when (timeoutSource?.Token.IsCancellationRequested == true && !cancellationToken.IsCancellationRequested)
         {
@@ -239,7 +239,7 @@ class ConnectionSource<T>: IDisposable where T : PgProtocol
 #endif
         static async ValueTask OpenConnectionIgnoreResult(ConnectionSource<T> instance, int slotIndex, bool exclusiveUse, bool async, OperationSlot? slot, TimeSpan connectionTimeout, CancellationToken cancellationToken)
         {
-            await instance.OpenConnection(slotIndex, exclusiveUse, async, slot, connectionTimeout, cancellationToken);
+            await instance.OpenConnection(slotIndex, exclusiveUse, async, slot, connectionTimeout, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -258,7 +258,7 @@ class ConnectionSource<T>: IDisposable where T : PgProtocol
                 {
                     try
                     {
-                        await conn.CompleteAsync();
+                        await conn.CompleteAsync().ConfigureAwait(false);
                         conn.Dispose();
                     }
                     catch

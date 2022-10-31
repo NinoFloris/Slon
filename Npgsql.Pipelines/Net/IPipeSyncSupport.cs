@@ -39,7 +39,7 @@ sealed class PipeWriterUnflushedBytes: PipeWriter
 
     public override async ValueTask<FlushResult> FlushAsync(CancellationToken cancellationToken = default)
     {
-        var result = await _pipeWriter.FlushAsync(cancellationToken);
+        var result = await _pipeWriter.FlushAsync(cancellationToken).ConfigureAwait(false);
         _bytesBuffered = 0;
         return result;
     }

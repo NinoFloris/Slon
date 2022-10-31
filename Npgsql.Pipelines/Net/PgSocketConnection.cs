@@ -111,7 +111,7 @@ sealed class PgPipeConnection: PgSocketConnection, IDisposable
     public static async ValueTask<PgPipeConnection> ConnectAsync(EndPoint endPoint, CancellationToken cancellationToken = default)
     {
         var socket = CreateUnconnectedSocket(endPoint);
-        await socket.ConnectAsync(endPoint, cancellationToken);
+        await socket.ConnectAsync(endPoint, cancellationToken).ConfigureAwait(false);
         var sendOptions = new PipeOptions(DefaultSendPipeOptions.Pool, PipeScheduler.ThreadPool, new IOQueue(), DefaultSendPipeOptions.PauseWriterThreshold, DefaultSendPipeOptions.ResumeWriterThreshold, DefaultSendPipeOptions.MinimumSegmentSize);
         return new(SocketConnection.Create(socket, sendOptions, DefaultReceivePipeOptions));
     }
@@ -141,7 +141,7 @@ sealed class PgStreamConnection : PgSocketConnection, IDisposable, IAsyncDisposa
     public static async ValueTask<PgStreamConnection> ConnectAsync(EndPoint endPoint, CancellationToken cancellationToken = default)
     {
         var socket = CreateUnconnectedSocket(endPoint);
-        await socket.ConnectAsync(endPoint, cancellationToken);
+        await socket.ConnectAsync(endPoint, cancellationToken).ConfigureAwait(false);
         var stream = new SealedNetworkStream(socket, ownsSocket: true);
         return new PgStreamConnection(stream);
     }
@@ -186,10 +186,10 @@ sealed class PgStreamConnection : PgSocketConnection, IDisposable, IAsyncDisposa
 
     public async ValueTask DisposeAsync()
     {
-        await Reader.PipeReader.CompleteAsync();
-        await Writer.PipeWriter.CompleteAsync();
+        await Reader.PipeReader.CompleteAsync().ConfigureAwait(false);
+        await Writer.PipeWriter.CompleteAsync().ConfigureAwait(false);
 #if !NETSTANDARD2_0
-        await _stream.DisposeAsync();
+        await _stream.DisposeAsync().ConfigureAwait(false);
 #else
         _stream.Dispose();
 #endif

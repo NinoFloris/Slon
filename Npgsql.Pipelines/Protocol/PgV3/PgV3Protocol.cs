@@ -108,12 +108,12 @@ class PgV3Protocol : PgProtocol
             return;
 
         if (op is null && !_messageWriteLock.Wait(0))
-            await _messageWriteLock.WaitAsync(cancellationToken);
+            await _messageWriteLock.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         _flushControl.Initialize();
         try
         {
-            await _flushControl.FlushAsync(observeFlushThreshold: false, cancellationToken: cancellationToken);
+            await _flushControl.FlushAsync(observeFlushThreshold: false, cancellationToken: cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not TimeoutException && (ex is not OperationCanceledException || ex is OperationCanceledException oce && oce.CancellationToken != cancellationToken))
         {
@@ -166,7 +166,7 @@ class PgV3Protocol : PgProtocol
 #endif
         static async ValueTask<WriteResult> Core(PgV3Protocol instance, PgV3OperationSource source, Func<BatchWriter, TState, CancellationToken, ValueTask> batchWriter, TState state, bool flushHint = true, CancellationToken cancellationToken = default)
         {
-            await source.WriteSlot;
+            await source.WriteSlot.ConfigureAwait(false);
 
             instance._flushControl.Initialize();
             try
@@ -440,7 +440,7 @@ class PgV3Protocol : PgProtocol
             do
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var buffer = await protocol._reader.ReadAtLeastAsync(ComputeMinimumSize(consumed, resumptionData, protocol._protocolOptions.MaximumMessageChunkSize), cancellationToken);
+                var buffer = await protocol._reader.ReadAtLeastAsync(ComputeMinimumSize(consumed, resumptionData, protocol._protocolOptions.MaximumMessageChunkSize), cancellationToken).ConfigureAwait(false);
 
                 try
                 {
@@ -469,7 +469,7 @@ class PgV3Protocol : PgProtocol
                     case ReadStatus.AsyncResponse:
                         protocol._reader.Advance(consumed);
                         consumed = 0;
-                        await HandleAsyncResponse(buffer, ref resumptionData, ref consumed);
+                        await HandleAsyncResponse(buffer, ref resumptionData, ref consumed).ConfigureAwait(false);
                         break;
                 }
 
@@ -510,7 +510,7 @@ class PgV3Protocol : PgProtocol
     {
         try
         {
-            await conn.WriteInternalAsync(new StartupRequest(options));
+            await conn.WriteInternalAsync(new StartupRequest(options)).ConfigureAwait(false);
             var msg = await conn.ReadMessageAsync(new AuthenticationRequest()).ConfigureAwait(false);
             switch (msg.AuthenticationType)
             {
@@ -520,7 +520,7 @@ class PgV3Protocol : PgProtocol
                 case AuthenticationType.MD5Password:
                     if (options.Password is null)
                         throw new InvalidOperationException("No password given, connection expects password.");
-                    await conn.WriteInternalAsync(new PasswordMessage(options.Username, options.Password, msg.MD5Salt));
+                    await conn.WriteInternalAsync(new PasswordMessage(options.Username, options.Password, msg.MD5Salt)).ConfigureAwait(false);
                     var expectOk = await conn.ReadMessageAsync(new AuthenticationRequest()).ConfigureAwait(false);
                     if (expectOk.AuthenticationType != AuthenticationType.Ok)
                         throw new Exception("Unexpected authentication response");
@@ -718,7 +718,7 @@ class PgV3Protocol : PgProtocol
         try
         {
             if (source is not null)
-                await source.Task.AsTask().WaitAsync(cancellationToken);
+                await source.Task.AsTask().WaitAsync(cancellationToken).ConfigureAwait(false);
         }
         catch(Exception ex)
         {

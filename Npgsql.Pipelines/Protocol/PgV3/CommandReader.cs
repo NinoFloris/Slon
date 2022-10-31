@@ -252,7 +252,7 @@ class CommandReader
                         }
                     }
                 default:
-                    return await HandleUncommon(instance);
+                    return await HandleUncommon(instance).ConfigureAwait(false);
             }
         }
 

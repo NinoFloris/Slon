@@ -38,14 +38,14 @@ static class FrontendMessage {
             {
                 if (read > 7 * 1024)
                     writer.Writer.Ensure(8 * 1024);
-                read = await _stream.ReadAsync(writer.Writer.Memory, cancellationToken);
+                read = await _stream.ReadAsync(writer.Writer.Memory, cancellationToken).ConfigureAwait(false);
                 writer.Writer.Advance(read);
                 if (read > writer.AdvisoryFlushThreshold)
-                    flushResult = await writer.FlushAsync(cancellationToken);
+                    flushResult = await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
             } while (read != 0);
 
             if (writer.UnflushedBytes != 0)
-                flushResult = await writer.FlushAsync(cancellationToken);
+                flushResult = await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
 
             return flushResult;
         }

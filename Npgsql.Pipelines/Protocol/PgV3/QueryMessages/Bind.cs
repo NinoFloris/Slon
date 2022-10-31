@@ -122,7 +122,7 @@ readonly struct Bind: IFrontendMessage
                 // additionally any writer loop may start writing small packets if we let it know certain memory is returned.
                 if (writer.BufferedBytes > writer.AdvisoryFlushThreshold)
                 {
-                    var result = await writer.FlushAsync(cancellationToken);
+                    var result = await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
                     if (result.IsCanceled || result.IsCompleted) return result;
                     lastCommitted = writer.BytesCommitted;
                     lastBuffered = 0;
