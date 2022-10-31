@@ -400,5 +400,3 @@ internal sealed class MemoryBufferWriter : Stream, IBufferWriter<byte>, ICopyabl
         }
     }
 }
-
-

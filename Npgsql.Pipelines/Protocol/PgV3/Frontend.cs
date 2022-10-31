@@ -78,4 +78,3 @@ sealed class PgV3ProtocolParameterType: ProtocolParameterType
     public Parameter Parameter { get; }
     public FormatCode FormatCode { get => IsBinary ? FormatCode.Binary : FormatCode.Text; }
 }
-

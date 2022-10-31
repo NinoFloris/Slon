@@ -30,7 +30,7 @@ abstract record PgKind(PgKind.Cases Tag)
         public static Simple Instance => new();
     }
 
-    public sealed record Enum(ImmutableArray<string> Variants) : PgKind(Cases.Enum);
+    public sealed record Enum(StructuralArray<string> Variants) : PgKind(Cases.Enum);
     public sealed record Pseudo() : PgKind(Cases.Pseudo)
     {
         public static Pseudo Instance => new();
@@ -42,7 +42,7 @@ abstract record PgKind(PgKind.Cases Tag)
     public sealed record Domain(PgType UnderlyingType) : PgKind(Cases.Domain);
 
     // TODO this should host field info
-    public sealed record Composite(ImmutableArray<PgType> Fields) : PgKind(Cases.Composite);
+    public sealed record Composite(StructuralArray<PgType> Fields) : PgKind(Cases.Composite);
 }
 
 readonly record struct PgType(Oid Oid, string Schema, PgKind Kind)
@@ -50,4 +50,3 @@ readonly record struct PgType(Oid Oid, string Schema, PgKind Kind)
     const string TypeCatalogSchema = "pg_catalog";
     public static PgType Unknown = new(Oid.Unknown, TypeCatalogSchema, PgKind.Pseudo.Instance);
 }
-

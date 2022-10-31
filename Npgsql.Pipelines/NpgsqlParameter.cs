@@ -172,4 +172,3 @@ public sealed class NpgsqlParameter<T> : NpgsqlDbParameter, IDbDataParameter<T>
         }
     }
 }
-

@@ -664,4 +664,3 @@ public sealed class NpgsqlParameterCollection : DbParameterCollection, IEnumerab
     public NpgsqlDbParameter[] ToArray() => System.Linq.Enumerable.ToArray<NpgsqlDbParameter>(this);
 
 }
-
