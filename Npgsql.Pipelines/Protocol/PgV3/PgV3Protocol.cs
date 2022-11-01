@@ -144,15 +144,25 @@ class PgV3Protocol : PgProtocol
 
     public readonly struct BatchWriter
     {
-        readonly PgV3Protocol _protocol;
-        internal BatchWriter(PgV3Protocol protocol) => _protocol = protocol;
+        readonly PgV3Protocol _instance;
+        internal BatchWriter(PgV3Protocol instance) => _instance = instance;
 
         public ValueTask WriteMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IFrontendMessage
-            => WriteMessageUnsynchronized(_protocol._defaultMessageWriter, message, cancellationToken);
+        {
+            // Initialize it 'just-in-time'.
+            if(!_instance._flushControl.IsInitialized && message is IStreamingFrontendMessage)
+                _instance._flushControl.Initialize();
+            return WriteMessageUnsynchronized(_instance._defaultMessageWriter, message, cancellationToken);
+        }
 
-        public long UnflushedBytes => _protocol._defaultMessageWriter.UnflushedBytes;
+        public long UnflushedBytes => _instance._defaultMessageWriter.UnflushedBytes;
+
         public ValueTask<FlushResult> FlushAsync(bool observeFlushThreshold = true, CancellationToken cancellationToken = default)
-            => _protocol._flushControl.FlushAsync(observeFlushThreshold, cancellationToken: cancellationToken);
+        {
+            if(!_instance._flushControl.IsInitialized)
+                _instance._flushControl.FlushAsync(observeFlushThreshold, cancellationToken: cancellationToken);
+            return new ValueTask<FlushResult>(new FlushResult(isCompleted: false, isCanceled: false));
+        }
     }
 
     public IOCompletionPair WriteMessageBatchAsync<TState>(OperationSlot slot, Func<BatchWriter, TState, CancellationToken, ValueTask> batchWriter, TState state, bool flushHint = true, CancellationToken cancellationToken = default)
@@ -170,7 +180,6 @@ class PgV3Protocol : PgProtocol
             if (!source.WriteSlot.IsCompletedSuccessfully)
                 await source.WriteSlot.ConfigureAwait(false);
 
-            instance._flushControl.Initialize();
             try
             {
                 var writeTask = batchWriter.Invoke(new BatchWriter(instance), state, cancellationToken);
@@ -179,7 +188,11 @@ class PgV3Protocol : PgProtocol
                 if (instance._flushControl.WriterCompleted)
                     instance.MoveToComplete();
                 else if (flushHint && instance._flushControl.UnflushedBytes > 0)
+                {
+                    if (!instance._flushControl.IsInitialized)
+                        instance._flushControl.Initialize();
                     await instance._defaultMessageWriter.FlushAsync(observeFlushThreshold: false, cancellationToken).ConfigureAwait(false);
+                }
 
                 return new WriteResult(instance._defaultMessageWriter.BytesCommitted);
             }

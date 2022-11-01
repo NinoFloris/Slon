@@ -80,7 +80,9 @@ abstract class FlushControl: IDisposable
     protected void ThrowIfDisposed()
     {
         if (_disposed)
-            throw new ObjectDisposedException("FlushControl");
+            ThrowObjectDisposed();
+
+        static void ThrowObjectDisposed() => throw new ObjectDisposedException("FlushControl");
     }
 }
 
@@ -203,17 +205,19 @@ class ResettableFlushControl: FlushControl
     internal void InitializeAsBlocking(TimeSpan timeout)
     {
         ThrowIfDisposed();
-        if (_start != -2)
+        if (IsInitialized)
             throw new InvalidOperationException("Initialize called before Reset, concurrent use is not supported.");
 
         _start = _userTimeout.Ticks <= 0 ? -1 : TickCount64Shim.Get();
         _userTimeout = timeout;
     }
 
+    internal bool IsInitialized => _start != -2;
+
     internal void Initialize()
     {
         ThrowIfDisposed();
-        if (_start != -2)
+        if (IsInitialized)
             throw new InvalidOperationException("Initialize called before Reset, concurrent use is not supported.");
 
         _start = -1;
@@ -227,6 +231,9 @@ class ResettableFlushControl: FlushControl
         ThrowIfDisposed();
         if (WriterCompleted)
             ThrowWriterCompleted();
+        if (!IsInitialized)
+            return;
+
         _start = -2;
         if (_timeoutSource is not null)
         {
