@@ -4,8 +4,8 @@ namespace Npgsql.Pipelines.Protocol.PgV3;
 
 readonly struct Describe: IFrontendMessage
 {
-    string _name { get; }
-    bool _isPortalName { get; }
+    readonly string _name;
+    readonly bool _isPortalName;
 
     Describe(string name, bool isPortalName)
     {
@@ -16,15 +16,30 @@ readonly struct Describe: IFrontendMessage
     public bool CanWrite => true;
     public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
     {
-        PgV3FrontendHeader.Create(FrontendCode.Describe, MessageWriter.ByteByteCount + MessageWriter.GetCStringByteCount(_name)).Write(ref buffer);
-        buffer.WriteByte((byte)(_isPortalName ? StatementOrPortal.Portal : StatementOrPortal.Statement));
-        buffer.WriteCString(_name);
+        if (_isPortalName)
+            WriteForPortal(ref buffer, _name);
+        else
+            WriteForPreparedStatement(ref buffer, _name);
     }
 
     enum StatementOrPortal : byte
     {
         Statement = (byte)'S',
         Portal = (byte)'P'
+    }
+
+    public static void WriteForPreparedStatement<T>(ref BufferWriter<T> buffer, string preparedStatementName) where T : IBufferWriter<byte>
+    {
+        PgV3FrontendHeader.WriteHeader(ref buffer, FrontendCode.Describe, MessageWriter.ByteByteCount + MessageWriter.GetCStringByteCount(preparedStatementName));
+        buffer.WriteByte((byte)StatementOrPortal.Statement);
+        buffer.WriteCString(preparedStatementName);
+    }
+
+    public static void WriteForPortal<T>(ref BufferWriter<T> buffer, string portalName) where T : IBufferWriter<byte>
+    {
+        PgV3FrontendHeader.WriteHeader(ref buffer, FrontendCode.Describe, MessageWriter.ByteByteCount + MessageWriter.GetCStringByteCount(portalName));
+        buffer.WriteByte((byte)StatementOrPortal.Portal);
+        buffer.WriteCString(portalName);
     }
 
     public static Describe CreateForPreparedStatement(string preparedStatementName) => new(preparedStatementName, false);

@@ -45,11 +45,17 @@ struct PgV3FrontendHeader: IFrontendHeader<PgV3FrontendHeader>
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public readonly void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
+        => WriteHeader(ref buffer, _code, _length);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void WriteHeader<T>(ref BufferWriter<T> buffer, FrontendCode code, int length) where T : IBufferWriter<byte>
     {
-        buffer.WriteByte((byte)_code);
-        buffer.WriteInt(_length + sizeof(int));
+        if (length < 0)
+            ThrowArgumentOutOfRange();
+
+        buffer.WriteByte((byte)code);
+        buffer.WriteInt(length + sizeof(int));
     }
 
     public static PgV3FrontendHeader Create(FrontendCode code, int length)
@@ -58,9 +64,8 @@ struct PgV3FrontendHeader: IFrontendHeader<PgV3FrontendHeader>
             ThrowArgumentOutOfRange();
 
         return new PgV3FrontendHeader(code, length);
-
-        void ThrowArgumentOutOfRange() => throw new ArgumentOutOfRangeException(nameof(length), "Length cannot be negative");
     }
+    static void ThrowArgumentOutOfRange() => throw new ArgumentOutOfRangeException("length", "Length cannot be negative");
 }
 
 sealed class PgV3ProtocolParameterType: ProtocolParameterType

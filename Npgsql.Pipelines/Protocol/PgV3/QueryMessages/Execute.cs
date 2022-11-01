@@ -15,9 +15,12 @@ readonly struct Execute: IFrontendMessage
 
     public bool CanWrite => true;
     public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
+        => WriteMessage(ref buffer, _portalName, _rowCountLimit);
+
+    public static void WriteMessage<T>(ref BufferWriter<T> buffer, string portalName, int rowCountLimit = 0) where T : IBufferWriter<byte>
     {
-        PgV3FrontendHeader.Create(FrontendCode.Execute, MessageWriter.GetCStringByteCount(_portalName) + MessageWriter.IntByteCount).Write(ref buffer);
-        buffer.WriteCString(_portalName);
-        buffer.WriteInt(_rowCountLimit);
+        PgV3FrontendHeader.WriteHeader(ref buffer, FrontendCode.Execute, MessageWriter.GetCStringByteCount(portalName) + MessageWriter.IntByteCount);
+        buffer.WriteCString(portalName);
+        buffer.WriteInt(rowCountLimit);
     }
 }

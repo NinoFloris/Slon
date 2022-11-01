@@ -101,7 +101,9 @@ abstract class OperationSource: OperationSlot
     protected void BindCore(PgProtocol protocol)
     {
         if (Interlocked.CompareExchange(ref _protocol, protocol, null) != null)
-            throw new InvalidOperationException("Already bound.");
+            ThrowAlreadyBound();
+
+        static void ThrowAlreadyBound() => throw new InvalidOperationException("Slot was already bound.");
     }
 
     protected void AddCancellation(CancellationToken cancellationToken)
@@ -148,9 +150,9 @@ abstract class OperationSource: OperationSlot
     }
 
     [MemberNotNullWhen(true, nameof(_protocol))]
-    public override bool IsCompleted => (_state & OperationSourceFlags.Completed) != 0;
-    public override PgProtocol? Protocol => IsCompleted ? null : _protocol;
-    public override ValueTask<Operation> Task => new(_tcs.Task);
+    public sealed override bool IsCompleted => (_state & OperationSourceFlags.Completed) != 0;
+    public sealed override PgProtocol? Protocol => IsCompleted ? null : _protocol;
+    public sealed override ValueTask<Operation> Task => new(_tcs.Task);
 
     // Slot can already be completed due to cancellation.
     public bool TryComplete(Exception? exception = null)

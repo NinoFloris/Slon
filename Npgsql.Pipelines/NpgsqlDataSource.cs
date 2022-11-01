@@ -101,27 +101,26 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>
     internal ValueTask<CommandContextBatch> WriteMultiplexingCommand(NpgsqlCommand command, CommandBehavior behavior, CancellationToken cancellationToken = default)
     {
         var source = PgV3Protocol.CreateUnboundOperationSource(cancellationToken);
-        var values = ((ICommand)command).GetValues();
-        // TODO these can probably best be pooled.
-        var session = new NpgsqlCommandSession(this, values);
-        if (_channelWriter.TryWrite(new MultiplexingCommand(source, values, session, cancellationToken)))
+        // TODO these commands can probably best be pooled.
+        var session = new MultiplexingCommand(this, source, ((ICommand)command).GetValues(), cancellationToken);
+        if (_channelWriter.TryWrite(session))
             return new ValueTask<CommandContextBatch>(CommandContextBatch.Create(CommandContext.Create(
                 new IOCompletionPair(new ValueTask<WriteResult>(WriteResult.Unknown), source.Task),
-                values.ExecutionFlags,
+                session.ExecutionFlags,
                 session
             )));
 
-        return WriteAsync(this, source, values, session, behavior, cancellationToken);
+        return WriteAsync(this, session, behavior, cancellationToken);
 
 #if !NETSTANDARD2_0
         [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
 #endif
-        static async ValueTask<CommandContextBatch> WriteAsync(NpgsqlDataSource instance, OperationSource source, ICommand.Values values, NpgsqlCommandSession session, CommandBehavior behavior, CancellationToken cancellationToken)
+        static async ValueTask<CommandContextBatch> WriteAsync(NpgsqlDataSource instance, MultiplexingCommand session, CommandBehavior behavior, CancellationToken cancellationToken)
         {
-            await instance._channelWriter.WriteAsync(new MultiplexingCommand(source, values, session, cancellationToken), cancellationToken).ConfigureAwait(false);
+            await instance._channelWriter.WriteAsync(session, cancellationToken).ConfigureAwait(false);
             return CommandContextBatch.Create(CommandContext.Create(
-                new IOCompletionPair(new ValueTask<WriteResult>(WriteResult.Unknown), source.Task),
-                values.ExecutionFlags,
+                new IOCompletionPair(new ValueTask<WriteResult>(WriteResult.Unknown), session.Source.Task),
+                session.ExecutionFlags,
                 session
             ));
         }
@@ -184,10 +183,23 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>
         _channelWriter.Complete();
     }
 
-    readonly record struct MultiplexingCommand(OperationSource Source, ICommand.Values Values, NpgsqlCommandSession Session, CancellationToken CancellationToken): ICommand
+    sealed class MultiplexingCommand: NpgsqlCommandSession, ICommand
     {
-        public ICommand.Values GetValues() => Values;
-        public ICommandSession StartSession(in ICommand.Values parameters) => Session;
+        readonly ICommand.Values _values;
+
+        public MultiplexingCommand(NpgsqlDataSource instance, OperationSource source, ICommand.Values values, CancellationToken cancellationToken)
+            : base(instance, values)
+        {
+            Source = source;
+            _values = values;
+            CancellationToken = cancellationToken;
+        }
+
+        public OperationSource Source { get; }
+        public CancellationToken CancellationToken { get; }
+
+        public ICommand.Values GetValues() => _values;
+        public ICommandSession StartSession(in ICommand.Values _) => this;
     }
 
     static async Task MultiplexingCommandWriter(ChannelReader<MultiplexingCommand> reader, ConnectionSource<PgV3Protocol> connectionSource, NpgsqlDataSourceOptions options)
@@ -198,8 +210,8 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>
         {
             var bytesWritten = 0L;
             PgV3Protocol? protocol = null;
-            MultiplexingCommand command = default;
-            if (failedToEnqueue || reader.TryRead(out command))
+            MultiplexingCommand command = null!;
+            if (failedToEnqueue || reader.TryRead(out command!))
             {
                 // Bind slot.
                 try
@@ -215,7 +227,7 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>
                 if (failedToEnqueue)
                 {
                     failedToEnqueue = false;
-                    if (!reader.TryRead(out command))
+                    if (!reader.TryRead(out command!))
                         protocol = null;
                 }
             }
@@ -236,7 +248,7 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>
 
                 // Flush (if necessary).
                 var didFlush = fewPending;
-                if (!didFlush && (!writeTask.IsCompleted || (bytesWritten += writeTask.Result.BytesWritten) >= writeThreshold || !reader.TryRead(out command)))
+                if (!didFlush && (!writeTask.IsCompleted || (bytesWritten += writeTask.Result.BytesWritten) >= writeThreshold || !reader.TryRead(out command!)))
                 {
                     var _ = Flush(writeTask, protocol);
                     protocol = null;
@@ -249,7 +261,7 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>
             }
         }
 
-        async ValueTask Flush(ValueTask<WriteResult> writeTask, PgV3Protocol protocol)
+        static async ValueTask Flush(ValueTask<WriteResult> writeTask, PgV3Protocol protocol)
         {
             try
             {

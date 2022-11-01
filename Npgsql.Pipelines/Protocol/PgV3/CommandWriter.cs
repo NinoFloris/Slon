@@ -1,8 +1,8 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading;
-using System.Threading.Tasks;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
@@ -19,11 +19,11 @@ class CommandWriter
         }
     }
 
-    public static CommandContext WriteExtendedAsync<TCommand>(OperationSlot slot, TCommand command, bool flushHint = true, CancellationToken cancellationToken = default)
-        where TCommand : ICommand
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static CommandContext WriteExtendedAsync(OperationSlot slot, ICommand command, bool flushHint = true, CancellationToken cancellationToken = default)
     {
         if (slot.Protocol is not PgV3Protocol protocol)
-            throw new ArgumentException($"Cannot write with a slot for a different protocol type, expected: {nameof(PgV3Protocol)}.", nameof(slot));
+            ThrowInvalidSlot();
 
         var values = command.GetValues();
 
@@ -34,38 +34,51 @@ class CommandWriter
             session = command.StartSession(values);
 
         return CommandContext.Create(
-            protocol.WriteMessageBatchAsync(slot, Core, (values, statementName), flushHint, cancellationToken),
+            protocol.WriteMessageAsync(slot, new Command(values, statementName), flushHint, cancellationToken),
             values.ExecutionFlags,
             session
         );
 
-#if !NETSTANDARD2_0
-        [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
-#endif
-        static async ValueTask Core(PgV3Protocol.BatchWriter writer, (ICommand.Values, string?) state, CancellationToken cancellationToken)
+        static void ThrowInvalidSlot()
+            => throw new ArgumentException($"Cannot write with a slot for a different protocol type, expected: {nameof(PgV3Protocol)}.", nameof(slot));
+    }
+
+    readonly struct Command: IFrontendMessage
+    {
+        readonly ICommand.Values _values;
+        readonly string? _statementName;
+
+        public Command(ICommand.Values values, string? statementName)
         {
-            var (values, statementName) = state;
-            var executionFlags = values.ExecutionFlags;
-            var portal = string.Empty;
+            _values = values;
+            _statementName = statementName;
+        }
+
+        // TODO bring back async writing for large binds (needs a sum and a treshold of precomputed parameter lengths).
+        public bool CanWrite => true;
+        public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
+        {
             try
             {
-                if (!executionFlags.HasPrepared())
-                    await writer.WriteMessageAsync(new Parse(values.StatementText, values.Parameters, statementName), cancellationToken).ConfigureAwait(false);
+                var portal = string.Empty;
+                if (!_values.ExecutionFlags.HasPrepared())
+                    Parse.WriteMessage(ref buffer, _values.StatementText, _values.Parameters, _statementName);
 
-                await writer.WriteMessageAsync(new Bind(portal, values.Parameters, ResultColumnCodes.CreateOverall(Types.FormatCode.Binary), statementName), cancellationToken).ConfigureAwait(false);
+                // Bind is rather big, duplicating the static writing and IFrontendMessage paths becomes rather bloaty, just new the struct.
+                new Bind(portal, _values.Parameters, ResultColumnCodes.CreateOverall(Types.FormatCode.Binary), _statementName).Write(ref buffer);
 
-                if (!executionFlags.HasPrepared())
-                    await writer.WriteMessageAsync(Describe.CreateForPortal(portal), cancellationToken).ConfigureAwait(false);
+                if (!_values.ExecutionFlags.HasPrepared())
+                    Describe.WriteForPortal(ref buffer, portal);
 
-                await writer.WriteMessageAsync(new Execute(portal), cancellationToken).ConfigureAwait(false);
+                Execute.WriteMessage(ref buffer, portal);
 
-                if (executionFlags.HasErrorBarrier())
-                    await writer.WriteMessageAsync(new Sync(), cancellationToken).ConfigureAwait(false);
+                if (_values.ExecutionFlags.HasErrorBarrier())
+                    Sync.WriteMessage(ref buffer);
             }
             finally
             {
-                if (!values.Parameters.IsEmpty)
-                    CloseInputParameterSessions(values.Parameters);
+                if (!_values.Parameters.IsEmpty)
+                    CloseInputParameterSessions(_values.Parameters);
             }
         }
     }

@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
@@ -107,6 +108,7 @@ class PgV3Protocol : PgProtocol
         if (_pipeWriter.UnflushedBytes == 0)
             return;
 
+        // TODO actually check if the passed slot is the head.
         if (op is null && !_messageWriteLock.Wait(0))
             await _messageWriteLock.WaitAsync(cancellationToken).ConfigureAwait(false);
 
@@ -137,14 +139,13 @@ class PgV3Protocol : PgProtocol
     // TODO maybe add some ownership transfer logic here, allocating new instances if the singleton isn't back yet.
     public override CommandReader GetCommandReader() => _commandReaderSingleton;
 
-    public IOCompletionPair WriteMessageAsync<T>(OperationSlot slot, T message, CancellationToken cancellationToken = default) where T : IFrontendMessage
-        => WriteMessageBatchAsync(slot, (batchWriter, message, cancellationToken) => batchWriter.WriteMessageAsync(message, cancellationToken), message, flushHint: true, cancellationToken);
+    public IOCompletionPair WriteMessageAsync<T>(OperationSlot slot, T message, bool flushHint = true, CancellationToken cancellationToken = default) where T : IFrontendMessage
+        => WriteMessageBatchAsync(slot, (batchWriter, message, cancellationToken) => batchWriter.WriteMessageAsync(message, cancellationToken), message, flushHint, cancellationToken);
 
     public readonly struct BatchWriter
     {
         readonly PgV3Protocol _protocol;
         internal BatchWriter(PgV3Protocol protocol) => _protocol = protocol;
-
 
         public ValueTask WriteMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IFrontendMessage
             => WriteMessageUnsynchronized(_protocol._defaultMessageWriter, message, cancellationToken);
@@ -166,15 +167,18 @@ class PgV3Protocol : PgProtocol
 #endif
         static async ValueTask<WriteResult> Core(PgV3Protocol instance, PgV3OperationSource source, Func<BatchWriter, TState, CancellationToken, ValueTask> batchWriter, TState state, bool flushHint = true, CancellationToken cancellationToken = default)
         {
-            await source.WriteSlot.ConfigureAwait(false);
+            if (!source.WriteSlot.IsCompletedSuccessfully)
+                await source.WriteSlot.ConfigureAwait(false);
 
             instance._flushControl.Initialize();
             try
             {
-                await batchWriter.Invoke(new BatchWriter(instance), state, cancellationToken).ConfigureAwait(false);
+                var writeTask = batchWriter.Invoke(new BatchWriter(instance), state, cancellationToken);
+                if (!writeTask.IsCompletedSuccessfully)
+                    await writeTask.ConfigureAwait(false);
                 if (instance._flushControl.WriterCompleted)
                     instance.MoveToComplete();
-                else if (flushHint)
+                else if (flushHint && instance._flushControl.UnflushedBytes > 0)
                     await instance._defaultMessageWriter.FlushAsync(observeFlushThreshold: false, cancellationToken).ConfigureAwait(false);
 
                 return new WriteResult(instance._defaultMessageWriter.BytesCommitted);
@@ -193,8 +197,11 @@ class PgV3Protocol : PgProtocol
                 }
 
                 // TODO not sure I'm happy with ending writes *automatically* after one write.
-                if (!instance._disposed)
-                    source.EndWrites(instance._messageWriteLock);
+                if (!instance._disposed && !source.IsExclusiveUse)
+                {
+                    var result = source.EndWrites(instance._messageWriteLock);
+                    Debug.Assert(result, "Could not end write slot.");
+                }
             }
         }
     }
@@ -605,24 +612,27 @@ class PgV3Protocol : PgProtocol
 
     public override bool TryStartOperation(OperationSlot slot, OperationBehavior behavior = OperationBehavior.None, CancellationToken cancellationToken = default)
     {
-        ThrowIfDisposed();
-        cancellationToken.ThrowIfCancellationRequested();
-        var source = ThrowIfInvalidSlot(slot, allowUnbound: true, allowActivated: false);
+        // ThrowIfDisposed();
+        // cancellationToken.ThrowIfCancellationRequested();
+        // var source = ThrowIfInvalidSlot(slot, allowUnbound: true, allowActivated: false);
 
-        if (!source.IsUnbound)
-            throw new ArgumentException("Cannot start an operation with a slot that is already bound.", nameof(slot));
+        if (slot is not PgV3OperationSource source)
+            throw new InvalidOperationException();
 
+        int count;
         lock (SyncObj)
         {
-            int count;
             if (_state is not PgProtocolState.Ready || ((count = _operations.Count) > 0 && behavior.HasImmediateOnly()))
                 return false;
 
-            source.Bind(this, behavior.HasExclusiveUse(), cancellationToken);
+            if (behavior.HasExclusiveUse())
+                source.IsExclusiveUse = true;
+            source.Bind(this);
             EnqueueUnsynchronized(source, cancellationToken);
-            if (count == 0)
-                source.Activate();
         }
+
+        if (count == 0)
+            source.Activate();
 
         return true;
     }
@@ -667,7 +677,8 @@ class PgV3Protocol : PgProtocol
             if (_operations.TryPeek(out currentSource!) && ReferenceEquals(currentSource, operationSource))
             {
                 _operations.Dequeue();
-                currentSource.EndWrites(_messageWriteLock);
+                var result = currentSource.EndWrites(_messageWriteLock);
+                Debug.Assert(result, "Could not end write slot.");
                 if (currentSource.IsExclusiveUse)
                     _pendingExclusiveUses--;
                 while ((hasNext = _operations.TryPeek(out currentSource!)) && currentSource.IsCompleted && _operations.TryDequeue(out _))
@@ -776,23 +787,20 @@ class PgV3Protocol : PgProtocol
         public bool IsExclusiveUse
         {
             get => _exclusiveUse;
-            private set
+            internal set
             {
                 if (!IsUnbound)
-                    throw new InvalidOperationException("Cannot change after binding");
+                    ThrowAlreadyBound();
 
                 _exclusiveUse = value;
+
+                static void ThrowAlreadyBound() => throw new InvalidOperationException("Cannot change after binding");
             }
         }
 
         public bool IsUnbound => !IsCompleted && Protocol is null && !IsPooled;
 
-        public void Bind(PgV3Protocol protocol, bool exclusiveUse, CancellationToken cancellationToken)
-        {
-            IsExclusiveUse = exclusiveUse;
-            WithCancellationToken(cancellationToken);
-            BindCore(protocol);
-        }
+        public void Bind(PgV3Protocol protocol) => BindCore(protocol);
 
         public PgV3OperationSource WithCancellationToken(CancellationToken cancellationToken)
         {
@@ -822,7 +830,7 @@ class PgV3Protocol : PgProtocol
 
         public bool EndWrites(SemaphoreSlim writelock)
         {
-            if (_writeSlot is null || !_writeSlot.IsCompleted || (IsExclusiveUse && !IsCompleted))
+            if (_writeSlot is null || !_writeSlot.IsCompleted)
                 return false;
 
             // Null out the completed task before we release.
