@@ -49,6 +49,22 @@ struct PgV3FrontendHeader: IFrontendHeader<PgV3FrontendHeader>
     public readonly void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
         => WriteHeader(ref buffer, _code, _length);
 
+    public void Write<T>(ref SpanBufferWriter<T> buffer) where T : IBufferWriter<byte>
+        => WriteHeader(ref buffer, _code, _length);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void WriteHeader<T>(ref SpanBufferWriter<T> buffer, FrontendCode code, int length) where T : IBufferWriter<byte>
+    {
+        if (length < 0)
+            ThrowArgumentOutOfRange();
+
+        buffer.Ensure(ByteCount);
+        var header = buffer.Span;
+        header[0] = (byte)code;
+        BinaryPrimitives.WriteInt32BigEndian(header.Slice(1), length + sizeof(int));
+        buffer.Advance(ByteCount);
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void WriteHeader<T>(ref BufferWriter<T> buffer, FrontendCode code, int length) where T : IBufferWriter<byte>
     {

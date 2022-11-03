@@ -17,8 +17,8 @@ static class FrontendMessage {
         public BufferedMessage(ICopyableBuffer<byte> buffer) => _buffer = buffer;
 
         public bool CanWrite => true;
-        public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
-            => _buffer.CopyTo(buffer);
+        public void Write<T>(ref SpanBufferWriter<T> buffer) where T : IBufferWriter<byte>
+            => _buffer.CopyTo(buffer.Output);
     }
 
     class StreamingMessage: IStreamingFrontendMessage
@@ -28,7 +28,7 @@ static class FrontendMessage {
         public StreamingMessage(Stream stream) => _stream = stream;
 
         public bool CanWrite => false;
-        public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte> => throw new NotSupportedException();
+        public void Write<T>(ref SpanBufferWriter<T> buffer) where T : IBufferWriter<byte> => throw new NotSupportedException();
 
         public async ValueTask<FlushResult> WriteAsync<T>(MessageWriter<T> writer, CancellationToken cancellationToken = default) where T : IBufferWriter<byte>
         {
@@ -62,13 +62,14 @@ interface IFrontendHeader<THeader> where THeader: struct, IFrontendHeader<THeade
     /// </summary>
     public int Length { get; set;  }
     void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>;
+    void Write<T>(ref SpanBufferWriter<T> buffer) where T : IBufferWriter<byte>;
 }
 
 interface IFrontendMessage
 {
     // TODO bit of a weird api now
     bool CanWrite { get; }
-    void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>;
+    void Write<T>(ref SpanBufferWriter<T> buffer) where T : IBufferWriter<byte>;
 }
 
 interface IStreamingFrontendMessage: IFrontendMessage

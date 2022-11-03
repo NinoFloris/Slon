@@ -67,7 +67,7 @@ readonly struct Bind: IFrontendMessage
     // Whatever, something like segment size can come via the constructor too, if we want to get fancy.
     public bool CanWrite => _precomputedMessageLength < 2048;
 
-    public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
+    public void Write<T>(ref SpanBufferWriter<T> buffer) where T : IBufferWriter<byte>
     {
         PgV3FrontendHeader.Create(FrontendCode.Bind, _precomputedMessageLength).Write(ref buffer);
         buffer.WriteCString(_portalName);
@@ -171,6 +171,17 @@ readonly struct Bind: IFrontendMessage
             throw new InvalidOperationException("The parameter writer output was not consistent with the parameter length.");
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    void CheckParameterWriterOutput<T>(int parameterLength, long lastBuffered, long lastCommitted, SpanBufferWriter<T> buffer) where T : IBufferWriter<byte>
+    {
+        if (buffer.BufferedBytes - lastBuffered < 4)
+            throw new InvalidOperationException("A parameter writer should at least write 4 bytes for the length.");
+        if (buffer.BytesCommitted > lastCommitted)
+            throw new InvalidOperationException("Parameter writers should not call writer.Commit(), this is handled globally.");
+        if (buffer.BytesCommitted + buffer.BufferedBytes - lastCommitted > parameterLength)
+            throw new InvalidOperationException("The parameter writer output was not consistent with the parameter length.");
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     void WriteParameterCodes<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
     {
@@ -194,7 +205,45 @@ readonly struct Bind: IFrontendMessage
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    void WriteParameterCodes<T>(ref SpanBufferWriter<T> buffer) where T : IBufferWriter<byte>
+    {
+        if (_parameters.Length == 0)
+        {
+            buffer.WriteShort(0);
+            return;
+        }
+
+        if (_parametersOverallCode is not null)
+        {
+            buffer.WriteShort(1);
+            buffer.WriteShort((short)_parametersOverallCode);
+        }
+        else
+        {
+            buffer.WriteUShort((ushort)_parameters.Length);
+            foreach (var (key, _) in _parameters.Span)
+                buffer.WriteShort((short)((PgV3ProtocolParameterType)_parameters.Span[0].Key.Type).FormatCode);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     void WriteResultColumnCodes<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
+    {
+        if (_resultColumnCodes.IsOverallCode)
+        {
+            buffer.WriteShort(1);
+            buffer.WriteShort((short)_resultColumnCodes.OverallCode);
+        }
+        else
+        {
+            buffer.WriteShort((short)_resultColumnCodes.PerColumnCodes.Length);
+            foreach (var code in _resultColumnCodes.PerColumnCodes.Span)
+                buffer.WriteShort((short)code);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    void WriteResultColumnCodes<T>(ref SpanBufferWriter<T> buffer) where T : IBufferWriter<byte>
     {
         if (_resultColumnCodes.IsOverallCode)
         {

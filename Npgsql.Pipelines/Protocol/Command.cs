@@ -33,7 +33,8 @@ static class ExecutionFlagsExtensions
 
 interface IParameterWriter
 {
-    void Write<T>(ref BufferWriter<T> writer, in CommandParameter parameter) where T : IBufferWriter<byte>;
+    void Write<T>(ref BufferWriter<T> writer, CommandParameter parameter) where T : IBufferWriter<byte>;
+    void Write<T>(ref SpanBufferWriter<T> writer, CommandParameter parameter) where T : IBufferWriter<byte>;
 }
 
 interface ICommand

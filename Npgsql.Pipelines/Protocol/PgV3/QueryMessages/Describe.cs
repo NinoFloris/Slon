@@ -14,7 +14,7 @@ readonly struct Describe: IFrontendMessage
     }
 
     public bool CanWrite => true;
-    public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
+    public void Write<T>(ref SpanBufferWriter<T> buffer) where T : IBufferWriter<byte>
     {
         if (_isPortalName)
             WriteForPortal(ref buffer, _name);
@@ -28,14 +28,14 @@ readonly struct Describe: IFrontendMessage
         Portal = (byte)'P'
     }
 
-    public static void WriteForPreparedStatement<T>(ref BufferWriter<T> buffer, string preparedStatementName) where T : IBufferWriter<byte>
+    public static void WriteForPreparedStatement<T>(ref SpanBufferWriter<T> buffer, string preparedStatementName) where T : IBufferWriter<byte>
     {
         PgV3FrontendHeader.WriteHeader(ref buffer, FrontendCode.Describe, MessageWriter.ByteByteCount + MessageWriter.GetCStringByteCount(preparedStatementName));
         buffer.WriteByte((byte)StatementOrPortal.Statement);
         buffer.WriteCString(preparedStatementName);
     }
 
-    public static void WriteForPortal<T>(ref BufferWriter<T> buffer, string portalName) where T : IBufferWriter<byte>
+    public static void WriteForPortal<T>(ref SpanBufferWriter<T> buffer, string portalName) where T : IBufferWriter<byte>
     {
         PgV3FrontendHeader.WriteHeader(ref buffer, FrontendCode.Describe, MessageWriter.ByteByteCount + MessageWriter.GetCStringByteCount(portalName));
         buffer.WriteByte((byte)StatementOrPortal.Portal);

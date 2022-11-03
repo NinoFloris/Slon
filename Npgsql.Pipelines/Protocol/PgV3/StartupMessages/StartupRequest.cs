@@ -23,7 +23,7 @@ class StartupRequest: IStreamingFrontendMessage
     }
 
     public bool CanWrite => false;
-    public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte> => throw new NotSupportedException();
+    public void Write<T>(ref SpanBufferWriter<T> buffer) where T : IBufferWriter<byte> => throw new NotSupportedException();
 
     public ValueTask<FlushResult> WriteAsync<T>(MessageWriter<T> writer, CancellationToken cancellationToken = default) where T : IBufferWriter<byte>
     {

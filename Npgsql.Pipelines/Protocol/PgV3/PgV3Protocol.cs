@@ -263,8 +263,10 @@ class PgV3Protocol : PgProtocol
     {
         if (message.CanWrite)
         {
-            message.Write(ref writer.Writer);
-            writer.Writer.Commit();
+            var buffer = new SpanBufferWriter<TWriter>(writer.Writer);
+            message.Write(ref buffer);
+            buffer.Commit();
+            writer.Writer.AdvanceCommitted(buffer.BytesCommitted);
             return new ValueTask();
         }
 
