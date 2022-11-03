@@ -98,7 +98,8 @@ public sealed partial class NpgsqlCommand: ICommand
             Parameters = parameters,
             StatementText = _userCommandText ?? string.Empty,
             ExecutionFlags = flags | _behavior.ToExecutionFlags(),
-            Statement = statement
+            Statement = statement,
+            State = TryGetDataSource(out var dataSource) ? dataSource : GetConnection().DbDataSource
         };
 
         CommandParameter ToCommandParameter(KeyValuePair<string, object?> keyValuePair)
@@ -113,12 +114,30 @@ public sealed partial class NpgsqlCommand: ICommand
         }
     }
 
-    ICommandSession ICommand.StartSession(in ICommand.Values values)
+    CommandExecution ICommand.CreateExecution(in ICommand.Values values)
     {
-        return new NpgsqlCommandSession(
-            dataSource: TryGetDataSource(out var dataSource) ? dataSource : GetConnection().DbDataSource,
-            values
-        );
+        return Core(values);
+        // This is a static local function to assure StartExecution has only dependencies on passed in state.
+        // Any unexpected instance dependencies would undoubtedly cause fun races.
+        static CommandExecution Core(in ICommand.Values values)
+        {
+            var flags = values.ExecutionFlags;
+            DebugShim.Assert(values.State is NpgsqlDataSource);
+            // We only allocate to facilitate preparation, which is rare during steady state operations.
+            var session = flags.HasPreparing() ? new NpgsqlCommandSession((NpgsqlDataSource)values.State, values) : null;
+
+            DebugShim.Assert(flags.HasUnprepared() || values.Statement is not null);
+
+            // TODO if Statement implements ICommandSession this collapses to something even simpler.
+            var commandExecution = flags switch
+            {
+                _ when flags.HasPrepared() => CommandExecution.Create(flags, values.Statement!),
+                _ when session is not null => CommandExecution.Create(flags, session),
+                _ => CommandExecution.Create(flags)
+            };
+
+            return commandExecution;
+        }
     }
 
     bool ConnectionOpInProgress
@@ -167,6 +186,7 @@ public sealed partial class NpgsqlCommand: ICommand
         }
     }
 
+    // TODO would be interesting to prototype an overload taking a parametercollection.
     ValueTask<NpgsqlDataReader> ExecuteDataReaderAsync(CommandBehavior behavior, CancellationToken cancellationToken)
     {
         ThrowIfDisposed();

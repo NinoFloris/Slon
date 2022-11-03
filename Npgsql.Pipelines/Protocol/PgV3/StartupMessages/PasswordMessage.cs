@@ -5,13 +5,13 @@ using System.Text;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
-class PasswordMessage : IFrontendMessage
+readonly struct PasswordMessage : IFrontendMessage
 {
     readonly string _hashedPassword;
 
-    public PasswordMessage(string username, string plainPassword, ReadOnlySpan<byte> salt)
+    public PasswordMessage(string username, string plainPassword, ReadOnlyMemory<byte> salt)
     {
-        _hashedPassword = HashPassword(username, plainPassword, salt);
+        _hashedPassword = HashPassword(username, plainPassword, salt.Span);
     }
 
     public bool CanWrite => true;

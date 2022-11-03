@@ -9,13 +9,13 @@ struct RowDescription: IPgV3BackendMessage
     public const int MaxColumns = ushort.MaxValue;
     static int ColumnCountLookupThreshold => 10;
 
-    ArraySegment<Field> _fields;
+    ArraySegment<StatementField> _fields;
     Dictionary<string, int>? _nameIndex;
 
     public RowDescription(int initialCapacity)
-        => _fields = new ArraySegment<Field>(new Field[initialCapacity], 0, 0);
+        => _fields = new ArraySegment<StatementField>(new StatementField[initialCapacity], 0, 0);
 
-    public ReadOnlyMemory<Field> Fields => new(_fields.Array, _fields.Offset, _fields.Count);
+    public ReadOnlyMemory<StatementField> Fields => new(_fields.Array, _fields.Offset, _fields.Count);
 
     public ReadStatus Read(ref MessageReader<PgV3Header> reader)
     {
@@ -24,9 +24,9 @@ struct RowDescription: IPgV3BackendMessage
 
         reader.TryReadShort(out var columnCount);
         if (_fields.Array?.Length >= columnCount)
-            _fields = new ArraySegment<Field>(_fields.Array, 0, columnCount);
+            _fields = new ArraySegment<StatementField>(_fields.Array, 0, columnCount);
         else
-            _fields = new ArraySegment<Field>(new Field[columnCount], 0, columnCount);
+            _fields = new ArraySegment<StatementField>(new StatementField[columnCount], 0, columnCount);
         var fields = _fields.Array!;
         Dictionary<string, int>? nameIndex = null;
         if (columnCount > ColumnCountLookupThreshold)
@@ -34,6 +34,7 @@ struct RowDescription: IPgV3BackendMessage
 
         for (var i = 0; i < fields.Length && i < columnCount; i++)
         {
+            // TODO pool these chars, only converting them to strings when it'll be used for a prepared statement.
             reader.TryReadCString(out var name);
             reader.TryReadInt(out var tableOid);
             reader.TryReadShort(out var columnAttributeNumber);
@@ -42,12 +43,14 @@ struct RowDescription: IPgV3BackendMessage
             reader.TryReadInt(out var typeModifier);
             reader.TryReadShort(out var formatCode);
             fields[i] = new(
-                Name:                  name!,
+                new Field(
+                    Name:              name!,
+                    Oid:               new Oid(oid),
+                    TypeSize:          typeSize,
+                    TypeModifier:      typeModifier
+                ),
                 TableOid:              new Oid(tableOid),
                 ColumnAttributeNumber: columnAttributeNumber,
-                Oid:                   new Oid(oid),
-                TypeSize:              typeSize,
-                TypeModifier:          typeModifier,
                 FormatCode:            (FormatCode)formatCode
             );
             if (nameIndex is not null)
@@ -62,7 +65,7 @@ struct RowDescription: IPgV3BackendMessage
 
     public void Reset()
     {
-        _fields = new ArraySegment<Field>(_fields.Array!, 0, 0);
+        _fields = new ArraySegment<StatementField>(_fields.Array!, 0, 0);
         _nameIndex?.Clear();
     }
 }

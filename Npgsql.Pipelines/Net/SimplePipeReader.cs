@@ -101,7 +101,7 @@ sealed class SimplePipeReader
 
     public ReadOnlySequence<byte> ReadAtLeast(int minimumSize, TimeSpan timeout)
     {
-        if (!_completed && _bufferLength - _consumed >= minimumSize)
+        if (!_completed && minimumSize != 0 && _bufferLength - _consumed >= minimumSize)
             return _buffer.Slice(_consumed);
 
         if (!_completed && _unfinishedRead)

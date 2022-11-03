@@ -7,6 +7,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Threading.Tasks.Sources;
 using Npgsql.Pipelines.Protocol;
 
 namespace Npgsql.Pipelines;
@@ -277,7 +278,7 @@ public sealed partial class NpgsqlConnection
                 _instance.MoveToExecuting();
                 var result = _instance.DbDataSource.WriteCommandAsync(slot, command, cancellationToken);
                 writeTask = result.WriteTask;
-                return CommandContextBatch.Create(result.WithIOCompletionPair(new IOCompletionPair(writeTask, subSlot.Task)));
+                return CommandContextBatch.Create(result.WithIOCompletionPair(new IOCompletionPair(writeTask, subSlot)));
             }
             finally
             {
@@ -382,14 +383,15 @@ public sealed partial class NpgsqlConnection
             next.Activate();
     }
 
-    sealed class ConnectionOperationSource: OperationSource
+    sealed class ConnectionOperationSource: OperationSource, IValueTaskSource<Operation>
     {
         readonly NpgsqlConnection _connection;
         ConnectionOperationSource? _next;
+        Task<Operation>? _task;
 
         // Pipelining on the same connection is expected to be done on the same thread.
         public ConnectionOperationSource(NpgsqlConnection connection, PgProtocol? protocol, bool pooled = false) :
-            base(protocol, asyncContinuations: false, pooled)
+            base(protocol, pooled)
         {
             _connection = connection;
         }
@@ -408,6 +410,8 @@ public sealed partial class NpgsqlConnection
             }
         }
 
+        public override ValueTask<Operation> Task => new(_task ??= new ValueTask<Operation>(this, ValueTaskSource.Version).AsTask());
+
         protected override void CompleteCore(PgProtocol protocol, Exception? exception)
             => _connection.CompleteOperation(_next, exception);
 
@@ -415,6 +419,12 @@ public sealed partial class NpgsqlConnection
         {
             _next = null;
         }
+
+        internal new void Reset() => base.Reset();
+        Operation IValueTaskSource<Operation>.GetResult(short token) => ValueTaskSource.GetResult(token);
+        ValueTaskSourceStatus IValueTaskSource<Operation>.GetStatus(short token) => ValueTaskSource.GetStatus(token);
+        void IValueTaskSource<Operation>.OnCompleted(Action<object?> continuation, object? state, short token, ValueTaskSourceOnCompletedFlags flags)
+            => ValueTaskSource.OnCompleted(continuation, state, token, flags);
     }
 
     async ValueTask DisposeCore(bool async)

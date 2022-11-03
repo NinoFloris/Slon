@@ -19,7 +19,7 @@ enum PreparationKind
 record Statement
 {
     [SetsRequiredMembers]
-    protected Statement(PreparationKind kind, ImmutableArray<Parameter>? parameters = null, ImmutableArray<Field>? fields = null)
+    protected Statement(PreparationKind kind, ImmutableArray<Parameter>? parameters = null, ImmutableArray<StatementField>? fields = null)
     {
         Kind = kind;
         Parameters = parameters;
@@ -33,7 +33,7 @@ record Statement
 
     public required PreparationKind Kind { get; init; }
     public ImmutableArray<Parameter>? Parameters { get; init; }
-    public ImmutableArray<Field>? Fields { get; init; }
+    public ImmutableArray<StatementField>? Fields { get; init; }
 
     public static Statement CreateUnprepared(PreparationKind kind) => new(kind);
     public static Statement CreateUnprepared(PreparationKind kind, ImmutableArray<Parameter> parameters) => new(kind, parameters);

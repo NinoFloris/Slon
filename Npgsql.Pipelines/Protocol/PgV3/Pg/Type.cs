@@ -40,9 +40,7 @@ abstract record PgKind(PgKind.Cases Tag)
     public sealed record Range(PgType ElementType) : PgKind(Cases.Range);
     public sealed record MultiRange(PgType ElementType) : PgKind(Cases.MultiRange);
     public sealed record Domain(PgType UnderlyingType) : PgKind(Cases.Domain);
-
-    // TODO this should host field info
-    public sealed record Composite(StructuralArray<PgType> Fields) : PgKind(Cases.Composite);
+    public sealed record Composite(StructuralArray<Field> Fields) : PgKind(Cases.Composite);
 }
 
 readonly record struct PgType(Oid Oid, string Schema, PgKind Kind)

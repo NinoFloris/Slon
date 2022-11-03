@@ -1,4 +1,6 @@
 using System;
+using System.Buffers;
+using System.Runtime.InteropServices;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
@@ -17,13 +19,13 @@ enum AuthenticationType
     SASLFinal = 12
 }
 
-class AuthenticationRequest : IPgV3BackendMessage
+struct AuthenticationRequest : IPgV3BackendMessage, IDisposable
 {
     public AuthenticationType AuthenticationType { get; private set; }
 
-    public byte[]? MD5Salt { get; private set; }
-    public byte[]? GSSAPIData { get; private set; }
-    public byte[]? SASLData { get; private set; }
+    public ReadOnlyMemory<byte> MD5Salt { get; private set; }
+    public ReadOnlyMemory<byte> GSSAPIData { get; private set; }
+    public ReadOnlyMemory<byte> SASLData { get; private set; }
 
     public ReadStatus Read(ref MessageReader<PgV3Header> reader)
     {
@@ -38,8 +40,8 @@ class AuthenticationRequest : IPgV3BackendMessage
         switch (AuthenticationType)
         {
             case AuthenticationType.MD5Password:
-                var salt = new byte[4];
-                if(!reader.TryCopyTo(salt))
+                var salt = ArrayPool<byte>.Shared.Rent(4);
+                if(!reader.TryCopyTo(salt.AsSpan(0, 4)))
                     return ReadStatus.InvalidData;
                 reader.Advance(4);
                 MD5Salt = salt;
@@ -47,5 +49,17 @@ class AuthenticationRequest : IPgV3BackendMessage
         }
 
         return ReadStatus.Done;
+    }
+
+    public void Dispose()
+    {
+        if (MemoryMarshal.TryGetArray(MD5Salt, out var md5))
+            ArrayPool<byte>.Shared.Return(md5.Array!);
+
+        if (MemoryMarshal.TryGetArray(GSSAPIData, out var gss))
+            ArrayPool<byte>.Shared.Return(gss.Array!);
+
+        if (MemoryMarshal.TryGetArray(SASLData, out var sasl))
+            ArrayPool<byte>.Shared.Return(sasl.Array!);
     }
 }

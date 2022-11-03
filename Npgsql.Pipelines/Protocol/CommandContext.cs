@@ -11,55 +11,56 @@ namespace Npgsql.Pipelines.Protocol;
 readonly struct CommandContext
 {
     readonly IOCompletionPair _completionPair;
-    readonly object? _sessionOrProvider;
-    readonly int _sessionIdOrFlags;
+    readonly ExecutionFlags _executionFlags;
+    readonly object? _providerOrSessionOrStatement;
 
-    CommandContext(IOCompletionPair completionPair, int sessionIdOrFlags, object? sessionOrProvider)
+    CommandContext(IOCompletionPair completionPair, ICommandExecutionProvider provider)
     {
         _completionPair = completionPair;
-        _sessionIdOrFlags = sessionIdOrFlags;
-        _sessionOrProvider = sessionOrProvider;
+        _providerOrSessionOrStatement = provider;
+    }
+
+    CommandContext(IOCompletionPair completionPair, CommandExecution commandExecution)
+    {
+        _completionPair = completionPair;
+        // We unpack to save space.
+        _executionFlags = commandExecution.TryGetSessionOrStatement(out var session, out var statement);
+        _providerOrSessionOrStatement = (object?)session ?? statement;
+    }
+
+    // Copy constructor
+    CommandContext(IOCompletionPair completionPair, ExecutionFlags executionFlags, object? providerOrSessionOrStatement)
+    {
+        _completionPair = completionPair;
+        _executionFlags = executionFlags;
+        _providerOrSessionOrStatement = providerOrSessionOrStatement;
     }
 
     /// Only reliable to be called once, cache the result if multiple lookups are needed.
     public CommandExecution GetCommandExecution()
-        => _sessionOrProvider switch
+        => _providerOrSessionOrStatement switch
         {
             ICommandExecutionProvider provider => provider.Get(this),
-            ICommandSession session => CommandExecution.Create((ExecutionFlags)_sessionIdOrFlags, session),
-            _ => CommandExecution.Create((ExecutionFlags)_sessionIdOrFlags)
+            ICommandSession session => CommandExecution.Create(_executionFlags, session),
+            Statement statement => CommandExecution.Create(_executionFlags, statement),
+            _ => CommandExecution.Create(_executionFlags)
         };
 
-    public bool TryGetSessionId(out int sessionId)
-    {
-        if (_sessionOrProvider is ICommandExecutionProvider)
-        {
-            sessionId = _sessionIdOrFlags;
-            return true;
-        }
-
-        sessionId = default;
-        return false;
-    }
-
-    public bool IsCompleted => _completionPair.Read is { IsCompletedSuccessfully: true, Result.IsCompleted: true };
+    public bool IsCompleted => _completionPair.ReadSlot.IsCompleted;
     public ValueTask<WriteResult> WriteTask => _completionPair.Write;
+    public OperationSlot ReadSlot => _completionPair.ReadSlot;
+
+    /// Only safe to be awaited once, multiple calls to retrieve any pending write status are allowed.
     public ValueTask<Operation> GetOperation() => _completionPair.SelectAsync();
 
     public CommandContext WithIOCompletionPair(IOCompletionPair completionPair)
-        => new(completionPair, _sessionIdOrFlags, _sessionOrProvider);
+        => new(completionPair, _executionFlags, _providerOrSessionOrStatement);
 
-    public static CommandContext Create(IOCompletionPair completionPair, ExecutionFlags flags)
-        => new(completionPair, (int)flags, null);
+    public static CommandContext Create(IOCompletionPair completionPair, ICommandExecutionProvider provider)
+        => new(completionPair, provider);
 
-    public static CommandContext Create(IOCompletionPair completionPair, Statement statement)
-        => new(completionPair, 0, statement);
-
-    public static CommandContext Create(IOCompletionPair completionPair, ICommandSession session)
-        => new(completionPair, 0, session);
-
-    public static CommandContext Create(IOCompletionPair completionPair, int executionId, ICommandExecutionProvider provider)
-        => new(completionPair, executionId, provider);
+    public static CommandContext Create(IOCompletionPair completionPair, CommandExecution commandExecution)
+        => new(completionPair, commandExecution);
 }
 
 readonly struct CommandContextBatch: IEnumerable<CommandContext>
@@ -85,6 +86,8 @@ readonly struct CommandContextBatch: IEnumerable<CommandContext>
         return new(new[] { context });
 #endif
     }
+
+    public static implicit operator CommandContextBatch(CommandContext commandContext) => Create(commandContext);
 
     public int Length => _contexts?.Length ?? 1;
 

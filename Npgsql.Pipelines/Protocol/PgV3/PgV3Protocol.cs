@@ -1,6 +1,5 @@
 using System;
 using System.Buffers;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
@@ -8,6 +7,7 @@ using System.IO.Pipelines;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Threading.Tasks.Sources;
 using Npgsql.Pipelines.Buffers;
 using Npgsql.Pipelines.Protocol.PgV3.Commands;
 using FlushResult = Npgsql.Pipelines.Buffers.FlushResult;
@@ -68,6 +68,7 @@ class PgV3Protocol : PgProtocol
 
     bool IsCompleted => _state is PgProtocolState.Completed;
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     PgV3OperationSource ThrowIfInvalidSlot(OperationSlot slot, bool allowUnbound = false, bool allowActivated = true)
     {
         if (slot is not PgV3OperationSource source ||
@@ -158,7 +159,7 @@ class PgV3Protocol : PgProtocol
     {
         var source = ThrowIfInvalidSlot(slot);
 
-        return new IOCompletionPair(Core(this, source, batchWriter, state, flushHint, cancellationToken), slot.Task);
+        return new IOCompletionPair(Core(this, source, batchWriter, state, flushHint, cancellationToken), slot);
 
 #if !NETSTANDARD2_0
         [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
@@ -179,6 +180,7 @@ class PgV3Protocol : PgProtocol
                 else if (flushHint && instance._flushControl.UnflushedBytes > 0)
                     await instance._defaultMessageWriter.FlushAsync(observeFlushThreshold: false, cancellationToken).ConfigureAwait(false);
 
+                Debug.Assert(instance._defaultMessageWriter.BytesCommitted > 0);
                 return new WriteResult(instance._defaultMessageWriter.BytesCommitted);
             }
             catch (Exception ex) when (ex is not TimeoutException && (ex is not OperationCanceledException || ex is OperationCanceledException oce && oce.CancellationToken != cancellationToken))
@@ -523,7 +525,7 @@ class PgV3Protocol : PgProtocol
         try
         {
             await conn.WriteInternalAsync(new StartupRequest(options)).ConfigureAwait(false);
-            var msg = await conn.ReadMessageAsync(new AuthenticationRequest()).ConfigureAwait(false);
+            using var msg = await conn.ReadMessageAsync<AuthenticationRequest>().ConfigureAwait(false);
             switch (msg.AuthenticationType)
             {
                 case AuthenticationType.Ok:
@@ -692,7 +694,11 @@ class PgV3Protocol : PgProtocol
         {
             _completingException = exception;
             // TODO Mhmmm
-            var _ = Task.Run(() => CompleteAsync(exception));
+            var _ = Task.Factory.StartNew(static state =>
+            {
+                var items = (Tuple<PgV3Protocol, Exception>)state!;
+                return items.Item1.CompleteAsync(items.Item2);
+            }, Tuple.Create(this, exception), default, TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
         }
 
         // Activate the next uncompleted one, outside the lock.
@@ -753,24 +759,24 @@ class PgV3Protocol : PgProtocol
     public static OperationSource CreateUnboundOperationSource<TData>(TData data, CancellationToken cancellationToken = default)
         => new PgV3OperationSource<TData>(data, null, false, false).WithCancellationToken(cancellationToken);
 
-    public static TData GetData<TData>(OperationSource source)
+    public static ref TData GetData<TData>(OperationSlot source)
     {
         if (source is not PgV3OperationSource<TData> sourceWithData)
             throw new ArgumentException("This source does not have data, or no data of this type.", nameof(source));
 
-        return sourceWithData.Data;
+        return ref sourceWithData.Data;
     }
 
-    class PgV3OperationSource : OperationSource
+    class PgV3OperationSource : OperationSource, IValueTaskSource<Operation>
     {
         // Will be initialized during TakeWriteLock.
         volatile Task? _writeSlot;
-
         bool _exclusiveUse;
 
         public PgV3OperationSource(PgV3Protocol? protocol, bool exclusiveUse, bool pooled)
-            : base(protocol, asyncContinuations: true, pooled)
+            : base(protocol, pooled)
         {
+            ValueTaskSource.RunContinuationsAsynchronously = false; // TODO see https://github.com/dotnet/runtime/issues/77896
             _exclusiveUse = exclusiveUse;
         }
 
@@ -816,6 +822,9 @@ class PgV3Protocol : PgProtocol
             _writeSlot = null;
         }
 
+        // public override ValueTask<Operation> Task => new(_task ??= new ValueTask<Operation>(this, ValueTaskSource.Version).AsTask());
+        public override ValueTask<Operation> Task => new(this, ValueTaskSource.Version);
+
         // TODO ideally we'd take the lock opportunistically, not sure how though as write congruence with queue position is critical.
         public void BeginWrites(SemaphoreSlim writelock, CancellationToken cancellationToken)
         {
@@ -838,16 +847,25 @@ class PgV3Protocol : PgProtocol
                 writelock.Release();
             return true;
         }
+
+        Operation IValueTaskSource<Operation>.GetResult(short token) => ValueTaskSource.GetResult(token);
+        ValueTaskSourceStatus IValueTaskSource<Operation>.GetStatus(short token) => ValueTaskSource.GetStatus(token);
+        void IValueTaskSource<Operation>.OnCompleted(Action<object?> continuation, object? state, short token, ValueTaskSourceOnCompletedFlags flags)
+            => ValueTaskSource.OnCompleted(continuation, state, token, flags);
+
+        internal new void Reset() => base.Reset();
     }
 
     class PgV3OperationSource<TData> : PgV3OperationSource
     {
+        TData _data;
+
         public PgV3OperationSource(TData data, PgV3Protocol? protocol, bool exclusiveUse, bool pooled) : base(protocol, exclusiveUse, pooled)
         {
-            Data = data;
+            _data = data;
         }
 
-        public TData Data { get; }
+        public ref TData Data => ref _data;
     }
 
     long _statementCounter = 0;

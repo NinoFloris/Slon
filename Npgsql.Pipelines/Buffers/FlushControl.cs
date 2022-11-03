@@ -241,7 +241,7 @@ class ResettableFlushControl: FlushControl
             _registration = null;
             if (!_timeoutSource!.TryReset())
             {
-                _timeoutSource.Dispose();
+                _timeoutSource!.Dispose();
                 _timeoutSource = null;
             }
         }

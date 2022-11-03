@@ -9,6 +9,9 @@ using System.Diagnostics.CodeAnalysis;
 
 namespace Npgsql.Pipelines;
 
+// TODO we may want to have a few versions internally (maybe auto generated) with say 1, 2, 3, 4, many parameters where NpgsqlParameterCollection is just the wrapping class.
+// Could eliminate all parameter/boxing allocations for small queries, and would basically make the lookup path always enabled in the 'many' case, reducing complexity there.
+
 /// <summary>
 /// Represents a collection of parameters relevant to a <see cref="NpgsqlCommand"/> as well as their respective mappings to columns in
 /// a <see cref="DataSet"/>.

@@ -42,14 +42,19 @@ interface ICommand
     // The underlying values might change so we hand out a copy.
     Values GetValues();
 
-    // Returns a session that is isolated from any outside mutation.
-    public ICommandSession StartSession(in Values parameters);
+    /// <summary>
+    /// Called right before the write commences.
+    /// </summary>
+    /// <param name="values">Values containing any updated (effective) ExecutionFlags for the protocol it will execute on.</param>
+    /// <returns>CommandExecution state that is used for the duration of the execution.</returns>
+    public CommandExecution CreateExecution(in Values values);
 
-    public readonly struct Values
+    public readonly record struct Values
     {
         public required ReadOnlyMemory<KeyValuePair<CommandParameter, IParameterWriter>> Parameters { get; init; }
         public required string StatementText { get; init; }
         public required ExecutionFlags ExecutionFlags { get; init; }
         public Statement? Statement { get; init; }
+        public object? State { get; init; }
     }
 }

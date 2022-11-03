@@ -21,12 +21,12 @@ interface ICommandSession
 readonly struct CommandExecution
 {
     readonly ExecutionFlags _executionFlags;
-    readonly object? _statementOrSession;
+    readonly object? _sessionOrStatement;
 
-    CommandExecution(ExecutionFlags executionFlags, object? statementOrSession)
+    CommandExecution(ExecutionFlags executionFlags, object? sessionOrStatement)
     {
         _executionFlags = executionFlags;
-        _statementOrSession = statementOrSession;
+        _sessionOrStatement = sessionOrStatement;
     }
 
     /// If ExecutionFlags.Prepared then statement is not null, if ExecutionFlags.Preparing session is not null, otherwise both are.
@@ -34,13 +34,13 @@ readonly struct CommandExecution
     {
         if (_executionFlags.HasPrepared())
         {
-            statement = _statementOrSession as Statement;
+            statement = (Statement)_sessionOrStatement!;
             session = null;
             return _executionFlags;
         }
 
         statement = null;
-        session = _statementOrSession as ICommandSession;
+        session = _sessionOrStatement as ICommandSession;
         return _executionFlags;
     }
 
@@ -64,6 +64,5 @@ readonly struct CommandExecution
 // Used to link up CommandContexts constructed before a session is available with an actual session or statement later on.
 interface ICommandExecutionProvider
 {
-    /// Returns ICommandSession, if null run as default, throws if there is no tracked execution.
     public CommandExecution Get(in CommandContext context);
 }

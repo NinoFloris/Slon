@@ -271,6 +271,7 @@ ref struct MessageReader<THeader> where THeader : struct, IHeader<THeader>, IEqu
     /// Consume always succeeds if Current is buffered and never if it isn't.
     /// </summary>
     /// <returns>A bool signalling whether the reader advanced past the current message, this may leave an empty reader.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool ConsumeCurrent()
     {
         if (_currentStart.IsBeforeFirstMove)

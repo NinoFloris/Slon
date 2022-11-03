@@ -395,7 +395,7 @@ class CommandReader
 
         public ExecutionFlags ExecutionFlags { get; private set; }
         public ICommandSession? Session { get; private set; }
-        public ReadOnlyMemory<Field> Fields { get; private set; } = ReadOnlyMemory<Field>.Empty;
+        public ReadOnlyMemory<StatementField> Fields { get; private set; } = ReadOnlyMemory<StatementField>.Empty;
         public ReadOnlySequence<byte> Buffer { get; private set; }
         public MessageReader<PgV3Header>.ResumptionData ResumptionData => _resumptionData;
 
@@ -422,7 +422,7 @@ class CommandReader
         {
             _rowDescription.Reset();
             Buffer = default;
-            Fields = ReadOnlyMemory<Field>.Empty;
+            Fields = ReadOnlyMemory<StatementField>.Empty;
             _state = default;
         }
 
@@ -592,7 +592,7 @@ class CommandReader
         public MessageReader<PgV3Header>.ResumptionData ResumptionData => _resumptionData;
         public ReadOnlySequence<byte> Buffer => _buffer;
 
-        public DataRowReader(ReadOnlySequence<byte> buffer, MessageReader<PgV3Header>.ResumptionData resumptionData, ReadOnlyMemory<Field> fields)
+        public DataRowReader(ReadOnlySequence<byte> buffer, MessageReader<PgV3Header>.ResumptionData resumptionData, ReadOnlyMemory<StatementField> fields)
         {
             _buffer = buffer;
             _bufferLength = buffer.Length;

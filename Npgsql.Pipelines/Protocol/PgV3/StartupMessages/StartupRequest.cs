@@ -8,7 +8,7 @@ using Npgsql.Pipelines.Buffers;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
-class StartupRequest: IStreamingFrontendMessage
+readonly struct StartupRequest: IStreamingFrontendMessage
 {
     readonly List<KeyValuePair<string, string>> _parameters;
 
