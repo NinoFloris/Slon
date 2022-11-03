@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -80,7 +79,7 @@ abstract class OperationSource: OperationSlot
                 else if (token.IsCancellationRequested)
                 {
                     var result  = _tcs.TrySetCanceled(token);
-                    Debug.Assert(result);
+                    DebugShim.Assert(result);
                 }
             }
             return _protocol;
@@ -95,6 +94,13 @@ abstract class OperationSource: OperationSlot
     [MemberNotNullWhen(true, nameof(_cancellationRegistration))]
     public bool IsCanceled => (_state & OperationSourceFlags.Canceled) != 0;
     public bool IsCompletedSuccessfully => IsCompleted && (_state & OperationSourceFlags.Faulted) != 0;
+
+#if !NETSTANDARD2_0
+    public CancellationToken CancellationToken => _cancellationRegistration.Token;
+#else
+    public CancellationToken CancellationToken {get; private set;}
+#endif
+
     protected abstract void CompleteCore(PgProtocol protocol, Exception? exception);
 
     protected virtual void ResetCore() {}
@@ -117,6 +123,9 @@ abstract class OperationSource: OperationSlot
         if (_cancellationRegistration != default)
             throw new InvalidOperationException("Cancellation already registered.");
 
+#if NETSTANDARD2_0
+        CancellationToken = cancellationToken;
+#endif
         _cancellationRegistration = cancellationToken.UnsafeRegister((state, token) =>
         {
             ((OperationSource)state!).TransitionToCompletion(token);
@@ -281,7 +290,7 @@ static class OperationBehaviorExtensions
     public static bool HasExclusiveUse(this OperationBehavior behavior) => (behavior & OperationBehavior.ExclusiveUse) != 0;
 }
 
-abstract class PgProtocol: IDisposable
+abstract class PgProtocol
 {
     public abstract PgProtocolState State { get; }
     public abstract bool PendingExclusiveUse { get; }
@@ -296,17 +305,4 @@ abstract class PgProtocol: IDisposable
 
     // TODO CommandReader is part of PgV3 atm.
     public abstract PgV3.CommandReader GetCommandReader();
-
-    protected virtual void Dispose(bool disposing)
-    {
-        if (disposing)
-        {
-        }
-    }
-
-    public void Dispose()
-    {
-        Dispose(true);
-        GC.SuppressFinalize(this);
-    }
 }

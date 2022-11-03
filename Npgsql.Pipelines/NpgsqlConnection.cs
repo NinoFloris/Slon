@@ -44,7 +44,9 @@ public sealed partial class NpgsqlConnection
     void ThrowIfDisposed()
     {
         if (_disposed)
-            throw new ObjectDisposedException(nameof(NpgsqlConnection));
+            ThrowObjectDisposed();
+
+        static void ThrowObjectDisposed() => throw new ObjectDisposedException(nameof(NpgsqlConnection));
     }
 
     OperationSlot GetSlotUnsynchronized()
@@ -59,6 +61,7 @@ public sealed partial class NpgsqlConnection
     [MemberNotNull(nameof(SyncObj), nameof(_operationSlot))]
     void ThrowIfNoSlot()
     {
+        DebugShim.Assert(SyncObj is not null && _operationSlot is not null);
         if (!HasSlot || _disposed || _state is ConnectionState.Broken or not (ConnectionState.Open or ConnectionState.Executing or ConnectionState.Fetching))
             HandleUncommon();
 
@@ -272,9 +275,9 @@ public sealed partial class NpgsqlConnection
             try
             {
                 _instance.MoveToExecuting();
-                var result = _instance.DbDataSource.WriteCommandAsync(slot, command, behavior, cancellationToken);
+                var result = _instance.DbDataSource.WriteCommandAsync(slot, command, cancellationToken);
                 writeTask = result.WriteTask;
-                return CommandContextBatch.Create(CommandContext.Create(new IOCompletionPair(writeTask, subSlot.Task), result.ExecutionFlags, result.Session));
+                return CommandContextBatch.Create(result.WithIOCompletionPair(new IOCompletionPair(writeTask, subSlot.Task)));
             }
             finally
             {

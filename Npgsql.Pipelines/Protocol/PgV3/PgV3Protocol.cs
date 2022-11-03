@@ -43,7 +43,6 @@ class PgV3Protocol : PgProtocol
     readonly CommandReader _commandReaderSingleton;
 
     volatile PgProtocolState _state = PgProtocolState.Created;
-    volatile bool _disposed;
     volatile Exception? _completingException;
     volatile int _pendingExclusiveUses;
 
@@ -69,53 +68,52 @@ class PgV3Protocol : PgProtocol
 
     bool IsCompleted => _state is PgProtocolState.Completed;
 
-    void ThrowIfDisposed()
-    {
-        if (_disposed)
-            throw new ObjectDisposedException(nameof(PgV3Protocol));
-    }
-
     PgV3OperationSource ThrowIfInvalidSlot(OperationSlot slot, bool allowUnbound = false, bool allowActivated = true)
     {
-        if (slot is not PgV3OperationSource source)
-            throw new ArgumentException("Cannot accept this type of slot.", nameof(slot));
-
-        if (!allowUnbound && source.IsUnbound)
-            throw new ArgumentException("Cannot accept an unbound slot.", nameof(slot));
-
-        if (!allowUnbound && !ReferenceEquals(source.InstanceToken, InstanceToken))
-            throw new ArgumentException("Cannot accept a slot for some other connection.", nameof(slot));
-
-        if (source.IsCompleted || (!allowActivated && source.IsActivated))
-            throw new ArgumentException("Cannot accept a completed operation.", nameof(slot));
+        if (slot is not PgV3OperationSource source ||
+            (!allowUnbound && (source.IsUnbound || !ReferenceEquals(source.InstanceToken, InstanceToken))) ||
+            source.IsCompleted || (!allowActivated && source.IsActivated))
+        {
+            HandleUncommon();
+            return null!;
+        }
 
         return source;
 
+        void HandleUncommon()
+        {
+            if (slot is not PgV3OperationSource source)
+                throw new ArgumentException("Cannot accept this type of slot.", nameof(slot));
+
+            switch (allowUnbound)
+            {
+                case false when source.IsUnbound:
+                    throw new ArgumentException("Cannot accept an unbound slot.", nameof(slot));
+                case false when !ReferenceEquals(source.InstanceToken, InstanceToken):
+                    throw new ArgumentException("Cannot accept a slot for some other connection.", nameof(slot));
+            }
+
+            if (source.IsCompleted || (!allowActivated && source.IsActivated))
+                throw new ArgumentException("Cannot accept a completed operation.", nameof(slot));
+        }
     }
 
-    public override ValueTask FlushAsync(CancellationToken cancellationToken = default)
-    {
-        return FlushAsyncCore(null, cancellationToken);
-    }
-
-    public override ValueTask FlushAsync(OperationSlot op, CancellationToken cancellationToken = default)
-    {
-        return FlushAsyncCore(op, cancellationToken);
-    }
-
+    public override ValueTask FlushAsync(CancellationToken cancellationToken = default) => FlushAsyncCore(null, cancellationToken);
+    public override ValueTask FlushAsync(OperationSlot op, CancellationToken cancellationToken = default) => FlushAsyncCore(op, cancellationToken);
     async ValueTask FlushAsyncCore(OperationSlot? op = null, CancellationToken cancellationToken = default)
     {
-        if (_pipeWriter.UnflushedBytes == 0)
-            return;
-
         // TODO actually check if the passed slot is the head.
         if (op is null && !_messageWriteLock.Wait(0))
             await _messageWriteLock.WaitAsync(cancellationToken).ConfigureAwait(false);
 
+        // Other messages could have flushed in between us waiting for the lock.
+        if (_pipeWriter.UnflushedBytes == 0)
+            return;
+
         _flushControl.Initialize();
         try
         {
-            await _flushControl.FlushAsync(observeFlushThreshold: false, cancellationToken: cancellationToken).ConfigureAwait(false);
+            await _flushControl.FlushAsync(observeFlushThreshold: false, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not TimeoutException && (ex is not OperationCanceledException || ex is OperationCanceledException oce && oce.CancellationToken != cancellationToken))
         {
@@ -131,7 +129,7 @@ class PgV3Protocol : PgProtocol
                 _flushControl.Reset();
             }
 
-            if (op is null && !_disposed)
+            if (op is null)
                 _messageWriteLock.Release();
         }
     }
@@ -147,27 +145,17 @@ class PgV3Protocol : PgProtocol
         readonly PgV3Protocol _instance;
         internal BatchWriter(PgV3Protocol instance) => _instance = instance;
 
-        public ValueTask WriteMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IFrontendMessage
-        {
-            // Initialize it 'just-in-time'.
-            if(!_instance._flushControl.IsInitialized && message is IStreamingFrontendMessage)
-                _instance._flushControl.Initialize();
-            return WriteMessageUnsynchronized(_instance._defaultMessageWriter, message, cancellationToken);
-        }
+        public ValueTask WriteMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IFrontendMessage 
+            => WriteMessageUnsynchronized(_instance._defaultMessageWriter, message, cancellationToken);
 
         public long UnflushedBytes => _instance._defaultMessageWriter.UnflushedBytes;
 
-        public ValueTask<FlushResult> FlushAsync(bool observeFlushThreshold = true, CancellationToken cancellationToken = default)
-        {
-            if(!_instance._flushControl.IsInitialized)
-                _instance._flushControl.FlushAsync(observeFlushThreshold, cancellationToken: cancellationToken);
-            return new ValueTask<FlushResult>(new FlushResult(isCompleted: false, isCanceled: false));
-        }
+        public ValueTask<FlushResult> FlushAsync(bool observeFlushThreshold = true, CancellationToken cancellationToken = default) 
+            => new ValueTask<FlushResult>(new FlushResult(isCompleted: false, isCanceled: false));
     }
 
     public IOCompletionPair WriteMessageBatchAsync<TState>(OperationSlot slot, Func<BatchWriter, TState, CancellationToken, ValueTask> batchWriter, TState state, bool flushHint = true, CancellationToken cancellationToken = default)
     {
-        ThrowIfDisposed();
         var source = ThrowIfInvalidSlot(slot);
 
         return new IOCompletionPair(Core(this, source, batchWriter, state, flushHint, cancellationToken), slot.Task);
@@ -177,9 +165,10 @@ class PgV3Protocol : PgProtocol
 #endif
         static async ValueTask<WriteResult> Core(PgV3Protocol instance, PgV3OperationSource source, Func<BatchWriter, TState, CancellationToken, ValueTask> batchWriter, TState state, bool flushHint = true, CancellationToken cancellationToken = default)
         {
-            if (!source.WriteSlot.IsCompletedSuccessfully)
+            if (source.WriteSlot.Status != TaskStatus.RanToCompletion)
                 await source.WriteSlot.ConfigureAwait(false);
 
+            instance._flushControl.Initialize();
             try
             {
                 var writeTask = batchWriter.Invoke(new BatchWriter(instance), state, cancellationToken);
@@ -188,11 +177,7 @@ class PgV3Protocol : PgProtocol
                 if (instance._flushControl.WriterCompleted)
                     instance.MoveToComplete();
                 else if (flushHint && instance._flushControl.UnflushedBytes > 0)
-                {
-                    if (!instance._flushControl.IsInitialized)
-                        instance._flushControl.Initialize();
                     await instance._defaultMessageWriter.FlushAsync(observeFlushThreshold: false, cancellationToken).ConfigureAwait(false);
-                }
 
                 return new WriteResult(instance._defaultMessageWriter.BytesCommitted);
             }
@@ -210,7 +195,7 @@ class PgV3Protocol : PgProtocol
                 }
 
                 // TODO not sure I'm happy with ending writes *automatically* after one write.
-                if (!instance._disposed && !source.IsExclusiveUse)
+                if (!source.IsExclusiveUse)
                 {
                     var result = source.EndWrites(instance._messageWriteLock);
                     Debug.Assert(result, "Could not end write slot.");
@@ -260,9 +245,14 @@ class PgV3Protocol : PgProtocol
             if (_state is PgProtocolState.Completed)
                 return;
             _state = PgProtocolState.Completed;
-            _completingException = exception;
-            shouldDrain = true;
         }
+
+        _completingException = exception;
+        shouldDrain = true;
+        _pipeWriter.Complete();
+        _reader.Complete();
+        _messageWriteLock.Dispose();
+        _flushControl.Dispose();
 
         //if (shouldDrain)
     }
@@ -556,7 +546,7 @@ class PgV3Protocol : PgProtocol
         }
         catch (Exception)
         {
-            conn.Dispose();
+            await conn.CompleteAsync();
             throw;
         }
     }
@@ -625,12 +615,8 @@ class PgV3Protocol : PgProtocol
 
     public override bool TryStartOperation(OperationSlot slot, OperationBehavior behavior = OperationBehavior.None, CancellationToken cancellationToken = default)
     {
-        // ThrowIfDisposed();
-        // cancellationToken.ThrowIfCancellationRequested();
-        // var source = ThrowIfInvalidSlot(slot, allowUnbound: true, allowActivated: false);
-
-        if (slot is not PgV3OperationSource source)
-            throw new InvalidOperationException();
+        cancellationToken.ThrowIfCancellationRequested();
+        var source = ThrowIfInvalidSlot(slot, allowUnbound: true, allowActivated: false);
 
         int count;
         lock (SyncObj)
@@ -652,7 +638,6 @@ class PgV3Protocol : PgProtocol
 
     public override bool TryStartOperation([NotNullWhen(true)]out OperationSlot? slot, OperationBehavior behavior = OperationBehavior.None, CancellationToken cancellationToken = default)
     {
-        ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
         PgV3OperationSource source;
         lock (SyncObj)
@@ -694,6 +679,8 @@ class PgV3Protocol : PgProtocol
                 Debug.Assert(result, "Could not end write slot.");
                 if (currentSource.IsExclusiveUse)
                     _pendingExclusiveUses--;
+
+                // TODO we must have two states for cancelled and completed, we must transparently consume cancelled commands if anything was written for this slot.
                 while ((hasNext = _operations.TryPeek(out currentSource!)) && currentSource.IsCompleted && _operations.TryDequeue(out _))
                 {}
             }
@@ -755,28 +742,24 @@ class PgV3Protocol : PgProtocol
         }
     }
 
-    protected override void Dispose(bool disposing)
-    {
-        if (_disposed)
-            return;
-        _disposed = true;
-        _state = PgProtocolState.Completed;
-        _pipeWriter.Complete();
-        _reader.Complete();
-        _messageWriteLock.Dispose();
-        _flushControl.Dispose();
-    }
-
     public override PgProtocolState State => _state;
 
     // No locks as it doesn't have to be accurate.
     public override bool PendingExclusiveUse => _pendingExclusiveUses != 0;
     public override int Pending => _operations.Count;
 
-    public static OperationSource CreateUnboundOperationSource(CancellationToken cancellationToken)
-        => new PgV3OperationSource(null, false, false);
+    public static OperationSource CreateUnboundOperationSource<TData>(TData data, CancellationToken cancellationToken = default)
+        => new PgV3OperationSource<TData>(data, null, false, false).WithCancellationToken(cancellationToken);
 
-    sealed class PgV3OperationSource : OperationSource
+    public static TData GetData<TData>(OperationSource source)
+    {
+        if (source is not PgV3OperationSource<TData> sourceWithData)
+            throw new ArgumentException("This source does not have data, or no data of this type.", nameof(source));
+
+        return sourceWithData.Data;
+    }
+
+    class PgV3OperationSource : OperationSource
     {
         // Will be initialized during TakeWriteLock.
         volatile Task? _writeSlot;
@@ -843,14 +826,26 @@ class PgV3Protocol : PgProtocol
 
         public bool EndWrites(SemaphoreSlim writelock)
         {
-            if (_writeSlot is null || !_writeSlot.IsCompleted)
+            if (_writeSlot?.IsCompleted == false)
                 return false;
 
             // Null out the completed task before we release.
+            var writeSlot = _writeSlot;
             _writeSlot = null!;
-            writelock.Release();
+            if (writeSlot is not null)
+                writelock.Release();
             return true;
         }
+    }
+
+    class PgV3OperationSource<TData> : PgV3OperationSource
+    {
+        public PgV3OperationSource(TData data, PgV3Protocol? protocol, bool exclusiveUse, bool pooled) : base(protocol, exclusiveUse, pooled)
+        {
+            Data = data;
+        }
+
+        public TData Data { get; }
     }
 
     long _statementCounter = 0;

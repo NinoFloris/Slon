@@ -55,7 +55,7 @@ sealed class SimplePipeReader
     /// </remarks>
     public ValueTask<ReadOnlySequence<byte>> ReadAtLeastAsync(int minimumSize, CancellationToken cancellationToken = default)
     {
-        if (!_completed && _bufferLength - _consumed >= minimumSize)
+        if (!_completed && minimumSize != 0 && _bufferLength - _consumed >= minimumSize)
             return new ValueTask<ReadOnlySequence<byte>>(_buffer.Slice(_consumed));
 
         return ReadAtLeastAsyncCore(minimumSize, cancellationToken);

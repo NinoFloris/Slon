@@ -33,7 +33,9 @@ class ConnectionSource<T>: IDisposable where T : PgProtocol
     void ThrowIfDisposed()
     {
         if (_disposed)
-            throw new ObjectDisposedException(nameof(ConnectionSource<T>));
+            ThrowObjectDisposed();
+
+        static void ThrowObjectDisposed() => throw new ObjectDisposedException(nameof(ConnectionSource<T>));
     }
 
     bool IsReadyConnection([NotNullWhen(true)] object? item, [MaybeNullWhen(false)]out T instance)
@@ -66,7 +68,7 @@ class ConnectionSource<T>: IDisposable where T : PgProtocol
         connectionSlot = null;
         do
         {
-            (bool PendingExclusiveUse, int Pending) candidateKey = (true, Int32.MaxValue);
+            (bool PendingExclusiveUse, int Pending) candidateKey = (true, int.MaxValue);
             candidateIndex = -1;
             T? candidateConn = null;
             OperationSlot? connSlot;
@@ -93,14 +95,14 @@ class ConnectionSource<T>: IDisposable where T : PgProtocol
                     }
 
                     var currentKey = (conn.PendingExclusiveUse, conn.Pending);
-                    if (candidateConn is null || (!currentKey.PendingExclusiveUse && candidateKey.PendingExclusiveUse) || currentKey.Pending <= candidateKey.Pending)
+                    if (candidateConn is null || (!currentKey.PendingExclusiveUse && candidateKey.PendingExclusiveUse) || currentKey.Pending < candidateKey.Pending)
                     {
                         candidateKey = currentKey;
                         candidateIndex = i;
                         candidateConn = conn;
                     }
                 }
-                else if (Interlocked.CompareExchange(ref _connections[i], TakenSentinel, item) == item)
+                else if (!ReferenceEquals(TakenSentinel, item) && ReferenceEquals(Interlocked.CompareExchange(ref _connections[i], TakenSentinel, item), item))
                 {
                     // This is an empty/draining/completed slot which we can fill.
                     slotIndex = i;
@@ -184,7 +186,6 @@ class ConnectionSource<T>: IDisposable where T : PgProtocol
 
         if (_disposed)
         {
-            conn.Dispose();
             ThrowIfDisposed();
         }
 
@@ -208,7 +209,7 @@ class ConnectionSource<T>: IDisposable where T : PgProtocol
     {
         ThrowIfDisposed();
         if (!TryGetSlot(exclusiveUse, allowPipelining: false, slot: null, out var index, out var connectionSlot, CancellationToken.None))
-            throw new InvalidOperationException("ConnectionSource is exhausted, there are no empty slots or idle connections.");
+            ThrowSourceExhausted();
 
         connectionSlot ??= OpenConnection(index, exclusiveUse, async: false, slot: null, connectionTimeout).GetAwaiter().GetResult();
         Debug.Assert(connectionSlot is not null);
@@ -220,7 +221,7 @@ class ConnectionSource<T>: IDisposable where T : PgProtocol
     {
         ThrowIfDisposed();
         if (!TryGetSlot(exclusiveUse, allowPipelining: false, slot: null, out var index, out var connectionSlot, cancellationToken))
-            throw new InvalidOperationException("ConnectionSource is exhausted, there are no empty slots or connections idle enough to take new work.");
+            ThrowSourceExhausted();
 
         return connectionSlot is not null ? new(connectionSlot) : OpenConnection(index, exclusiveUse, async: true, slot: null, connectionTimeout, cancellationToken);
     }
@@ -230,7 +231,7 @@ class ConnectionSource<T>: IDisposable where T : PgProtocol
     {
         ThrowIfDisposed();
         if (!TryGetSlot(exclusiveUse: false, allowPipelining: true, slot, out var index, out var connectionSlot, CancellationToken.None))
-            throw new InvalidOperationException("ConnectionSource is exhausted, there are no empty slots or connections idle enough to take new work.");
+            ThrowSourceExhausted();
 
         return connectionSlot is not null ? new() : OpenConnectionIgnoreResult(this, index, exclusiveUse: false, async: true, slot, connectionTimeout, cancellationToken);
 
@@ -242,6 +243,8 @@ class ConnectionSource<T>: IDisposable where T : PgProtocol
             await instance.OpenConnection(slotIndex, exclusiveUse, async, slot, connectionTimeout, cancellationToken).ConfigureAwait(false);
         }
     }
+
+    static void ThrowSourceExhausted() => throw new InvalidOperationException("ConnectionSource is exhausted, there are no empty slots or connections idle enough to take new work.");
 
     public void Dispose()
     {
@@ -259,7 +262,6 @@ class ConnectionSource<T>: IDisposable where T : PgProtocol
                     try
                     {
                         await conn.CompleteAsync().ConfigureAwait(false);
-                        conn.Dispose();
                     }
                     catch
                     {

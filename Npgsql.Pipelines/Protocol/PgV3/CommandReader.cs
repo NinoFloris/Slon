@@ -9,7 +9,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Buffers;
 using Npgsql.Pipelines.Protocol.PgV3.Types;
-using Npgsql.Pipelines.Protocol.PgV3.Commands;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
@@ -51,20 +50,18 @@ class CommandReader
     CommandContext _commandContext;
 
     // Recycled instances.
-    readonly StartCommand _startCommand; // Quite big so it's a class.
-    RowDescription _rowDescription; // Mutable struct, don't make readonly.
-    CommandComplete _commandComplete; // Mutable struct, don't make readonly.
+    readonly CommandStart _commandStart; // Quite big so it's a class.
     DataRowReader _rowReader; // Mutable struct, don't make readonly.
+    CommandComplete _commandComplete; // Mutable struct, don't make readonly.
 
     public CommandReader()
     {
-        _startCommand = new(this);
-        _rowDescription = new(initialCapacity: 10);
+        _commandStart = new(new RowDescription(initialCapacity: 10));
         _commandComplete = new();
     }
 
     public CommandReaderState State => _state;
-    public int FieldCount => ThrowIfNotInitialized()._startCommand.Fields.Length;
+    public int FieldCount => ThrowIfNotInitialized()._commandStart.Fields.Length;
     public bool HasRows => ThrowIfNotInitialized()._rowReader.ResumptionData.IsDefault;
 
     public StatementType StatementType => ThrowIfNotCompleted()._commandComplete.StatementType;
@@ -116,21 +113,26 @@ class CommandReader
         if (opTask.Result.IsCompleted)
             ThrowOpCompleted();
 
-        var start = await ReadMessageAsync(_startCommand, cancellationToken, commandContext).ConfigureAwait(false);
+        _commandStart.Initialize(commandContext);
+        var start = await ReadMessageAsync(_commandStart, cancellationToken, commandContext).ConfigureAwait(false);
         if (start.TryGetCompleteResult(out var result))
         {
             Complete(result.CommandComplete);
             return;
         }
 
-        if (commandContext.Session?.ExecutionFlags.HasPreparing() == true)
-            commandContext.Session.CompletePreparation(commandContext.Session.Statement! with
+        if (_commandStart.ExecutionFlags.HasPreparing())
+        {
+            DebugShim.Assert(_commandStart.Session is not null);
+            DebugShim.Assert(_commandStart.Session.Statement is not null);
+            _commandStart.Session.CompletePreparation(_commandStart.Session.Statement with
             {
-                Fields = ImmutableArray.Create(_startCommand.Fields.Span),
+                Fields = ImmutableArray.Create(_commandStart.Fields.Span)
             });
+        }
 
         _commandContext = commandContext;
-        _rowReader = new(start.Buffer, start.ResumptionData, _startCommand.Fields);
+        _rowReader = new(start.Buffer, start.ResumptionData, _commandStart.Fields);
         _state = CommandReaderState.Initialized;
 
         void ThrowOpTaskNotCompleted() => throw new ArgumentException("Operation task on given command context is not completed yet.", nameof(commandContext));
@@ -292,7 +294,7 @@ class CommandReader
                 return false;
             }
 
-            var result =  await instance.ReadMessageAsync(new CompleteCommand(instance._rowReader.ResumptionData, instance._rowReader.Consumed, instance._commandContext.ExecutionFlags.HasErrorBarrier()), cancellationToken).ConfigureAwait(false);
+            var result =  await instance.ReadMessageAsync(new CompleteCommand(instance._rowReader.ResumptionData, instance._rowReader.Consumed, instance._commandStart.ExecutionFlags.HasErrorBarrier()), cancellationToken).ConfigureAwait(false);
             instance.Complete(result.CommandComplete);
             return false;
         }
@@ -327,8 +329,7 @@ class CommandReader
     public void Reset()
     {
         _state = CommandReaderState.None;
-        _startCommand.Reset();
-        _rowDescription.Reset();
+        _commandStart.Reset();
         _rowReader = default;
     }
 
@@ -372,9 +373,8 @@ class CommandReader
         }
     }
 
-    class StartCommand: IPgV3BackendMessage
+    class CommandStart: IPgV3BackendMessage
     {
-        readonly CommandReader _instance;
 
         enum ReadState
         {
@@ -387,13 +387,22 @@ class CommandReader
             CommandComplete
         }
 
+        RowDescription _rowDescription;
         ReadState _state;
         MessageReader<PgV3Header>.ResumptionData _resumptionData;
-        ExecutionFlags _flags;
         CompleteCommand _completeResult;
+        CommandContext _commandContext;
+
+        public ExecutionFlags ExecutionFlags { get; private set; }
+        public ICommandSession? Session { get; private set; }
         public ReadOnlyMemory<Field> Fields { get; private set; } = ReadOnlyMemory<Field>.Empty;
         public ReadOnlySequence<byte> Buffer { get; private set; }
         public MessageReader<PgV3Header>.ResumptionData ResumptionData => _resumptionData;
+
+        public void Initialize(in CommandContext commandContext)
+        {
+            _commandContext = commandContext;
+        }
 
         public bool TryGetCompleteResult(out CompleteCommand result)
         {
@@ -407,10 +416,11 @@ class CommandReader
             return false;
         }
 
-        public StartCommand(CommandReader instance) => _instance = instance;
+        public CommandStart(RowDescription rowDescription) => _rowDescription = rowDescription;
 
         public void Reset()
         {
+            _rowDescription.Reset();
             Buffer = default;
             Fields = ReadOnlyMemory<Field>.Empty;
             _state = default;
@@ -421,16 +431,20 @@ class CommandReader
             switch (_state)
             {
                 case ReadState.Unstarted:
-                    // We have to read ExecutionFlags *after* the socket read is done and this Read is called.
+                    // We have to read ExecutionFlags and any Session/Statement *after* the socket read is done and this Read is called.
                     // As reads don't wait on writes (particularly true for multiplexing).
-                    // Once we can read a response do we know for sure that the value is settled.
-                    var flags = _flags = _instance._commandContext.ExecutionFlags;
-                    if (flags.HasPrepared())
+                    // Once we can read a response do we know for sure that the values are settled.
+                    var commandExecution = _commandContext.GetCommandExecution();
+                    ExecutionFlags = commandExecution.TryGetSessionOrStatement(out var session, out var statement);
+                    if (ExecutionFlags.HasPrepared())
                     {
-                        // lol
-                        Fields = _instance._commandContext.Session!.Statement!.Fields!.Value.AsMemory();
+                        DebugShim.Assert(statement is not null && statement.IsComplete);
+                        Fields = statement.Fields.Value.AsMemory();
                         goto bind;
                     }
+                    else if (ExecutionFlags.HasPreparing())
+                        Session = session;
+
                     break;
                 case ReadState.Parse:
                     goto parse;
@@ -458,7 +472,7 @@ class CommandReader
                 return status;
             }
 
-            if (_flags.HasPrepared())
+            if (ExecutionFlags.HasPrepared())
                 goto rowOrCompletion;
 
             describe:
@@ -480,12 +494,12 @@ class CommandReader
                     break;
                 default:
                     reader = readerCopy;
-                    if (!reader.ReadMessage(ref _instance._rowDescription, out status))
+                    if (!reader.ReadMessage(ref _rowDescription, out status))
                     {
                         _state = ReadState.RowDescription;
                         return status;
                     }
-                    Fields = _instance._rowDescription.Fields;
+                    Fields = _rowDescription.Fields;
                     break;
             }
 
@@ -504,7 +518,7 @@ class CommandReader
                     break;
                 default:
                     if (_state is not ReadState.CommandComplete)
-                        _completeResult = new CompleteCommand(reader.GetResumptionData(), reader.Consumed, _flags.HasErrorBarrier());
+                        _completeResult = new CompleteCommand(reader.GetResumptionData(), reader.Consumed, ExecutionFlags.HasErrorBarrier());
 
                     if (!reader.ReadMessage(ref _completeResult, out status))
                     {

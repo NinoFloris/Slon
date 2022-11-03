@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using Npgsql.Pipelines.Protocol.PgV3.Types;
 
@@ -54,8 +55,11 @@ struct PgV3FrontendHeader: IFrontendHeader<PgV3FrontendHeader>
         if (length < 0)
             ThrowArgumentOutOfRange();
 
-        buffer.WriteByte((byte)code);
-        buffer.WriteInt(length + sizeof(int));
+        buffer.Ensure(ByteCount);
+        var header = buffer.Span;
+        header[0] = (byte)code;
+        BinaryPrimitives.WriteInt32BigEndian(header.Slice(1), length + sizeof(int));
+        buffer.Advance(ByteCount);
     }
 
     public static PgV3FrontendHeader Create(FrontendCode code, int length)

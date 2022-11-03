@@ -8,19 +8,27 @@ namespace Npgsql.Pipelines.Protocol;
 [Flags]
 enum ExecutionFlags
 {
-    None = default,
-    Unprepared = 1,
-    Preparing = 2,
-    Prepared = 4,
-    ErrorBarrier = 8,
+    Unprepared = 64,
+    Preparing = 128,
+    Prepared = 256,
+    ErrorBarrier = 512, // Can be combined with one of the three previous flags.
+
+    // Command Behavior flags, these are currently mapped to the same integers, otherwise change extension method CommandBehavior.ToExecutionFlags.
+    Default = 0,
+    SingleResult = 1,  // with data, force single result, may affect database
+    SchemaOnly = 2,  // column info, no data, no effect on database
+    KeyInfo = 4,  // column info + primary key information (if available)
+    SingleRow = 8, // data, hint single row and single result, may affect database - doesn't apply to child(chapter) results
+    SequentialAccess = 16,
+    CloseConnection = 32
 }
 
 static class ExecutionFlagsExtensions
 {
-    public static bool HasUnprepared(this ExecutionFlags flags) => (flags & ExecutionFlags.Unprepared) != 0;
-    public static bool HasErrorBarrier(this ExecutionFlags flags) => (flags & ExecutionFlags.ErrorBarrier) != 0;
-    public static bool HasPreparing(this ExecutionFlags flags) => (flags & ExecutionFlags.Preparing) != 0;
-    public static bool HasPrepared(this ExecutionFlags flags) => (flags & ExecutionFlags.Prepared) != 0;
+    public static bool HasUnprepared(this ExecutionFlags flags) => (flags & ExecutionFlags.Unprepared) == ExecutionFlags.Unprepared;
+    public static bool HasErrorBarrier(this ExecutionFlags flags) => (flags & ExecutionFlags.ErrorBarrier) == ExecutionFlags.ErrorBarrier;
+    public static bool HasPreparing(this ExecutionFlags flags) => (flags & ExecutionFlags.Preparing) == ExecutionFlags.Preparing;
+    public static bool HasPrepared(this ExecutionFlags flags) => (flags & ExecutionFlags.Prepared) == ExecutionFlags.Prepared;
 }
 
 interface IParameterWriter

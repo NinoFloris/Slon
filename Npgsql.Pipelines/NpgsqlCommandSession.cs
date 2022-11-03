@@ -9,24 +9,13 @@ class NpgsqlCommandSession: ICommandSession
     readonly NpgsqlDataSource _dataSource;
     Statement? _statement;
 
-    public NpgsqlCommandSession(NpgsqlDataSource dataSource, ICommand.Values values)
+    public NpgsqlCommandSession(NpgsqlDataSource dataSource, in ICommand.Values values)
     {
         _dataSource = dataSource;
         _statement = values.Statement;
-        ExecutionFlags = values.ExecutionFlags;
     }
 
     public Statement? Statement => _statement;
-    public ExecutionFlags ExecutionFlags { get; private set; }
-
-    // Some mutability to support the janky multiplexing lifecycle.
-    public void SetPreparing()
-    {
-        if (ExecutionFlags.HasPrepared())
-            throw new InvalidOperationException("Cannot set preparing for an already prepared statement.");
-
-        ExecutionFlags = (ExecutionFlags & ~ExecutionFlags.Unprepared) | ExecutionFlags.Preparing;
-    }
 
     // TODO we need a version where we back out of completing (removing the identifier from the active list).
     public void CompletePreparation(Statement statement)

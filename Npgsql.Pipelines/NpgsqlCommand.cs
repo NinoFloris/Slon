@@ -14,6 +14,11 @@ using Npgsql.Pipelines.Protocol.PgV3.Types;
 
 namespace Npgsql.Pipelines;
 
+static class CommandBehaviorExtensions
+{
+    public static ExecutionFlags ToExecutionFlags(this CommandBehavior commandBehavior) => (ExecutionFlags)commandBehavior;
+}
+
 // Implementation
 public sealed partial class NpgsqlCommand: ICommand
 {
@@ -26,6 +31,7 @@ public sealed partial class NpgsqlCommand: ICommand
     ValueTask<CommandContextBatch>? _pendingConnectionOp;
     bool _disposed;
     NpgsqlParameterCollection? _parameterCollection;
+    CommandBehavior _behavior = CommandBehavior.Default;
 
     void Constructor(string? commandText, NpgsqlConnection? conn, NpgsqlTransaction? transaction, NpgsqlDataSource? dataSource = null)
     {
@@ -91,7 +97,7 @@ public sealed partial class NpgsqlCommand: ICommand
         {
             Parameters = parameters,
             StatementText = _userCommandText ?? string.Empty,
-            ExecutionFlags = flags,
+            ExecutionFlags = flags | _behavior.ToExecutionFlags(),
             Statement = statement
         };
 
@@ -121,7 +127,9 @@ public sealed partial class NpgsqlCommand: ICommand
     void ThrowIfDisposed()
     {
         if (_disposed)
-            throw new ObjectDisposedException(nameof(NpgsqlCommand));
+            ThrowObjectDisposed();
+
+        static void ThrowObjectDisposed() => throw new ObjectDisposedException(nameof(NpgsqlCommand));
     }
 
     bool TryGetConnection([NotNullWhen(true)]out NpgsqlConnection? connection)
@@ -142,11 +150,12 @@ public sealed partial class NpgsqlCommand: ICommand
     NpgsqlDataReader ExecuteDataReader(CommandBehavior behavior)
     {
         ThrowIfDisposed();
+        _behavior = behavior;
         if (TryGetDataSource(out var dataSource))
         {
             // Pick a connection and do the write ourselves, connectionless command execution for sync paths :)
             var slot = dataSource.Open(exclusiveUse: false, dataSource.DefaultConnectionTimeout);
-            var command = dataSource.WriteCommand(slot, this, behavior);
+            var command = dataSource.WriteCommand(slot, this);
             return NpgsqlDataReader.Create(async: false, new ValueTask<CommandContextBatch>(CommandContextBatch.Create(command)), behavior, _commandTimeout).GetAwaiter().GetResult();
         }
         else
@@ -161,9 +170,10 @@ public sealed partial class NpgsqlCommand: ICommand
     ValueTask<NpgsqlDataReader> ExecuteDataReaderAsync(CommandBehavior behavior, CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
+        _behavior = behavior;
         if (TryGetDataSource(out var dataSource))
         {
-            var command = dataSource.WriteMultiplexingCommand(this, behavior, cancellationToken);
+            var command = dataSource.WriteMultiplexingCommand(this, cancellationToken);
             return NpgsqlDataReader.Create(async: true, command, behavior, _commandTimeout, null, cancellationToken);
         }
         else

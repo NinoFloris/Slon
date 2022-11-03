@@ -235,11 +235,11 @@ class ResettableFlushControl: FlushControl
             return;
 
         _start = -2;
-        if (_timeoutSource is not null)
+        if (_registration is not null)
         {
-            _registration?.Dispose();
+            _registration.Value.Dispose();
             _registration = null;
-            if (!_timeoutSource.TryReset())
+            if (!_timeoutSource!.TryReset())
             {
                 _timeoutSource.Dispose();
                 _timeoutSource = null;

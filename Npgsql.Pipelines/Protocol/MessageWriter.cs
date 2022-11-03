@@ -15,8 +15,8 @@ static class PgEncoding
 
 static class MessageWriter
 {
-    public static int GetCStringByteCount(string value) =>
-        value is "" ? 1 : PgEncoding.UTF8.GetByteCount(value.AsSpan()) + 1;
+    public static int GetCStringByteCount(string value)
+        => value.Length != 0 ? PgEncoding.UTF8.GetByteCount(value) + 1 : 1;
     public const int IntByteCount = sizeof(int);
     public const int ShortByteCount = sizeof(short);
     public const int ByteByteCount = sizeof(byte);

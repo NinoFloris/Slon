@@ -47,6 +47,8 @@ internal struct BufferWriter<T> : IBufferWriter<byte> where T : IBufferWriter<by
         _memory = output.GetMemory();
     }
 
+    readonly int RemainingMemory => _memory.Length - BufferedBytes;
+
     public readonly T Output => _output;
 
     /// <summary>
@@ -110,9 +112,9 @@ internal struct BufferWriter<T> : IBufferWriter<byte> where T : IBufferWriter<by
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Write(ReadOnlySpan<byte> source)
     {
-        if (_memory.Length >= source.Length)
+        if (RemainingMemory >= source.Length)
         {
-            source.CopyTo(_memory.Span);
+            source.CopyTo(Span);
             Advance(source.Length);
         }
         else
@@ -128,7 +130,7 @@ internal struct BufferWriter<T> : IBufferWriter<byte> where T : IBufferWriter<by
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Ensure(int count = 1)
     {
-        if (_memory.Length - BufferedBytes < count)
+        if (RemainingMemory < count)
         {
             EnsureMore(count);
         }
@@ -157,13 +159,13 @@ internal struct BufferWriter<T> : IBufferWriter<byte> where T : IBufferWriter<by
     {
         while (source.Length > 0)
         {
-            if (_memory.Length == 0)
+            if (RemainingMemory == 0)
             {
                 EnsureMore();
             }
 
-            var writable = Math.Min(source.Length, _memory.Length);
-            source.Slice(0, writable).CopyTo(_memory.Span);
+            var writable = Math.Min(source.Length, RemainingMemory);
+            source.Slice(0, writable).CopyTo(Span);
             source = source.Slice(writable);
             Advance(writable);
         }

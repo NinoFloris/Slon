@@ -19,7 +19,7 @@ enum PreparationKind
 record Statement
 {
     [SetsRequiredMembers]
-    Statement(PreparationKind kind, ImmutableArray<Parameter>? parameters = null, ImmutableArray<Field>? fields = null)
+    protected Statement(PreparationKind kind, ImmutableArray<Parameter>? parameters = null, ImmutableArray<Field>? fields = null)
     {
         Kind = kind;
         Parameters = parameters;

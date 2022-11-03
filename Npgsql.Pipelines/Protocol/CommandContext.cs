@@ -4,31 +4,62 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
+using Npgsql.Pipelines.Protocol.PgV3.Commands;
 
 namespace Npgsql.Pipelines.Protocol;
 
 readonly struct CommandContext
 {
     readonly IOCompletionPair _completionPair;
-    readonly ExecutionFlags _flags;
-    readonly ICommandSession? _session;
+    readonly object? _sessionOrProvider;
+    readonly int _sessionIdOrFlags;
 
-    CommandContext(IOCompletionPair completionPair, ExecutionFlags flags, ICommandSession? session)
+    CommandContext(IOCompletionPair completionPair, int sessionIdOrFlags, object? sessionOrProvider)
     {
         _completionPair = completionPair;
-        _flags = flags;
-        _session = session;
+        _sessionIdOrFlags = sessionIdOrFlags;
+        _sessionOrProvider = sessionOrProvider;
     }
 
-    public ExecutionFlags ExecutionFlags => _session?.ExecutionFlags ?? _flags;
+    /// Only reliable to be called once, cache the result if multiple lookups are needed.
+    public CommandExecution GetCommandExecution()
+        => _sessionOrProvider switch
+        {
+            ICommandExecutionProvider provider => provider.Get(this),
+            ICommandSession session => CommandExecution.Create((ExecutionFlags)_sessionIdOrFlags, session),
+            _ => CommandExecution.Create((ExecutionFlags)_sessionIdOrFlags)
+        };
+
+    public bool TryGetSessionId(out int sessionId)
+    {
+        if (_sessionOrProvider is ICommandExecutionProvider)
+        {
+            sessionId = _sessionIdOrFlags;
+            return true;
+        }
+
+        sessionId = default;
+        return false;
+    }
+
     public bool IsCompleted => _completionPair.Read is { IsCompletedSuccessfully: true, Result.IsCompleted: true };
     public ValueTask<WriteResult> WriteTask => _completionPair.Write;
     public ValueTask<Operation> GetOperation() => _completionPair.SelectAsync();
 
-    public ICommandSession? Session => _session;
+    public CommandContext WithIOCompletionPair(IOCompletionPair completionPair)
+        => new(completionPair, _sessionIdOrFlags, _sessionOrProvider);
 
-    public static CommandContext Create(IOCompletionPair completionPair, ExecutionFlags flags, ICommandSession? session)
-        => new(completionPair, flags, session);
+    public static CommandContext Create(IOCompletionPair completionPair, ExecutionFlags flags)
+        => new(completionPair, (int)flags, null);
+
+    public static CommandContext Create(IOCompletionPair completionPair, Statement statement)
+        => new(completionPair, 0, statement);
+
+    public static CommandContext Create(IOCompletionPair completionPair, ICommandSession session)
+        => new(completionPair, 0, session);
+
+    public static CommandContext Create(IOCompletionPair completionPair, int executionId, ICommandExecutionProvider provider)
+        => new(completionPair, executionId, provider);
 }
 
 readonly struct CommandContextBatch: IEnumerable<CommandContext>
