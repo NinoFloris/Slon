@@ -260,7 +260,7 @@ public sealed partial class NpgsqlConnection
 #if !NETSTANDARD2_0
         [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
 #endif
-        public async ValueTask<CommandContextBatch> WriteCommand(bool allowPipelining, ICommand command, ExecutionFlags additionalFlags, bool closeConnection, CancellationToken cancellationToken = default)
+        public async ValueTask<CommandContextBatch> WriteCommand(bool allowPipelining, ICommand command, CommandParameters parameters, ExecutionFlags additionalFlags, bool closeConnection, CancellationToken cancellationToken = default)
         {
             _instance.ThrowIfNoSlot();
 
@@ -280,7 +280,7 @@ public sealed partial class NpgsqlConnection
             try
             {
                 _instance.MoveToExecuting();
-                var result = _instance.DbDataSource.WriteCommandAsync(slot, command, additionalFlags, cancellationToken);
+                var result = _instance.DbDataSource.WriteCommandAsync(slot, command, parameters, additionalFlags, cancellationToken);
                 writeTask = result.WriteTask;
                 return result.WithIOCompletionPair(new IOCompletionPair(writeTask, subSlot));
             }

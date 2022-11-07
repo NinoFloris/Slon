@@ -9,10 +9,10 @@ namespace Npgsql.Pipelines.Protocol.PgV3;
 class CommandWriter
 {
     // Note: ref command to allow structs to mutate themselves in StartExecution.
-    public static CommandContext WriteExtendedAsync<TCommand>(OperationSlot slot, ref TCommand command, ExecutionFlags additionalFlags, bool flushHint = true, CancellationToken cancellationToken = default) where TCommand: ICommand
+    public static CommandContext WriteExtendedAsync<TCommand>(OperationSlot slot, ref TCommand command, CommandParameters parameters, ExecutionFlags additionalFlags, bool flushHint = true, CancellationToken cancellationToken = default) where TCommand: ICommand
     {
         // We need to start the command execution before writing to prevent any races, as the read slot could already be completed.
-        var values = command.GetValues(additionalFlags);
+        var values = command.GetValues(parameters, additionalFlags);
         var commandExecution = command.CreateExecution(values with { ExecutionFlags = GetEffectiveExecutionFlags(slot, values, out var statementName) });
         var completionPair = ((PgV3Protocol)slot.Protocol!).WriteMessageAsync(slot, new Command(values, statementName), flushHint, cancellationToken);
         return CommandContext.Create(completionPair, commandExecution);
@@ -65,10 +65,10 @@ class CommandWriter
             {
                 var portal = string.Empty;
                 if (!_values.ExecutionFlags.HasPrepared())
-                    Parse.WriteMessage(ref buffer, _values.StatementText, _values.Parameters, _statementName);
+                    Parse.WriteMessage(ref buffer, _values.StatementText, _values.CommandParameters.Collection, _statementName);
 
                 // Bind is rather big, duplicating the static writing and IFrontendMessage paths becomes rather bloaty, just new the struct.
-                new Bind(portal, _values.Parameters, ResultColumnCodes.CreateOverall(Types.FormatCode.Binary), _statementName).Write(ref buffer);
+                new Bind(portal, _values.CommandParameters.Collection, ResultColumnCodes.CreateOverall(Types.FormatCode.Binary), _statementName).Write(ref buffer);
 
                 if (!_values.ExecutionFlags.HasPrepared())
                     Describe.WriteForPortal(ref buffer, portal);
@@ -80,8 +80,8 @@ class CommandWriter
             }
             finally
             {
-                if (!_values.Parameters.IsEmpty)
-                    CloseInputParameterSessions(_values.Parameters);
+                if (!_values.CommandParameters.Collection.IsEmpty)
+                    CloseInputParameterSessions(_values.CommandParameters.Collection);
             }
         }
 

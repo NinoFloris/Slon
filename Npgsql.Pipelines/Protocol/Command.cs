@@ -36,10 +36,15 @@ interface IParameterWriter
     void Write<T>(ref SpanBufferWriter<T> writer, CommandParameter parameter) where T : IBufferWriter<byte>;
 }
 
+readonly struct CommandParameters
+{
+    public ReadOnlyMemory<KeyValuePair<CommandParameter, IParameterWriter>> Collection { get; init; }
+}
+
 interface ICommand
 {
     // The underlying values might change so we hand out a copy.
-    Values GetValues(ExecutionFlags additionalFlags);
+    Values GetValues(CommandParameters parameters, ExecutionFlags additionalFlags);
 
     /// <summary>
     /// Called right before the write commences.
@@ -50,7 +55,7 @@ interface ICommand
 
     public readonly record struct Values
     {
-        public required ReadOnlyMemory<KeyValuePair<CommandParameter, IParameterWriter>> Parameters { get; init; }
+        public required CommandParameters CommandParameters { get; init; }
         public required string StatementText { get; init; }
         public required TimeSpan Timeout { get; init; }
         public required ExecutionFlags ExecutionFlags { get; init; }

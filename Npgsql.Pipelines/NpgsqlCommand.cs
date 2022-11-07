@@ -65,7 +65,7 @@ public sealed partial class NpgsqlCommand: ICommand
         return null;
     }
 
-    ICommand.Values ICommand.GetValues(ExecutionFlags additionalFlags)
+    ICommand.Values ICommand.GetValues(CommandParameters parameters, ExecutionFlags additionalFlags)
     {
         ImmutableArray<Parameter> parameterTypes = default;
 
@@ -77,45 +77,15 @@ public sealed partial class NpgsqlCommand: ICommand
             _ => ExecutionFlags.Unprepared
         };
 
-        ReadOnlyMemory<KeyValuePair<CommandParameter, IParameterWriter>> parameters;
-        int count;
-        if (_parameterCollection is null || (count = _parameterCollection.Count) == 0)
-            parameters = new();
-        else
-        {
-            var array=  ArrayPool<KeyValuePair<CommandParameter, IParameterWriter>>.Shared.Rent(count);
-            var i = 0;
-            foreach (var p in _parameterCollection.GetFastEnumerator())
-            {
-                // Start session, lookup type info, writer etc.
-                var parameter = ToCommandParameter(p);
-                array[i] = new(parameter, LookupWriter(parameter));
-                i++;
-            }
-
-            parameters = new(array, 0, count);
-        }
-
         return new()
         {
-            Parameters = parameters,
+            CommandParameters = parameters,
             StatementText = _userCommandText ?? string.Empty,
             ExecutionFlags = flags | additionalFlags,
             Statement = statement,
             Timeout = _commandTimeout,
             State = TryGetDataSource(out var dataSource) ? dataSource : GetConnection().DbDataSource
         };
-
-        CommandParameter ToCommandParameter(KeyValuePair<string, object?> keyValuePair)
-        {
-            throw new NotImplementedException();
-        }
-
-        // Probably want this writer to be a normal class.
-        IParameterWriter LookupWriter(CommandParameter commandParameter)
-        {
-            throw new NotImplementedException();
-        }
     }
 
     CommandExecution ICommand.CreateExecution(in ICommand.Values values)
@@ -141,6 +111,41 @@ public sealed partial class NpgsqlCommand: ICommand
             };
 
             return commandExecution;
+        }
+    }
+
+    static CommandParameters TransformParameters(NpgsqlParameterCollection? parameters)
+    {
+        ReadOnlyMemory<KeyValuePair<CommandParameter, IParameterWriter>> collection;
+        int count;
+        if (parameters is null || (count = parameters.Count) == 0)
+            collection = new();
+        else
+        {
+            var array=  ArrayPool<KeyValuePair<CommandParameter, IParameterWriter>>.Shared.Rent(count);
+            var i = 0;
+            foreach (var p in parameters.GetFastEnumerator())
+            {
+                // Start session, lookup type info, writer etc.
+                var parameter = ToCommandParameter(p);
+                array[i] = new(parameter, LookupWriter(parameter));
+                i++;
+            }
+
+            collection = new(array, 0, count);
+        }
+
+        return new CommandParameters { Collection = collection };
+
+        CommandParameter ToCommandParameter(KeyValuePair<string, object?> keyValuePair)
+        {
+            throw new NotImplementedException();
+        }
+
+        // Probably want this writer to be a normal class.
+        IParameterWriter LookupWriter(CommandParameter commandParameter)
+        {
+            throw new NotImplementedException();
         }
     }
 
@@ -188,29 +193,29 @@ public sealed partial class NpgsqlCommand: ICommand
             ThrowIfHasCloseConnection(behavior);
             // Pick a connection and do the write ourselves, connectionless command execution for sync paths :)
             var slot = dataSource.Open(exclusiveUse: false, dataSource.DefaultConnectionTimeout);
-            var command = dataSource.WriteCommand(slot, this, behavior.ToExecutionFlags());
+            var command = dataSource.WriteCommand(slot, this, TransformParameters(_parameterCollection), behavior.ToExecutionFlags());
             return NpgsqlDataReader.Create(async: false, new ValueTask<CommandContextBatch>(command)).GetAwaiter().GetResult();
         }
         else
         {
-            var command = GetCommandWriter().WriteCommand(allowPipelining: false, this, behavior.ToExecutionFlags(), HasCloseConnection(behavior));
+            var command = GetCommandWriter().WriteCommand(allowPipelining: false, this, TransformParameters(_parameterCollection), behavior.ToExecutionFlags(), HasCloseConnection(behavior));
             return NpgsqlDataReader.Create(async: false, command).GetAwaiter().GetResult();
         }
     }
 
     // TODO would be interesting to prototype an overload taking a parametercollection, that would allow for entirely static/frozen DbDataSource commmands.
-    ValueTask<NpgsqlDataReader> ExecuteDataReaderAsync(CommandBehavior behavior, CancellationToken cancellationToken)
+    ValueTask<NpgsqlDataReader> ExecuteDataReaderAsync(NpgsqlParameterCollection? parameters, CommandBehavior behavior, CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
         if (TryGetDataSource(out var dataSource))
         {
             ThrowIfHasCloseConnection(behavior);
-            var command = dataSource.WriteMultiplexingCommand(this, behavior.ToExecutionFlags(), cancellationToken);
+            var command = dataSource.WriteMultiplexingCommand(this, TransformParameters(parameters ?? _parameterCollection), behavior.ToExecutionFlags(), cancellationToken);
             return NpgsqlDataReader.Create(async: true, command);
         }
         else
         {
-            var command = GetCommandWriter().WriteCommand(allowPipelining: true, this, behavior.ToExecutionFlags(), HasCloseConnection(behavior), cancellationToken);
+            var command = GetCommandWriter().WriteCommand(allowPipelining: true, this, TransformParameters(parameters ?? _parameterCollection), behavior.ToExecutionFlags(), HasCloseConnection(behavior), cancellationToken);
             return NpgsqlDataReader.Create(async: true, command);
         }
     }
@@ -322,14 +327,20 @@ public sealed partial class NpgsqlCommand: DbCommand
         => ExecuteDataReader(behavior);
 
     public new Task<NpgsqlDataReader> ExecuteReaderAsync(CancellationToken cancellationToken = default)
-        => ExecuteDataReaderAsync(CommandBehavior.Default, cancellationToken).AsTask();
+        => ExecuteDataReaderAsync(null, CommandBehavior.Default, cancellationToken).AsTask();
     public new Task<NpgsqlDataReader> ExecuteReaderAsync(CommandBehavior behavior, CancellationToken cancellationToken = default)
-        => ExecuteDataReaderAsync(behavior, cancellationToken).AsTask();
+        => ExecuteDataReaderAsync(null, behavior, cancellationToken).AsTask();
+
+    public ValueTask<NpgsqlDataReader> ExecuteReaderAsync(NpgsqlParameterCollection? parameters, CancellationToken cancellationToken = default)
+        => ExecuteDataReaderAsync(parameters, CommandBehavior.Default, cancellationToken);
+
+    public ValueTask<NpgsqlDataReader> ExecuteReaderAsync(NpgsqlParameterCollection? parameters, CommandBehavior behavior, CancellationToken cancellationToken = default)
+        => ExecuteDataReaderAsync(parameters, behavior, cancellationToken);
 
     protected override DbDataReader ExecuteDbDataReader(CommandBehavior behavior)
         => ExecuteDataReader(behavior);
     protected override async Task<DbDataReader> ExecuteDbDataReaderAsync(CommandBehavior behavior, CancellationToken cancellationToken)
-        => await ExecuteDataReaderAsync(behavior, cancellationToken);
+        => await ExecuteDataReaderAsync(null, behavior, cancellationToken);
 
     protected override DbParameter CreateDbParameter() => NpgsqlDbParameter.Create();
     protected override DbConnection? DbConnection {

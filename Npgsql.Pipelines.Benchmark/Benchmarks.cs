@@ -18,6 +18,7 @@ namespace Npgsql.Pipelines.Benchmark
             {
                 Add(new SimpleJobAttribute(targetCount: 20).Config);
                 AddDiagnoser(MemoryDiagnoser.Default);
+                AddDiagnoser(ThreadingDiagnoser.Default);
                 AddColumn(new TagColumn("Connections", name => (name.EndsWith("Pipelined") ? 1 : Connections).ToString()));
             }
         }
