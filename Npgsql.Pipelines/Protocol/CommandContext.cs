@@ -69,7 +69,12 @@ readonly struct CommandContextBatch: IEnumerable<CommandContext>
     readonly CommandContext[]? _contexts;
 
     CommandContextBatch(CommandContext[] contexts)
-        => _contexts = contexts;
+    {
+        if (contexts.Length == 0)
+            throw new ArgumentException("Array cannot be empty.", nameof(contexts));
+
+        _contexts = contexts;
+    }
 
     CommandContextBatch(CommandContext context)
         => _context = context;

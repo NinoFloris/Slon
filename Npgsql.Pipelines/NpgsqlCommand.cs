@@ -16,7 +16,12 @@ namespace Npgsql.Pipelines;
 
 static class CommandBehaviorExtensions
 {
-    public static ExecutionFlags ToExecutionFlags(this CommandBehavior commandBehavior) => (ExecutionFlags)commandBehavior;
+    public static ExecutionFlags ToExecutionFlags(this CommandBehavior commandBehavior)
+    {
+        // Remove any irrelevant flags and mask the rest of the range for ExecutionFlags so users can't leak through flags.
+        const int allFlags = (int)CommandBehavior.CloseConnection * 2 - 1; // 2^6 - 1.
+        return (ExecutionFlags)(commandBehavior & ~((CommandBehavior)int.MaxValue - allFlags | CommandBehavior.CloseConnection | CommandBehavior.SingleResult));
+    }
 }
 
 // Implementation
@@ -28,10 +33,8 @@ public sealed partial class NpgsqlCommand: ICommand
     TimeSpan _commandTimeout = NpgsqlDataSourceOptions.DefaultCommandTimeout;
     NpgsqlTransaction? _transaction;
     string? _userCommandText;
-    ValueTask<CommandContextBatch>? _pendingConnectionOp;
     bool _disposed;
     NpgsqlParameterCollection? _parameterCollection;
-    CommandBehavior _behavior = CommandBehavior.Default;
 
     void Constructor(string? commandText, NpgsqlConnection? conn, NpgsqlTransaction? transaction, NpgsqlDataSource? dataSource = null)
     {
@@ -62,7 +65,7 @@ public sealed partial class NpgsqlCommand: ICommand
         return null;
     }
 
-    ICommand.Values ICommand.GetValues()
+    ICommand.Values ICommand.GetValues(ExecutionFlags additionalFlags)
     {
         ImmutableArray<Parameter> parameterTypes = default;
 
@@ -97,8 +100,9 @@ public sealed partial class NpgsqlCommand: ICommand
         {
             Parameters = parameters,
             StatementText = _userCommandText ?? string.Empty,
-            ExecutionFlags = flags | _behavior.ToExecutionFlags(),
+            ExecutionFlags = flags | additionalFlags,
             Statement = statement,
+            Timeout = _commandTimeout,
             State = TryGetDataSource(out var dataSource) ? dataSource : GetConnection().DbDataSource
         };
 
@@ -117,7 +121,7 @@ public sealed partial class NpgsqlCommand: ICommand
     CommandExecution ICommand.CreateExecution(in ICommand.Values values)
     {
         return Core(values);
-        // This is a static local function to assure StartExecution has only dependencies on passed in state.
+        // This is a static local function to assure StartExecution has only dependencies on clearly passed in state.
         // Any unexpected instance dependencies would undoubtedly cause fun races.
         static CommandExecution Core(in ICommand.Values values)
         {
@@ -141,7 +145,7 @@ public sealed partial class NpgsqlCommand: ICommand
     }
 
     bool ConnectionOpInProgress
-        => _pendingConnectionOp is { IsCompletedSuccessfully: true, Result.AllCompleted: false };
+        => TryGetConnection(out var connection) && connection.ConnectionOpInProgress;
 
     void ThrowIfDisposed()
     {
@@ -166,43 +170,48 @@ public sealed partial class NpgsqlCommand: ICommand
         return connection is not null;
     }
 
+    // Only for DbConnection commands, throws for DbDataSource commands.
+    bool HasCloseConnection(CommandBehavior behavior) => (behavior & CommandBehavior.CloseConnection) == CommandBehavior.CloseConnection;
+    void ThrowIfHasCloseConnection(CommandBehavior behavior)
+    {
+        if (HasCloseConnection(behavior))
+            ThrowHasCloseConnection();
+
+        void ThrowHasCloseConnection() => throw new ArgumentException($"Cannot pass {nameof(CommandBehavior.CloseConnection)} for a DbDataSource command, this is only valid when a command has a connection.");
+    }
+
     NpgsqlDataReader ExecuteDataReader(CommandBehavior behavior)
     {
         ThrowIfDisposed();
-        _behavior = behavior;
         if (TryGetDataSource(out var dataSource))
         {
+            ThrowIfHasCloseConnection(behavior);
             // Pick a connection and do the write ourselves, connectionless command execution for sync paths :)
             var slot = dataSource.Open(exclusiveUse: false, dataSource.DefaultConnectionTimeout);
-            var command = dataSource.WriteCommand(slot, this);
-            return NpgsqlDataReader.Create(async: false, new ValueTask<CommandContextBatch>(CommandContextBatch.Create(command)), behavior, _commandTimeout).GetAwaiter().GetResult();
+            var command = dataSource.WriteCommand(slot, this, behavior.ToExecutionFlags());
+            return NpgsqlDataReader.Create(async: false, new ValueTask<CommandContextBatch>(command)).GetAwaiter().GetResult();
         }
         else
         {
-            var command = GetCommandWriter().WriteCommand(allowPipelining: false, this, behavior);
-            // Store the active operation to know when it's completed.
-            _pendingConnectionOp = command;
-            return NpgsqlDataReader.Create(async: false, command, behavior, _commandTimeout).GetAwaiter().GetResult();
+            var command = GetCommandWriter().WriteCommand(allowPipelining: false, this, behavior.ToExecutionFlags(), HasCloseConnection(behavior));
+            return NpgsqlDataReader.Create(async: false, command).GetAwaiter().GetResult();
         }
     }
 
-    // TODO would be interesting to prototype an overload taking a parametercollection.
+    // TODO would be interesting to prototype an overload taking a parametercollection, that would allow for entirely static/frozen DbDataSource commmands.
     ValueTask<NpgsqlDataReader> ExecuteDataReaderAsync(CommandBehavior behavior, CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
-        _behavior = behavior;
         if (TryGetDataSource(out var dataSource))
         {
-            var command = dataSource.WriteMultiplexingCommand(this, cancellationToken);
-            return NpgsqlDataReader.Create(async: true, command, behavior, _commandTimeout, null, cancellationToken);
+            ThrowIfHasCloseConnection(behavior);
+            var command = dataSource.WriteMultiplexingCommand(this, behavior.ToExecutionFlags(), cancellationToken);
+            return NpgsqlDataReader.Create(async: true, command);
         }
         else
         {
-            var command = GetCommandWriter().WriteCommand(allowPipelining: true, this, behavior, cancellationToken);
-            // We store the last operation to know when it's completed, as a connection is at most a single
-            // pipeline this is sufficient to know whether all previous commands were also completed.
-            _pendingConnectionOp = command;
-            return NpgsqlDataReader.Create(async: true, command, behavior, _commandTimeout, null, cancellationToken);
+            var command = GetCommandWriter().WriteCommand(allowPipelining: true, this, behavior.ToExecutionFlags(), HasCloseConnection(behavior), cancellationToken);
+            return NpgsqlDataReader.Create(async: true, command);
         }
     }
 

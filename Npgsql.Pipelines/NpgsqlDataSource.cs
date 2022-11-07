@@ -112,7 +112,8 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>, I
         }
 
         public CommandExecution CommandExecution { get; private set; }
-        public ICommand.Values GetValues() => _values;
+        // We can ignore any additional flags here.
+        public ICommand.Values GetValues(ExecutionFlags additionalFlags) => _values;
         public CommandExecution CreateExecution(in ICommand.Values values)
         {
             DebugShim.Assert(values == _values);
@@ -122,9 +123,9 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>, I
         }
     }
 
-    internal ValueTask<CommandContextBatch> WriteMultiplexingCommand(ICommand command, CancellationToken cancellationToken = default)
+    internal ValueTask<CommandContextBatch> WriteMultiplexingCommand(ICommand command, ExecutionFlags additionalFlags, CancellationToken cancellationToken = default)
     {
-        var item = new MultiplexingItem(command, command.GetValues());
+        var item = new MultiplexingItem(command, command.GetValues(additionalFlags));
         var source = PgV3Protocol.CreateUnboundOperationSource(item, cancellationToken);
 
         if (_channelWriter.TryWrite(source))
@@ -142,14 +143,14 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>, I
         }
     }
 
-    internal CommandContext WriteCommand(OperationSlot slot, ICommand command)
+    internal CommandContext WriteCommand(OperationSlot slot, ICommand command, ExecutionFlags additionalFlags)
     {
         // TODO SingleThreadSynchronizationContext for sync writes happening async.
-        return WriteCommandAsync(slot, command, CancellationToken.None);
+        return WriteCommandAsync(slot, command, additionalFlags, CancellationToken.None);
     }
 
-    internal CommandContext WriteCommandAsync(OperationSlot slot, ICommand command, CancellationToken cancellationToken = default)
-        => CommandWriter.WriteExtendedAsync(slot, ref command, flushHint: true, cancellationToken);
+    internal CommandContext WriteCommandAsync(OperationSlot slot, ICommand command, ExecutionFlags additionalFlags, CancellationToken cancellationToken = default)
+        => CommandWriter.WriteExtendedAsync(slot, ref command, additionalFlags, flushHint: true, cancellationToken: cancellationToken);
 
     internal ValueTask<OperationSlot> OpenAsync(bool exclusiveUse, TimeSpan connectionTimeout, CancellationToken cancellationToken = default)
         => _connectionSource.GetAsync(exclusiveUse, connectionTimeout, cancellationToken);
@@ -281,7 +282,7 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>, I
         static ValueTask<WriteResult> WriteCommand(OperationSource source, bool flushHint)
         {
             ref var command = ref PgV3Protocol.GetData<MultiplexingItem>(source);
-            var commandContext = CommandWriter.WriteExtendedAsync(source, ref command, flushHint, source.CancellationToken);
+            var commandContext = CommandWriter.WriteExtendedAsync(source, ref command, default, flushHint, source.CancellationToken);
             // We can drop the commandContext as it was written into the source data to be retrieved via the ICommandExecutionProvider.
             return commandContext.WriteTask;
         }

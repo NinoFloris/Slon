@@ -34,14 +34,22 @@ readonly struct IOCompletionPair
     /// <returns></returns>
     public ValueTask<Operation> SelectAsync()
     {
+        // Internal note, all exceptions should only exist wrapped in a task.
+
         // Return read when it is completed but only when write is completed successfully or still running.
         if (Write.IsCompletedSuccessfully || (!Write.IsCompleted && ReadSlot.Task.IsCompleted))
             return ReadSlot.Task;
 
         if (Write.IsFaulted || Write.IsCanceled)
         {
-            Write.GetAwaiter().GetResult();
-            return default;
+            try
+            {
+                Write.GetAwaiter().GetResult();
+            }
+            catch(Exception ex)
+            {
+                return new ValueTask<Operation>(Task.FromException<Operation>(ex));
+            }
         }
 
         // Neither are completed yet.

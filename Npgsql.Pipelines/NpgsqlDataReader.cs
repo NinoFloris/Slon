@@ -44,7 +44,7 @@ public sealed partial class NpgsqlDataReader
     CommandContext GetCurrent() => _commandEnumerator.Current;
     PgProtocol GetProtocol() => GetCurrent().GetOperation().Result.Protocol;
 
-    internal static async ValueTask<NpgsqlDataReader> Create(bool async, ValueTask<CommandContextBatch> batch, CommandBehavior behavior, TimeSpan commandTimeout, ObjectPool<NpgsqlDataReader>? pool = null, CancellationToken cancellationToken = default)
+    internal static async ValueTask<NpgsqlDataReader> Create(bool async, ValueTask<CommandContextBatch> batch)
     {
         // This is an inlined version of NextResultAsyncCore to save on async overhead.
         // Either commandReader is null and initException is not null or its always a valid reference.
@@ -58,7 +58,7 @@ public sealed partial class NpgsqlDataReader
             var op = await enumerator.Current.GetOperation().ConfigureAwait(false);
             commandReader = op.Protocol.GetCommandReader();
             // Immediately initialize the first command, we're supposed to be positioned there at the start.
-            await commandReader.InitializeAsync(enumerator.Current, cancellationToken).ConfigureAwait(false);
+            await commandReader.InitializeAsync(enumerator.Current).ConfigureAwait(false);
         }
         catch(Exception ex)
         {
@@ -68,7 +68,7 @@ public sealed partial class NpgsqlDataReader
         if (initException is not null)
             return await HandleUncommon(commandReader, initException, enumerator);
 
-        return (pool ?? SharedPool).Rent().Initialize(commandReader, enumerator);
+        return SharedPool.Rent().Initialize(commandReader, enumerator);
 
         static async ValueTask<NpgsqlDataReader> HandleUncommon(CommandReader commandReader, ExceptionDispatchInfo initException, CommandContextBatch.Enumerator enumerator)
         {

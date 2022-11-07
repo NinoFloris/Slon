@@ -8,19 +8,18 @@ namespace Npgsql.Pipelines.Protocol;
 [Flags]
 enum ExecutionFlags
 {
-    Unprepared = 64,
-    Preparing = 128,
-    Prepared = 256,
-    ErrorBarrier = 512, // Can be combined with one of the three previous flags.
-
-    // Command Behavior flags, these are currently mapped to the same integers, otherwise change extension method CommandBehavior.ToExecutionFlags.
     Default = 0,
-    SingleResult = 1,  // with data, force single result, may affect database
+
+    // Relevant CommandBehavior flags for a single command, these are currently mapped to the same integers, otherwise change extension method CommandBehavior.ToExecutionFlags.
     SchemaOnly = 2,  // column info, no data, no effect on database
     KeyInfo = 4,  // column info + primary key information (if available)
     SingleRow = 8, // data, hint single row and single result, may affect database - doesn't apply to child(chapter) results
     SequentialAccess = 16,
-    CloseConnection = 32
+
+    Unprepared = 64,
+    Preparing = 128,
+    Prepared = 256,
+    ErrorBarrier = 512, // Can be combined with one of the three previous flags.
 }
 
 static class ExecutionFlagsExtensions
@@ -40,7 +39,7 @@ interface IParameterWriter
 interface ICommand
 {
     // The underlying values might change so we hand out a copy.
-    Values GetValues();
+    Values GetValues(ExecutionFlags additionalFlags);
 
     /// <summary>
     /// Called right before the write commences.
@@ -53,6 +52,7 @@ interface ICommand
     {
         public required ReadOnlyMemory<KeyValuePair<CommandParameter, IParameterWriter>> Parameters { get; init; }
         public required string StatementText { get; init; }
+        public required TimeSpan Timeout { get; init; }
         public required ExecutionFlags ExecutionFlags { get; init; }
         public Statement? Statement { get; init; }
         public object? State { get; init; }

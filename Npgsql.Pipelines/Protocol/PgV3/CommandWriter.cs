@@ -9,10 +9,10 @@ namespace Npgsql.Pipelines.Protocol.PgV3;
 class CommandWriter
 {
     // Note: ref command to allow structs to mutate themselves in StartExecution.
-    public static CommandContext WriteExtendedAsync<TCommand>(OperationSlot slot, ref TCommand command, bool flushHint = true, CancellationToken cancellationToken = default) where TCommand: ICommand
+    public static CommandContext WriteExtendedAsync<TCommand>(OperationSlot slot, ref TCommand command, ExecutionFlags additionalFlags, bool flushHint = true, CancellationToken cancellationToken = default) where TCommand: ICommand
     {
         // We need to start the command execution before writing to prevent any races, as the read slot could already be completed.
-        var values = command.GetValues();
+        var values = command.GetValues(additionalFlags);
         var commandExecution = command.CreateExecution(values with { ExecutionFlags = GetEffectiveExecutionFlags(slot, values, out var statementName) });
         var completionPair = ((PgV3Protocol)slot.Protocol!).WriteMessageAsync(slot, new Command(values, statementName), flushHint, cancellationToken);
         return CommandContext.Create(completionPair, commandExecution);

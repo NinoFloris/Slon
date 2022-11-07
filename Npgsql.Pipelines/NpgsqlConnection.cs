@@ -26,7 +26,7 @@ public sealed partial class NpgsqlConnection
     volatile SemaphoreSlim? _pipeliningWriteLock;
     volatile ConnectionOperationSource? _pipelineTail;
     ConnectionOperationSource? _operationSingleton;
-    TaskCompletionSource<bool>? _closingTcs;
+    TaskCompletionSource<bool>? _waitForIdleTcs;
 
     internal NpgsqlDataSource DbDataSource
     {
@@ -77,6 +77,9 @@ public sealed partial class NpgsqlConnection
                 throw new InvalidOperationException("Connection is not open or ready.");
         }
     }
+
+    internal bool ConnectionOpInProgress
+        => _pipelineTail is { IsCompleted: false };
 
     void MoveToConnecting()
     {
@@ -157,8 +160,8 @@ public sealed partial class NpgsqlConnection
                 drainingTask = Task.CompletedTask;
             else
             {
-                _closingTcs = new TaskCompletionSource<bool>();
-                drainingTask = _closingTcs.Task;
+                _waitForIdleTcs = new TaskCompletionSource<bool>();
+                drainingTask = _waitForIdleTcs.Task;
             }
 
             _state = ConnectionState.Closed;
@@ -192,7 +195,8 @@ public sealed partial class NpgsqlConnection
             if (_state is not (ConnectionState.Closed or ConnectionState.Broken))
                 _state = ConnectionState.Open;
 
-            _closingTcs?.SetResult(true);
+            _pipelineTail = null;
+            _waitForIdleTcs?.SetResult(true);
         }
     }
 
@@ -256,7 +260,7 @@ public sealed partial class NpgsqlConnection
 #if !NETSTANDARD2_0
         [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
 #endif
-        public async ValueTask<CommandContextBatch> WriteCommand(bool allowPipelining, ICommand command, CommandBehavior behavior, CancellationToken cancellationToken = default)
+        public async ValueTask<CommandContextBatch> WriteCommand(bool allowPipelining, ICommand command, ExecutionFlags additionalFlags, bool closeConnection, CancellationToken cancellationToken = default)
         {
             _instance.ThrowIfNoSlot();
 
@@ -268,7 +272,7 @@ public sealed partial class NpgsqlConnection
                 // Assumption is that we can already begin reading, otherwise we'd need to tie the tasks together.
                 Debug.Assert(slot.Task.IsCompletedSuccessfully);
                 // First enqueue, only then call WriteCommandCore.
-                subSlot = EnqueueReadUnsynchronized(slot, allowPipelining);
+                subSlot = EnqueueReadUnsynchronized(slot, allowPipelining, closeConnection);
             }
 
             await BeginWrite(cancellationToken).ConfigureAwait(false);
@@ -276,9 +280,9 @@ public sealed partial class NpgsqlConnection
             try
             {
                 _instance.MoveToExecuting();
-                var result = _instance.DbDataSource.WriteCommandAsync(slot, command, cancellationToken);
+                var result = _instance.DbDataSource.WriteCommandAsync(slot, command, additionalFlags, cancellationToken);
                 writeTask = result.WriteTask;
-                return CommandContextBatch.Create(result.WithIOCompletionPair(new IOCompletionPair(writeTask, subSlot)));
+                return result.WithIOCompletionPair(new IOCompletionPair(writeTask, subSlot));
             }
             finally
             {
@@ -287,13 +291,16 @@ public sealed partial class NpgsqlConnection
             }
         }
 
-        ConnectionOperationSource EnqueueReadUnsynchronized(OperationSlot connectionSlot, bool allowPipelining)
+        ConnectionOperationSource EnqueueReadUnsynchronized(OperationSlot connectionSlot, bool allowPipelining, bool closeConnection)
         {
             var current = _instance._pipelineTail;
             if (!allowPipelining && !(current is null || current.IsCompleted))
                 ThrowCommandInProgress();
 
-            var source = _instance._pipelineTail = _instance.CreateSlotUnsynchronized(connectionSlot);
+            if (closeConnection && current is not null && current.CloseConnection)
+                ThrowConnectionWillClose();
+
+            var source = _instance._pipelineTail = _instance.CreateSlotUnsynchronized(connectionSlot, closeConnection);
             // An immediately active read means head == tail, move to fetching immediately.
             if (source.Task.IsCompletedSuccessfully)
                 _instance.MoveToFetching();
@@ -301,6 +308,7 @@ public sealed partial class NpgsqlConnection
             return source;
 
             void ThrowCommandInProgress() => throw new InvalidOperationException("A command is already in progress.");
+            void ThrowConnectionWillClose() => throw new InvalidOperationException("A previous command specified CommandBehavior.CloseConnection, no new commands can be executed.");
         }
 
         Task BeginWrite(CancellationToken cancellationToken = default)
@@ -347,7 +355,7 @@ public sealed partial class NpgsqlConnection
     internal CommandWriter GetCommandWriter() => new(this);
     internal TimeSpan DefaultCommandTimeout => DbDataSource.DefaultCommandTimeout;
 
-    ConnectionOperationSource CreateSlotUnsynchronized(OperationSlot connectionSlot)
+    ConnectionOperationSource CreateSlotUnsynchronized(OperationSlot connectionSlot, bool closeConnection)
     {
         ConnectionOperationSource source;
         var current = _pipelineTail;
@@ -360,11 +368,15 @@ public sealed partial class NpgsqlConnection
                 source = singleton;
             }
             else
-                source = _operationSingleton = new ConnectionOperationSource(this, connectionSlot.Protocol, pooled: true);
+            {
+                DebugShim.Assert(connectionSlot.Protocol is not null);
+                source = _operationSingleton = new ConnectionOperationSource(this, connectionSlot.Protocol, closeConnection, pooled: true);
+            }
         }
         else
         {
-            source = new ConnectionOperationSource(this, connectionSlot.Protocol);
+            DebugShim.Assert(connectionSlot.Protocol is not null);
+            source = new ConnectionOperationSource(this, connectionSlot.Protocol, closeConnection);
             current.Next = source;
         }
 
@@ -373,10 +385,16 @@ public sealed partial class NpgsqlConnection
 
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    void CompleteOperation(ConnectionOperationSource? next, Exception? exception)
+    void CompleteOperation(ConnectionOperationSource? next, Exception? exception, bool closeConnection)
     {
+        // There should never be a next after closeConnection is true.
+        DebugShim.Assert(!closeConnection && next is not null || closeConnection);
+
         if (exception is not null)
             MoveToBroken(exception, next);
+        else if (closeConnection)
+            // TODO We could do something here to make this async.
+            Close();
         else if (next is null)
             MoveToIdle();
         else
@@ -390,12 +408,14 @@ public sealed partial class NpgsqlConnection
         Task<Operation>? _task;
 
         // Pipelining on the same connection is expected to be done on the same thread.
-        public ConnectionOperationSource(NpgsqlConnection connection, PgProtocol? protocol, bool pooled = false) :
+        public ConnectionOperationSource(NpgsqlConnection connection, PgProtocol protocol, bool closeConnection, bool pooled = false) :
             base(protocol, pooled)
         {
+            CloseConnection = closeConnection;
             _connection = connection;
         }
 
+        public bool CloseConnection { get; }
         public void Activate() => ActivateCore();
 
         public ConnectionOperationSource? Next
@@ -413,7 +433,7 @@ public sealed partial class NpgsqlConnection
         public override ValueTask<Operation> Task => new(_task ??= new ValueTask<Operation>(this, ValueTaskSource.Version).AsTask());
 
         protected override void CompleteCore(PgProtocol protocol, Exception? exception)
-            => _connection.CompleteOperation(_next, exception);
+            => _connection.CompleteOperation(_next, exception, CloseConnection);
 
         protected override void ResetCore()
         {
