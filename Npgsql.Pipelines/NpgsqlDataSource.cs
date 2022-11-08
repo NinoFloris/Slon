@@ -102,30 +102,32 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>, I
 
     struct MultiplexingItem: ICommand
     {
-        readonly ICommand _command;
+        readonly CreateExecutionDelegate _createExecutionDelegate;
         ICommand.Values _values;
 
-        public MultiplexingItem(ICommand command, in ICommand.Values values)
+        public MultiplexingItem(CreateExecutionDelegate createExecutionDelegate, in ICommand.Values values)
         {
-            _command = command;
+            _createExecutionDelegate = createExecutionDelegate;
             _values = values;
         }
 
         public CommandExecution CommandExecution { get; private set; }
-        // We can ignore any additional flags here.
-        public ICommand.Values GetValues(CommandParameters parameters, ExecutionFlags additionalFlags) => _values;
+
+        public ICommand.Values GetValues() => _values;
+        CreateExecutionDelegate ICommand.CreateExecutionDelegate => throw new NotSupportedException();
         public CommandExecution CreateExecution(in ICommand.Values values)
         {
             DebugShim.Assert(values == _values);
             // Null out the values so any heap objects can be freed before the entire operation is done.
             _values = default;
-            return CommandExecution = _command.CreateExecution(values);
+            return CommandExecution = _createExecutionDelegate(values);
         }
     }
 
-    internal ValueTask<CommandContextBatch> WriteMultiplexingCommand(ICommand command, CommandParameters parameters, ExecutionFlags additionalFlags, CancellationToken cancellationToken = default)
+    internal ValueTask<CommandContextBatch> WriteMultiplexingCommand<TCommand>(TCommand command, CancellationToken cancellationToken = default)
+        where TCommand: ICommand
     {
-        var item = new MultiplexingItem(command, command.GetValues(parameters, additionalFlags));
+        var item = new MultiplexingItem(command.CreateExecutionDelegate, command.GetValues());
         var source = PgV3Protocol.CreateUnboundOperationSource(item, cancellationToken);
 
         if (_channelWriter.TryWrite(source))
@@ -143,14 +145,15 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>, I
         }
     }
 
-    internal CommandContext WriteCommand(OperationSlot slot, ICommand command, CommandParameters parameters, ExecutionFlags additionalFlags)
+    internal CommandContext WriteCommand<TCommand>(OperationSlot slot, TCommand command) where TCommand: ICommand
     {
         // TODO SingleThreadSynchronizationContext for sync writes happening async.
-        return WriteCommandAsync(slot, command, parameters, additionalFlags, CancellationToken.None);
+        return WriteCommandAsync(slot, command, CancellationToken.None);
     }
 
-    internal CommandContext WriteCommandAsync(OperationSlot slot, ICommand command, CommandParameters parameters, ExecutionFlags additionalFlags, CancellationToken cancellationToken = default)
-        => CommandWriter.WriteExtendedAsync(slot, ref command, parameters, additionalFlags, flushHint: true, cancellationToken: cancellationToken);
+    internal CommandContext WriteCommandAsync<TCommand>(OperationSlot slot, TCommand command, CancellationToken cancellationToken = default)
+        where TCommand: ICommand
+        => CommandWriter.WriteExtendedAsync(slot, ref command, flushHint: true, cancellationToken: cancellationToken);
 
     internal ValueTask<OperationSlot> OpenAsync(bool exclusiveUse, TimeSpan connectionTimeout, CancellationToken cancellationToken = default)
         => _connectionSource.GetAsync(exclusiveUse, connectionTimeout, cancellationToken);
@@ -282,7 +285,7 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>, I
         static ValueTask<WriteResult> WriteCommand(OperationSource source, bool flushHint)
         {
             ref var command = ref PgV3Protocol.GetData<MultiplexingItem>(source);
-            var commandContext = CommandWriter.WriteExtendedAsync(source, ref command, default, default, flushHint, source.CancellationToken);
+            var commandContext = CommandWriter.WriteExtendedAsync(source, ref command, flushHint, source.CancellationToken);
             // We can drop the commandContext as it was written into the source data to be retrieved via the ICommandExecutionProvider.
             return commandContext.WriteTask;
         }

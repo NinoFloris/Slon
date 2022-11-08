@@ -878,7 +878,7 @@ class PgV3Protocol : PgProtocol
     /// <param name="name"></param>
     /// <returns>True if added, false if it was already added.</returns>
     /// <exception cref="NotImplementedException"></exception>
-    public bool GetOrAddStatementName(in Statement statement, out string name)
+    public bool GetOrAddStatementName(Statement statement, out string name)
     {
         lock (_trackedStatements)
         {
@@ -895,6 +895,14 @@ class PgV3Protocol : PgProtocol
 
             _trackedStatements[statement.Id] = name;
             return true;
+        }
+    }
+
+    public bool ContainsStatement(Statement statement)
+    {
+        lock (_trackedStatements)
+        {
+            return _trackedStatements.ContainsKey(statement.Id);
         }
     }
 }

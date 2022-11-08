@@ -25,7 +25,7 @@ static class CommandBehaviorExtensions
 }
 
 // Implementation
-public sealed partial class NpgsqlCommand: ICommand
+public sealed partial class NpgsqlCommand
 {
     bool _preparationRequested;
     object? _dataSourceOrConnection;
@@ -65,35 +65,52 @@ public sealed partial class NpgsqlCommand: ICommand
         return null;
     }
 
-    ICommand.Values ICommand.GetValues(CommandParameters parameters, ExecutionFlags additionalFlags)
+    // Captures any per call state and merges it with the remaining, less volatile, NpgsqlCommand state during GetValues.
+    // This allows NpgsqlCommand to be thread safe, store an instance on a static and go!
+    readonly struct Command: ICommand
     {
-        ImmutableArray<Parameter> parameterTypes = default;
+        static readonly CreateExecutionDelegate _createExecution = CreateExecutionCore;
 
-        var statement = _preparationRequested ? Statement.CreateUnprepared(PreparationKind.Command, parameterTypes) : GetDataSourceStatement();
-        var flags = ExecutionFlags.ErrorBarrier | statement switch
+        readonly NpgsqlCommand _instance;
+        readonly CommandParameters _parameters;
+        readonly ExecutionFlags _additionalFlags;
+
+        public Command(NpgsqlCommand instance, CommandParameters parameters, ExecutionFlags additionalFlags)
         {
-            { IsComplete: true } => ExecutionFlags.Prepared,
-            { } => ExecutionFlags.Preparing,
-            _ => ExecutionFlags.Unprepared
-        };
+            _parameters = parameters;
+            _additionalFlags = additionalFlags;
+            _instance = instance;
+        }
 
-        return new()
+        public ICommand.Values GetValues()
         {
-            CommandParameters = parameters,
-            StatementText = _userCommandText ?? string.Empty,
-            ExecutionFlags = flags | additionalFlags,
-            Statement = statement,
-            Timeout = _commandTimeout,
-            State = TryGetDataSource(out var dataSource) ? dataSource : GetConnection().DbDataSource
-        };
-    }
+            ImmutableArray<Parameter> parameterTypes = default;
 
-    CommandExecution ICommand.CreateExecution(in ICommand.Values values)
-    {
-        return Core(values);
-        // This is a static local function to assure StartExecution has only dependencies on clearly passed in state.
-        // Any unexpected instance dependencies would undoubtedly cause fun races.
-        static CommandExecution Core(in ICommand.Values values)
+            var statement = _instance._preparationRequested ? Statement.CreateUnprepared(PreparationKind.Command, parameterTypes) : _instance.GetDataSourceStatement();
+            var flags = ExecutionFlags.ErrorBarrier | statement switch
+            {
+                { IsComplete: true } => ExecutionFlags.Prepared,
+                { } => ExecutionFlags.Preparing,
+                _ => ExecutionFlags.Unprepared
+            };
+
+            return new()
+            {
+                CommandParameters = _parameters,
+                StatementText = _instance._userCommandText ?? string.Empty,
+                ExecutionFlags = flags | _additionalFlags,
+                Statement = statement,
+                Timeout = _instance._commandTimeout,
+                State = _instance.TryGetDataSource(out var dataSource) ? dataSource : _instance.GetConnection().DbDataSource
+            };
+        }
+
+        public CreateExecutionDelegate CreateExecutionDelegate => _createExecution;
+        public CommandExecution CreateExecution(in ICommand.Values values) => CreateExecutionCore(values);
+
+        // This is a static function to assure CreateExecution has only dependencies on clearly passed in state.
+        // Any unexpected _instance dependencies would undoubtedly cause fun races.
+        static CommandExecution CreateExecutionCore(in ICommand.Values values)
         {
             var flags = values.ExecutionFlags;
             DebugShim.Assert(values.State is NpgsqlDataSource);
@@ -193,12 +210,12 @@ public sealed partial class NpgsqlCommand: ICommand
             ThrowIfHasCloseConnection(behavior);
             // Pick a connection and do the write ourselves, connectionless command execution for sync paths :)
             var slot = dataSource.Open(exclusiveUse: false, dataSource.DefaultConnectionTimeout);
-            var command = dataSource.WriteCommand(slot, this, TransformParameters(_parameterCollection), behavior.ToExecutionFlags());
+            var command = dataSource.WriteCommand(slot, CreateCommand(null, behavior));
             return NpgsqlDataReader.Create(async: false, new ValueTask<CommandContextBatch>(command)).GetAwaiter().GetResult();
         }
         else
         {
-            var command = GetCommandWriter().WriteCommand(allowPipelining: false, this, TransformParameters(_parameterCollection), behavior.ToExecutionFlags(), HasCloseConnection(behavior));
+            var command = GetCommandWriter().WriteCommand(allowPipelining: false, CreateCommand(null, behavior), HasCloseConnection(behavior));
             return NpgsqlDataReader.Create(async: false, command).GetAwaiter().GetResult();
         }
     }
@@ -210,15 +227,18 @@ public sealed partial class NpgsqlCommand: ICommand
         if (TryGetDataSource(out var dataSource))
         {
             ThrowIfHasCloseConnection(behavior);
-            var command = dataSource.WriteMultiplexingCommand(this, TransformParameters(parameters ?? _parameterCollection), behavior.ToExecutionFlags(), cancellationToken);
+            var command = dataSource.WriteMultiplexingCommand(CreateCommand(parameters, behavior), cancellationToken);
             return NpgsqlDataReader.Create(async: true, command);
         }
         else
         {
-            var command = GetCommandWriter().WriteCommand(allowPipelining: true, this, TransformParameters(parameters ?? _parameterCollection), behavior.ToExecutionFlags(), HasCloseConnection(behavior), cancellationToken);
+            var command = GetCommandWriter().WriteCommand(allowPipelining: true, CreateCommand(parameters, behavior), HasCloseConnection(behavior), cancellationToken);
             return NpgsqlDataReader.Create(async: true, command);
         }
     }
+
+    Command CreateCommand(NpgsqlParameterCollection? parameters, CommandBehavior behavior)
+        => new(this, TransformParameters(parameters ?? _parameterCollection), behavior.ToExecutionFlags());
 
     async ValueTask DisposeCore(bool async)
     {

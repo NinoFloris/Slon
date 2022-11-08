@@ -41,10 +41,21 @@ readonly struct CommandParameters
     public ReadOnlyMemory<KeyValuePair<CommandParameter, IParameterWriter>> Collection { get; init; }
 }
 
+/// <summary>
+/// Called right before the write commences.
+/// </summary>
+/// <param name="values">Values containing any updated (effective) ExecutionFlags for the protocol it will execute on.</param>
+/// <returns>CommandExecution state that is used for the duration of the execution.</returns>
+delegate CommandExecution CreateExecutionDelegate(in ICommand.Values values);
+
 interface ICommand
 {
     // The underlying values might change so we hand out a copy.
-    Values GetValues(CommandParameters parameters, ExecutionFlags additionalFlags);
+    Values GetValues();
+
+    // Also exposed as a delegate to help struct composition where carrying an interface constraint or boxing is not desired
+    // CreateExecution should not depend on instance state anyway, if it needs any then Values.State is the vehicle of choice.
+    CreateExecutionDelegate CreateExecutionDelegate { get; }
 
     /// <summary>
     /// Called right before the write commences.
