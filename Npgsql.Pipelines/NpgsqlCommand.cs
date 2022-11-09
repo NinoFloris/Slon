@@ -141,7 +141,7 @@ public sealed partial class NpgsqlCommand
         {
             var array=  ArrayPool<KeyValuePair<CommandParameter, IParameterWriter>>.Shared.Rent(count);
             var i = 0;
-            foreach (var p in parameters.GetFastEnumerator())
+            foreach (var p in parameters.GetValueEnumerator())
             {
                 // Start session, lookup type info, writer etc.
                 var parameter = ToCommandParameter(p);

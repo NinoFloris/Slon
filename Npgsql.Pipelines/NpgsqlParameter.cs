@@ -50,11 +50,11 @@ public abstract class NpgsqlDbParameter : DbDataParameter, IParameterFacets, IPa
     internal abstract IParameterSession StartSession(IFacetsTransformer facetsTransformer);
     protected abstract void EndSession();
 
-    public static NpgsqlParameter Create() => new();
-    public static NpgsqlParameter Create(object? value) => new() { Value = value };
-    public static NpgsqlParameter Create(string parameterName, object? value) => new(parameterName, value);
-    public static NpgsqlParameter<T> Create<T>(T? value) => new() { Value = value };
-    public static NpgsqlParameter<T> Create<T>(string parameterName, T? value) => new(parameterName, value);
+    internal static NpgsqlParameter Create() => new();
+    internal static NpgsqlParameter Create(object? value) => new() { Value = value };
+    internal static NpgsqlParameter Create(string parameterName, object? value) => new(parameterName, value);
+    internal static NpgsqlParameter<T> Create<T>(T? value) => new() { Value = value };
+    internal static NpgsqlParameter<T> Create<T>(string parameterName, T? value) => new(parameterName, value);
 
     bool IParameterSession.IsPositional => ParameterName is "";
     string IParameterSession.Name => ParameterName;
@@ -114,6 +114,9 @@ public sealed class NpgsqlParameter: NpgsqlDbParameter
 public sealed class NpgsqlParameter<T> : NpgsqlDbParameter, IDbDataParameter<T>
 {
     public NpgsqlParameter() {}
+    public NpgsqlParameter(T? value)
+        :base(string.Empty)
+        => Value = value;
     public NpgsqlParameter(string parameterName, T? value)
         :base(parameterName)
         => Value = value;

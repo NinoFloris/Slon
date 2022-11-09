@@ -224,7 +224,7 @@ public abstract partial class DbDataParameter
         return instance;
     }
 
-    protected void NotifyCollectionAdd() => FrozenName = true;
+    protected internal void NotifyCollectionAdd() => FrozenName = true;
 
     sealed class Props
     {

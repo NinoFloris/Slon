@@ -3,6 +3,7 @@
   <PropertyGroup>
     <TargetFramework>net7.0</TargetFramework>
     <IsPackable>false</IsPackable>
+    <Nullable>enable</Nullable>
   </PropertyGroup>
 
   <ItemGroup>
@@ -14,10 +15,6 @@
 
   <ItemGroup>
     <ProjectReference Include="../Npgsql.Pipelines/Npgsql.Pipelines.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Folder Include="Data" />
   </ItemGroup>
 
 </Project>
