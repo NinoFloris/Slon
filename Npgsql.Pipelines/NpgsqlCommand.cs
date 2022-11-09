@@ -139,7 +139,7 @@ public sealed partial class NpgsqlCommand
             collection = new();
         else
         {
-            var array=  ArrayPool<KeyValuePair<CommandParameter, IParameterWriter>>.Shared.Rent(count);
+            var array = ArrayPool<KeyValuePair<CommandParameter, IParameterWriter>>.Shared.Rent(count);
             var i = 0;
             foreach (var p in parameters.GetValueEnumerator())
             {

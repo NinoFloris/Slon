@@ -2,12 +2,15 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace System.Collections.Immutable;
+namespace Npgsql.Pipelines;
 
 /// <summary>
 /// Extensions for <see cref="StructuralArray{T}"/>.
@@ -15,7 +18,7 @@ namespace System.Collections.Immutable;
 static class StructuralArray
 {
     /// <summary>
-    /// Creates an <see cref="StructuralArray{T}"/> instance from a given <see cref="ImmutableArray{T}"/>.
+    /// Creates an <see cref="StructuralArray{T}"/> instance from a given <see cref="ImmutableArray"/>.
     /// </summary>
     /// <typeparam name="T">The type of items in the input array.</typeparam>
     /// <param name="array">The input <see cref="ImmutableArray{T}"/> instance.</param>
