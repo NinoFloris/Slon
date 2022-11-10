@@ -9,7 +9,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Threading.Tasks.Sources;
 using Npgsql.Pipelines.Buffers;
-using Npgsql.Pipelines.Protocol.PgV3.Commands;
 using FlushResult = Npgsql.Pipelines.Buffers.FlushResult;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
@@ -32,7 +31,7 @@ class PgV3Protocol : PgProtocol
     readonly PipeWriter _pipeWriter;
 
     readonly ResettableFlushControl _flushControl;
-    readonly MessageWriter<IPipeWriterSyncSupport> _defaultMessageWriter;
+    readonly MessageWriter<ISyncCapablePipeWriter> _defaultMessageWriter;
 
     // Lock held for the duration of an individual message write or an entire exclusive use.
     readonly SemaphoreSlim _messageWriteLock = new(1);
@@ -46,12 +45,12 @@ class PgV3Protocol : PgProtocol
     volatile Exception? _completingException;
     volatile int _pendingExclusiveUses;
 
-    PgV3Protocol(IPipeWriterSyncSupport writer, IPipeReaderSyncSupport reader, PgV3ProtocolOptions? protocolOptions = null)
+    PgV3Protocol(ISyncCapablePipeWriter writer, ISyncCapablePipeReader reader, PgV3ProtocolOptions? protocolOptions = null)
     {
         _protocolOptions = protocolOptions ?? DefaultPipeOptions;
         _pipeWriter = writer.PipeWriter;
         _flushControl = new ResettableFlushControl(writer, _protocolOptions.WriteTimeout, Math.Max(MessageWriter.DefaultAdvisoryFlushThreshold , _protocolOptions.FlushThreshold));
-        _defaultMessageWriter = new MessageWriter<IPipeWriterSyncSupport>(writer, _flushControl);
+        _defaultMessageWriter = new MessageWriter<ISyncCapablePipeWriter>(writer, _flushControl);
         _reader = new SimplePipeReader(reader, _protocolOptions.ReadTimeout);
         _operations = new Queue<PgV3OperationSource>();
         _operationSourceSingleton = new PgV3OperationSource(this, exclusiveUse: false, pooled: true);
@@ -60,7 +59,7 @@ class PgV3Protocol : PgProtocol
     }
 
     PgV3Protocol(PipeWriter writer, PipeReader reader, PgV3ProtocolOptions? protocolOptions = null)
-        : this(new AsyncOnlyPipeWriter(writer), new AsyncOnlyPipeReader(reader), protocolOptions)
+        : this(new AsyncOnlySyncCapablePipeWriter(writer), new AsyncOnlySyncCapablePipeReader(reader), protocolOptions)
     { }
 
     object InstanceToken => this;
@@ -561,13 +560,13 @@ class PgV3Protocol : PgProtocol
         return StartAsyncCore(conn, options);
     }
 
-    public static ValueTask<PgV3Protocol> StartAsync(IPipeWriterSyncSupport writer, IPipeReaderSyncSupport reader, PgOptions options, PgV3ProtocolOptions? pipeOptions = null)
+    public static ValueTask<PgV3Protocol> StartAsync(ISyncCapablePipeWriter writer, ISyncCapablePipeReader reader, PgOptions options, PgV3ProtocolOptions? pipeOptions = null)
     {
         var conn = new PgV3Protocol(writer, reader, pipeOptions);
         return StartAsyncCore(conn, options);
     }
 
-    public static PgV3Protocol Start(IPipeWriterSyncSupport writer, IPipeReaderSyncSupport reader, PgOptions options, PgV3ProtocolOptions? pipeOptions = null)
+    public static PgV3Protocol Start(ISyncCapablePipeWriter writer, ISyncCapablePipeReader reader, PgOptions options, PgV3ProtocolOptions? pipeOptions = null)
     {
         try
         {

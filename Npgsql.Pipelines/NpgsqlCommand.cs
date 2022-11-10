@@ -9,8 +9,8 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Protocol;
-using Npgsql.Pipelines.Protocol.PgV3.Commands;
-using Npgsql.Pipelines.Protocol.PgV3.Types;
+using Npgsql.Pipelines.Protocol.PgV3;
+using Npgsql.Pipelines.Protocol.PgV3.Descriptors;
 
 namespace Npgsql.Pipelines;
 
@@ -18,7 +18,7 @@ static class CommandBehaviorExtensions
 {
     public static ExecutionFlags ToExecutionFlags(this CommandBehavior commandBehavior)
     {
-        // Remove any irrelevant flags and mask the rest of the range for ExecutionFlags so users can't leak through flags.
+        // Remove any irrelevant flags and mask the rest of the range for ExecutionFlags so users can't leak any other flags through.
         const int allFlags = (int)CommandBehavior.CloseConnection * 2 - 1; // 2^6 - 1.
         return (ExecutionFlags)(commandBehavior & ~((CommandBehavior)int.MaxValue - allFlags | CommandBehavior.CloseConnection | CommandBehavior.SingleResult));
     }
@@ -84,9 +84,10 @@ public sealed partial class NpgsqlCommand
 
         public ICommand.Values GetValues()
         {
+            // TODO get types.
             ImmutableArray<Parameter> parameterTypes = default;
 
-            var statement = _instance._preparationRequested ? Statement.CreateUnprepared(PreparationKind.Command, parameterTypes) : _instance.GetDataSourceStatement();
+            var statement = _instance._preparationRequested ? PgV3Statement.CreateUnprepared(PreparationKind.Command, parameterTypes) : _instance.GetDataSourceStatement();
             var flags = ExecutionFlags.ErrorBarrier | statement switch
             {
                 { IsComplete: true } => ExecutionFlags.Prepared,
@@ -133,13 +134,13 @@ public sealed partial class NpgsqlCommand
 
     static CommandParameters TransformParameters(NpgsqlParameterCollection? parameters)
     {
-        ReadOnlyMemory<KeyValuePair<CommandParameter, IParameterWriter>> collection;
+        ReadOnlyMemory<KeyValuePair<CommandParameter, ParameterWriter>> collection;
         int count;
         if (parameters is null || (count = parameters.Count) == 0)
             collection = new();
         else
         {
-            var array = ArrayPool<KeyValuePair<CommandParameter, IParameterWriter>>.Shared.Rent(count);
+            var array = ArrayPool<KeyValuePair<CommandParameter, ParameterWriter>>.Shared.Rent(count);
             var i = 0;
             foreach (var p in parameters.GetValueEnumerator())
             {
@@ -160,7 +161,7 @@ public sealed partial class NpgsqlCommand
         }
 
         // Probably want this writer to be a normal class.
-        IParameterWriter LookupWriter(CommandParameter commandParameter)
+        ParameterWriter LookupWriter(CommandParameter commandParameter)
         {
             throw new NotImplementedException();
         }

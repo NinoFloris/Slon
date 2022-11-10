@@ -265,7 +265,7 @@ namespace System.IO.Pipelines
         writingStream,
     }
 
-    internal sealed class StreamPipeWriter : PipeWriter, IPipeWriterSyncSupport
+    internal sealed class StreamSyncCapablePipeWriter : PipeWriter, ISyncCapablePipeWriter
     {
         internal const int InitialSegmentPoolSize = 4; // 16K
         internal const int MaxSegmentPoolSize = 256; // 1MB
@@ -301,7 +301,7 @@ namespace System.IO.Pipelines
             }
         }
 
-        public StreamPipeWriter(Stream writingStream, StreamPipeWriterOptions options)
+        public StreamSyncCapablePipeWriter(Stream writingStream, StreamPipeWriterOptions options)
         {
             if (writingStream is null)
             {
@@ -573,7 +573,7 @@ namespace System.IO.Pipelines
             CancellationTokenRegistration reg = default;
             if (cancellationToken.CanBeCanceled)
             {
-                reg = cancellationToken.UnsafeRegister(static state => ((StreamPipeWriter)state!).Cancel(), this);
+                reg = cancellationToken.UnsafeRegister(static state => ((StreamSyncCapablePipeWriter)state!).Cancel(), this);
             }
 
             using (reg)

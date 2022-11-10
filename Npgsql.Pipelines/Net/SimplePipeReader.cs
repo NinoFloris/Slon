@@ -12,7 +12,7 @@ namespace Npgsql.Pipelines;
 /// </summary>
 sealed class SimplePipeReader
 {
-    readonly IPipeReaderSyncSupport _readerSync;
+    readonly ISyncCapablePipeReader _readerSync;
     readonly TimeSpan _readTimeout;
     readonly PipeReader _reader;
     CancellationTokenSource? _readTimeoutSource;
@@ -23,7 +23,7 @@ sealed class SimplePipeReader
     long _largestMinimumSize;
     bool _completed;
 
-    public SimplePipeReader(IPipeReaderSyncSupport reader, TimeSpan readTimeout)
+    public SimplePipeReader(ISyncCapablePipeReader reader, TimeSpan readTimeout)
     {
         _readerSync = reader;
         _readTimeout = readTimeout;

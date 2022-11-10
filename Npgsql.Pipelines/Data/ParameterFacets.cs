@@ -3,7 +3,7 @@ using System;
 namespace Npgsql.Pipelines.Data;
 
 // TODO use Type.GetTypeCode
-// TODO add DateOnly and TimeOnly.
+// TODO add {U}Int128 DateOnly and TimeOnly.
 // See https://blog.demofox.org/2017/11/21/floating-point-precision/ for an intro.
 static class WellKnownClrFacets
 {

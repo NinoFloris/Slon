@@ -4,14 +4,14 @@ using Npgsql.Pipelines;
 
 namespace System.IO.Pipelines;
 
-sealed class StreamPipeReaderSyncSupport: PipeReader, IPipeReaderSyncSupport
+sealed class StreamSyncCapablePipeReader: PipeReader, ISyncCapablePipeReader
 {
     public Stream UnderlyingStream { get; }
     readonly bool _canTimeout;
     readonly int? _readTimeout;
     bool _reading;
 
-    public StreamPipeReaderSyncSupport(Stream stream, StreamPipeReaderOptions options)
+    public StreamSyncCapablePipeReader(Stream stream, StreamPipeReaderOptions options)
     {
         PipeReader = Create(stream, options);
         UnderlyingStream = stream;

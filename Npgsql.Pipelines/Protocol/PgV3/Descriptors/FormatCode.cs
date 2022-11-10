@@ -1,4 +1,4 @@
-namespace Npgsql.Pipelines.Protocol.PgV3.Types;
+namespace Npgsql.Pipelines.Protocol.PgV3.Descriptors;
 
 enum FormatCode: short
 {

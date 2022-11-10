@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
-using Npgsql.Pipelines.Protocol.PgV3.Types;
+using Npgsql.Pipelines.Pg.Descriptors;
+using Npgsql.Pipelines.Pg.Types;
+using Npgsql.Pipelines.Protocol.PgV3.Descriptors;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
@@ -36,19 +38,19 @@ struct RowDescription: IPgV3BackendMessage
         {
             // TODO pool these chars, only converting them to strings when it'll be used for a prepared statement.
             reader.TryReadCString(out var name);
-            reader.TryReadInt(out var tableOid);
+            reader.TryReadUInt(out var tableOid);
             reader.TryReadShort(out var columnAttributeNumber);
-            reader.TryReadInt(out var oid);
+            reader.TryReadUInt(out var oid);
             reader.TryReadShort(out var typeSize);
             reader.TryReadInt(out var typeModifier);
             reader.TryReadShort(out var formatCode);
             fields[i] = new(
                 new Field(
                     Name:              name!,
-                    Oid:               new Oid(oid),
-                    TypeSize:          typeSize,
-                    TypeModifier:      typeModifier
+                    Oid:               new Oid(oid)
                 ),
+                FieldTypeSize:          typeSize,
+                FieldTypeModifier:      typeModifier,
                 TableOid:              new Oid(tableOid),
                 ColumnAttributeNumber: columnAttributeNumber,
                 FormatCode:            (FormatCode)formatCode

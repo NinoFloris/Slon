@@ -45,8 +45,6 @@ public abstract class NpgsqlDbParameter : DbDataParameter, IParameterFacets, IPa
             Size = SizeCore,
         };
 
-    internal new void NotifyCollectionAdd() => base.NotifyCollectionAdd();
-
     internal abstract IParameterSession StartSession(IFacetsTransformer facetsTransformer);
     protected abstract void EndSession();
 

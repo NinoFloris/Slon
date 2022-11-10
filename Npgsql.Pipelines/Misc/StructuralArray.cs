@@ -171,6 +171,15 @@ readonly struct StructuralArray<T> : IEquatable<StructuralArray<T>>, IEnumerable
     }
 
     /// <summary>
+    /// Returns a <see cref="ReadOnlySpan{T}"/> wrapping the current items.
+    /// </summary>
+    /// <returns>A <see cref="ReadOnlySpan{T}"/> wrapping the current items.</returns>
+    public ReadOnlyMemory<T> AsMemory()
+    {
+        return AsImmutableArray().AsMemory();
+    }
+
+    /// <summary>
     /// Copies the contents of this <see cref="StructuralArray{T}"/> instance. to a mutable array.
     /// </summary>
     /// <returns>The newly instantiated array.</returns>

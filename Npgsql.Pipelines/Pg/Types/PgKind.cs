@@ -1,6 +1,6 @@
-using System.Collections.Immutable;
+using Npgsql.Pipelines.Pg.Descriptors;
 
-namespace Npgsql.Pipelines.Protocol.PgV3.Types;
+namespace Npgsql.Pipelines.Pg.Types;
 
 /// Enum of the kind of types supported by postgres.
 abstract record PgKind(PgKind.Cases Tag)
@@ -25,14 +25,16 @@ abstract record PgKind(PgKind.Cases Tag)
         Composite
     }
 
-    public sealed record Simple() : PgKind(Cases.Simple)
+    public sealed record Simple : PgKind
     {
+        Simple() : base(Cases.Simple) {}
         public static Simple Instance => new();
     }
 
     public sealed record Enum(StructuralArray<string> Variants) : PgKind(Cases.Enum);
-    public sealed record Pseudo() : PgKind(Cases.Pseudo)
+    public sealed record Pseudo : PgKind
     {
+        Pseudo() : base(Cases.Pseudo) {}
         public static Pseudo Instance => new();
     }
 
@@ -41,10 +43,7 @@ abstract record PgKind(PgKind.Cases Tag)
     public sealed record MultiRange(PgType ElementType) : PgKind(Cases.MultiRange);
     public sealed record Domain(PgType UnderlyingType) : PgKind(Cases.Domain);
     public sealed record Composite(StructuralArray<Field> Fields) : PgKind(Cases.Composite);
-}
 
-readonly record struct PgType(Oid Oid, string Schema, PgKind Kind)
-{
-    const string TypeCatalogSchema = "pg_catalog";
-    public static PgType Unknown = new(Oid.Unknown, TypeCatalogSchema, PgKind.Pseudo.Instance);
+    public static Simple SimpleKind => Simple.Instance;
+    public static Pseudo PseudoKind => Pseudo.Instance;
 }

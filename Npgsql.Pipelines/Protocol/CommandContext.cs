@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
-using Npgsql.Pipelines.Protocol.PgV3.Commands;
 
 namespace Npgsql.Pipelines.Protocol;
 

@@ -1,6 +1,5 @@
 using System;
 using Npgsql.Pipelines.Protocol;
-using Npgsql.Pipelines.Protocol.PgV3.Commands;
 
 namespace Npgsql.Pipelines;
 

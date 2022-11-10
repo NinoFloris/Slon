@@ -6,7 +6,7 @@ using System.Threading;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
-class CommandWriter
+static class CommandWriter
 {
     // Note: ref command to allow structs to mutate themselves in StartExecution.
     public static CommandContext WriteExtendedAsync<TCommand>(OperationSlot slot, ref TCommand command, bool flushHint = true, CancellationToken cancellationToken = default) where TCommand: ICommand
@@ -68,7 +68,7 @@ class CommandWriter
                     Parse.WriteMessage(ref buffer, _values.StatementText, _values.CommandParameters.Collection, _statementName);
 
                 // Bind is rather big, duplicating the static writing and IFrontendMessage paths becomes rather bloaty, just new the struct.
-                new Bind(portal, _values.CommandParameters.Collection, ResultColumnCodes.CreateOverall(Types.FormatCode.Binary), _statementName).Write(ref buffer);
+                new Bind(portal, _values.CommandParameters.Collection, ResultColumnCodes.CreateOverall(Descriptors.FormatCode.Binary), _statementName).Write(ref buffer);
 
                 if (!_values.ExecutionFlags.HasPrepared())
                     Describe.WriteForPortal(ref buffer, portal);
@@ -86,7 +86,7 @@ class CommandWriter
         }
 
         // Close input sessions after writing is done, free to re-use or change the underlying instance after that.
-        static void CloseInputParameterSessions(ReadOnlyMemory<KeyValuePair<CommandParameter, IParameterWriter>> parameters)
+        static void CloseInputParameterSessions(ReadOnlyMemory<KeyValuePair<CommandParameter, ParameterWriter>> parameters)
         {
             // TODO optimize, probably want an actual type for Parameters, to state some useful facts gathered during building (has named, has sessions etc).
             foreach (var (p, _) in parameters.Span)

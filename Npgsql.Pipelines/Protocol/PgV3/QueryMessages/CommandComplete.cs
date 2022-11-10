@@ -1,7 +1,7 @@
 using System;
 using System.Buffers;
 using System.Buffers.Text;
-using Npgsql.Pipelines.Protocol.PgV3.Types;
+using Npgsql.Pipelines.Pg.Types;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
@@ -46,7 +46,7 @@ struct CommandComplete: IPgV3BackendMessage
             case StatementType.Other:
                 break;
             case StatementType.Insert:
-                if (!Utf8Parser.TryParse(arguments, out int oid, out var nextArgumentOffset))
+                if (!Utf8Parser.TryParse(arguments, out uint oid, out var nextArgumentOffset))
                     return ReadStatus.InvalidData;
                 Oid = new(oid);
                 arguments = bytes.Slice(nextArgumentOffset);

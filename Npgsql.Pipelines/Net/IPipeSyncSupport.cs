@@ -7,13 +7,22 @@ using System.Threading.Tasks;
 
 namespace Npgsql.Pipelines;
 
-interface IPipeReaderSyncSupport
+interface IDuplexSyncCapablePipe
+{
+    /// <summary>Gets the <see cref="ISyncCapablePipeReader" /> half of the duplex pipe.</summary>
+    ISyncCapablePipeReader Input { get; }
+
+    /// <summary>Gets the <see cref="ISyncCapablePipeWriter" /> half of the duplex pipe.</summary>
+    ISyncCapablePipeWriter Output { get; }
+}
+
+interface ISyncCapablePipeReader
 {
     PipeReader PipeReader { get; }
     ReadResult Read(TimeSpan timeout = default);
 }
 
-interface IPipeWriterSyncSupport: IBufferWriter<byte>
+interface ISyncCapablePipeWriter: IBufferWriter<byte>
 {
     PipeWriter PipeWriter { get; }
     FlushResult Flush(TimeSpan timeout = default);
@@ -54,9 +63,9 @@ sealed class PipeWriterUnflushedBytes: PipeWriter
     public override Span<byte> GetSpan(int sizeHint = 0) => _pipeWriter.GetSpan(sizeHint);
 }
 
-class AsyncOnlyPipeReader : IPipeReaderSyncSupport
+class AsyncOnlySyncCapablePipeReader : ISyncCapablePipeReader
 {
-    public AsyncOnlyPipeReader(PipeReader reader)
+    public AsyncOnlySyncCapablePipeReader(PipeReader reader)
     {
         PipeReader = reader;
     }
@@ -65,9 +74,9 @@ class AsyncOnlyPipeReader : IPipeReaderSyncSupport
     public ReadResult Read(TimeSpan timeout = default) => throw new NotSupportedException();
 }
 
-class AsyncOnlyPipeWriter : IPipeWriterSyncSupport
+class AsyncOnlySyncCapablePipeWriter : ISyncCapablePipeWriter
 {
-    public AsyncOnlyPipeWriter(PipeWriter writer)
+    public AsyncOnlySyncCapablePipeWriter(PipeWriter writer)
     {
         PipeWriter = writer;
     }
@@ -79,12 +88,24 @@ class AsyncOnlyPipeWriter : IPipeWriterSyncSupport
     public FlushResult Flush(TimeSpan timeout = default) => throw new NotSupportedException();
 }
 
-static class PipeReaderSyncSupportExtensions
+class DuplexPipe : IDuplexSyncCapablePipe
+{
+    public DuplexPipe(ISyncCapablePipeReader input, ISyncCapablePipeWriter output)
+    {
+        Input = input;
+        Output = output;
+    }
+
+    public ISyncCapablePipeReader Input { get; }
+    public ISyncCapablePipeWriter Output { get; }
+}
+
+static class SyncCapablePipeReaderExtensions
 {
     [DoesNotReturn]
     static void ThrowArgumentOutOfRangeException() => throw new ArgumentOutOfRangeException("minimumSize");
 
-    public static ReadResult ReadAtLeast(this IPipeReaderSyncSupport reader, int minimumSize, TimeSpan timeout = default)
+    public static ReadResult ReadAtLeast(this ISyncCapablePipeReader reader, int minimumSize, TimeSpan timeout = default)
     {
         if (minimumSize < 0)
             ThrowArgumentOutOfRangeException();

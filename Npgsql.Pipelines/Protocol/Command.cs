@@ -1,7 +1,4 @@
 using System;
-using System.Buffers;
-using System.Collections.Generic;
-using Npgsql.Pipelines.Protocol.PgV3.Commands; // TODO clean up Statement
 
 namespace Npgsql.Pipelines.Protocol;
 
@@ -28,17 +25,6 @@ static class ExecutionFlagsExtensions
     public static bool HasErrorBarrier(this ExecutionFlags flags) => (flags & ExecutionFlags.ErrorBarrier) == ExecutionFlags.ErrorBarrier;
     public static bool HasPreparing(this ExecutionFlags flags) => (flags & ExecutionFlags.Preparing) == ExecutionFlags.Preparing;
     public static bool HasPrepared(this ExecutionFlags flags) => (flags & ExecutionFlags.Prepared) == ExecutionFlags.Prepared;
-}
-
-interface IParameterWriter
-{
-    void Write<T>(ref BufferWriter<T> writer, CommandParameter parameter) where T : IBufferWriter<byte>;
-    void Write<T>(ref SpanBufferWriter<T> writer, CommandParameter parameter) where T : IBufferWriter<byte>;
-}
-
-readonly struct CommandParameters
-{
-    public ReadOnlyMemory<KeyValuePair<CommandParameter, IParameterWriter>> Collection { get; init; }
 }
 
 /// <summary>

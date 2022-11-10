@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
-using Npgsql.Pipelines.Protocol.PgV3.Types;
+using Npgsql.Pipelines.Protocol.PgV3.Descriptors;
 
 namespace Npgsql.Pipelines.Protocol.PgV3.Commands;
 

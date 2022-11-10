@@ -48,7 +48,7 @@ abstract class FlushControl: IDisposable
     public abstract ValueTask<FlushResult> FlushAsync(bool observeFlushThreshold = true, CancellationToken cancellationToken = default);
     protected bool _disposed;
 
-    public static FlushControl Create(IPipeWriterSyncSupport writer, TimeSpan flushTimeout, int flushThreshold)
+    public static FlushControl Create(ISyncCapablePipeWriter writer, TimeSpan flushTimeout, int flushThreshold)
     {
         if (!writer.PipeWriter.CanGetUnflushedBytes)
             throw new ArgumentException("Cannot accept PipeWriters that don't support UnflushedBytes.", nameof(writer));
@@ -57,7 +57,7 @@ abstract class FlushControl: IDisposable
         return flushControl;
     }
 
-    public static FlushControl Create(IPipeWriterSyncSupport writer, TimeSpan flushTimeout, int flushThreshold, TimeSpan userTimeout)
+    public static FlushControl Create(ISyncCapablePipeWriter writer, TimeSpan flushTimeout, int flushThreshold, TimeSpan userTimeout)
     {
         if (!writer.PipeWriter.CanGetUnflushedBytes)
             throw new ArgumentException("Cannot accept PipeWriters that don't support UnflushedBytes.", nameof(writer));
@@ -88,14 +88,14 @@ abstract class FlushControl: IDisposable
 
 class ResettableFlushControl: FlushControl
 {
-    readonly IPipeWriterSyncSupport _writer;
+    readonly ISyncCapablePipeWriter _writer;
     readonly PipeWriter _pipeWriter;
     TimeSpan _userTimeout;
     CancellationTokenSource? _timeoutSource;
     CancellationTokenRegistration? _registration;
     long _start = -2;
 
-    public ResettableFlushControl(IPipeWriterSyncSupport writer, TimeSpan flushTimeout, int flushThreshold)
+    public ResettableFlushControl(ISyncCapablePipeWriter writer, TimeSpan flushTimeout, int flushThreshold)
     {
         _writer = writer;
         _pipeWriter = writer.PipeWriter;

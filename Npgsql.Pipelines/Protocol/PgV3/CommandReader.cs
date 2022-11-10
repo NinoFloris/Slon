@@ -8,7 +8,8 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Buffers;
-using Npgsql.Pipelines.Protocol.PgV3.Types;
+using Npgsql.Pipelines.Pg.Types;
+using Npgsql.Pipelines.Protocol.PgV3.Descriptors;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
@@ -124,8 +125,8 @@ class CommandReader
         if (_commandStart.ExecutionFlags.HasPreparing())
         {
             DebugShim.Assert(_commandStart.Session is not null);
-            DebugShim.Assert(_commandStart.Session.Statement is not null);
-            _commandStart.Session.CompletePreparation(_commandStart.Session.Statement with
+            DebugShim.Assert(_commandStart.Session.Statement is PgV3Statement);
+            _commandStart.Session.CompletePreparation((PgV3Statement)_commandStart.Session.Statement with
             {
                 Fields = ImmutableArray.Create(_commandStart.Fields.Span)
             });
@@ -438,8 +439,8 @@ class CommandReader
                     ExecutionFlags = commandExecution.TryGetSessionOrStatement(out var session, out var statement);
                     if (ExecutionFlags.HasPrepared())
                     {
-                        DebugShim.Assert(statement is not null && statement.IsComplete);
-                        Fields = statement.Fields.Value.AsMemory();
+                        DebugShim.Assert(statement is PgV3Statement { IsComplete: true });
+                        Fields = ((PgV3Statement)statement).Fields!.Value.AsMemory();
                         goto bind;
                     }
                     else if (ExecutionFlags.HasPreparing())

@@ -1,4 +1,6 @@
 using System;
+using System.Buffers;
+using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 
 namespace Npgsql.Pipelines.Protocol;
@@ -12,8 +14,8 @@ enum ParameterKind: byte
     ReturnValue = 6
 }
 
-/// A class describing the parameter type from the protocol perspective.
-abstract class ProtocolParameterType
+/// A class describing the parameter type and its other properties.
+abstract class ParameterDescriptor
 {
     /// Whether the parameter value is communicated in binary form.
     protected abstract bool GetIsBinary();
@@ -47,18 +49,18 @@ interface IParameterSession<T>: IParameterSession
 
 readonly struct CommandParameter
 {
-    readonly ProtocolParameterType _type;
+    readonly ParameterDescriptor _descriptor;
     readonly object _value;
     readonly int? _precomputedLength;
 
-    public CommandParameter(ProtocolParameterType type, object value, int? precomputedLength = null)
+    public CommandParameter(ParameterDescriptor descriptor, object value, int? precomputedLength = null)
     {
-        _type = type;
+        _descriptor = descriptor;
         _value = value;
         _precomputedLength = precomputedLength;
     }
 
-    public ProtocolParameterType Type => _type;
+    public ParameterDescriptor Descriptor => _descriptor;
     public ParameterKind Kind => _value is IParameterSession ep ? ep.Kind : ParameterKind.Input;
     public int? PrecomputedLength => _precomputedLength;
 
@@ -76,4 +78,15 @@ readonly struct CommandParameter
         value = null;
         return false;
     }
+}
+
+readonly struct CommandParameters
+{
+    public ReadOnlyMemory<KeyValuePair<CommandParameter, ParameterWriter>> Collection { get; init; }
+}
+
+abstract class ParameterWriter
+{
+    public abstract void Write<T>(ref BufferWriter<T> writer, CommandParameter parameter) where T : IBufferWriter<byte>;
+    public abstract void Write<T>(ref SpanBufferWriter<T> writer, CommandParameter parameter) where T : IBufferWriter<byte>;
 }

@@ -5,7 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Buffers;
-using Npgsql.Pipelines.Protocol.PgV3.Types;
+using Npgsql.Pipelines.Protocol.PgV3.Descriptors;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
@@ -28,26 +28,26 @@ readonly struct ResultColumnCodes
 readonly struct Bind: IFrontendMessage
 {
     readonly string _portalName;
-    readonly ReadOnlyMemory<KeyValuePair<CommandParameter, IParameterWriter>> _parameters;
+    readonly ReadOnlyMemory<KeyValuePair<CommandParameter, ParameterWriter>> _parameters;
     readonly FormatCode? _parametersOverallCode;
     readonly ResultColumnCodes _resultColumnCodes;
     readonly string _preparedStatementName;
     readonly int _precomputedMessageLength;
 
-    public Bind(string portalName, ReadOnlyMemory<KeyValuePair<CommandParameter, IParameterWriter>> parameters, ResultColumnCodes resultColumnCodes, string? preparedStatementName)
+    public Bind(string portalName, ReadOnlyMemory<KeyValuePair<CommandParameter, ParameterWriter>> parameters, ResultColumnCodes resultColumnCodes, string? preparedStatementName)
     {
-        if (FrontendMessage.DebugEnabled && _parameters.Length > Parameter.Maximum)
-            throw new InvalidOperationException($"Cannot accept more than ushort.MaxValue ({Parameter.Maximum} parameters.");
+        if (FrontendMessage.DebugEnabled && _parameters.Length > Parameter.MaxAmount)
+            throw new InvalidOperationException($"Cannot accept more than ushort.MaxValue ({Parameter.MaxAmount} parameters.");
 
-        if (FrontendMessage.DebugEnabled && _resultColumnCodes.IsPerColumnCodes && _resultColumnCodes.PerColumnCodes.Length > Parameter.Maximum)
-            throw new InvalidOperationException($"Cannot accept more than short.MaxValue ({Parameter.Maximum} result columns.");
+        if (FrontendMessage.DebugEnabled && _resultColumnCodes.IsPerColumnCodes && _resultColumnCodes.PerColumnCodes.Length > Parameter.MaxAmount)
+            throw new InvalidOperationException($"Cannot accept more than short.MaxValue ({Parameter.MaxAmount} result columns.");
 
         var forall = true;
-        FormatCode? formatCode = _parameters.IsEmpty ? null : ((PgV3ProtocolParameterType)_parameters.Span[0].Key.Type).FormatCode;
+        FormatCode? formatCode = _parameters.IsEmpty ? null : ((PgV3ParameterDescriptor)_parameters.Span[0].Key.Descriptor).FormatCode;
         // Note i = 1 to start at the second param.
         for (var i = 1; i < _parameters.Length; i++)
         {
-            if (formatCode != ((PgV3ProtocolParameterType)_parameters.Span[0].Key.Type).FormatCode)
+            if (formatCode != ((PgV3ParameterDescriptor)_parameters.Span[0].Key.Descriptor).FormatCode)
             {
                 forall = false;
                 break;
@@ -200,7 +200,7 @@ readonly struct Bind: IFrontendMessage
         {
             buffer.WriteUShort((ushort)_parameters.Length);
             foreach (var (key, _) in _parameters.Span)
-                buffer.WriteShort((short)((PgV3ProtocolParameterType)_parameters.Span[0].Key.Type).FormatCode);
+                buffer.WriteShort((short)((PgV3ParameterDescriptor)_parameters.Span[0].Key.Descriptor).FormatCode);
         }
     }
 
@@ -222,7 +222,7 @@ readonly struct Bind: IFrontendMessage
         {
             buffer.WriteUShort((ushort)_parameters.Length);
             foreach (var (key, _) in _parameters.Span)
-                buffer.WriteShort((short)((PgV3ProtocolParameterType)_parameters.Span[0].Key.Type).FormatCode);
+                buffer.WriteShort((short)((PgV3ParameterDescriptor)_parameters.Span[0].Key.Descriptor).FormatCode);
         }
     }
 

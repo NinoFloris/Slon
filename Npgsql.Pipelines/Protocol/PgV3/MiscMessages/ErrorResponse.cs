@@ -5,7 +5,7 @@ struct ErrorResponse: IPgV3BackendMessage
     /// <summary>
     /// Error and notice message field codes
     /// </summary>
-    enum ErrorFieldTypeCode : byte
+    internal enum ErrorFieldTypeCode : byte
     {
         Done = 0,
         Severity = (byte) 'S',

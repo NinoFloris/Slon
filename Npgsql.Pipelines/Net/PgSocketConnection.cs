@@ -14,8 +14,8 @@ namespace Npgsql.Pipelines;
 abstract class PgSocketConnection
 {
     public abstract bool CanBlock { get; }
-    public abstract IPipeReaderSyncSupport Reader { get; }
-    public abstract IPipeWriterSyncSupport Writer { get; }
+    public abstract ISyncCapablePipeReader Reader { get; }
+    public abstract ISyncCapablePipeWriter Writer { get; }
 
     protected const int DefaultReaderSegmentSize = 8192;
     protected const int DefaultWriterSegmentSize = DefaultReaderSegmentSize;
@@ -89,12 +89,12 @@ sealed class PgPipeConnection: PgSocketConnection, IDisposable
     PgPipeConnection(SocketConnection connection)
     {
         _connection = connection;
-        Reader = new AsyncOnlyPipeReader(connection.Input);
-        Writer = new AsyncOnlyPipeWriter(new PipeWriterUnflushedBytes(connection.Output));
+        Reader = new AsyncOnlySyncCapablePipeReader(connection.Input);
+        Writer = new AsyncOnlySyncCapablePipeWriter(new PipeWriterUnflushedBytes(connection.Output));
     }
 
-    public override IPipeReaderSyncSupport Reader { get; }
-    public override IPipeWriterSyncSupport Writer { get; }
+    public override ISyncCapablePipeReader Reader { get; }
+    public override ISyncCapablePipeWriter Writer { get; }
     public override bool CanBlock => false;
 
     public PipeShutdownKind ShutdownKind => _connection.ShutdownKind;
@@ -129,13 +129,13 @@ sealed class PgStreamConnection : PgSocketConnection, IDisposable, IAsyncDisposa
     PgStreamConnection(SealedNetworkStream stream)
     {
         _stream = stream;
-        Reader = new StreamPipeReaderSyncSupport(stream, new StreamPipeReaderOptions(bufferSize: DefaultReaderSegmentSize, useZeroByteReads: false));
-        var writer = new StreamPipeWriter(stream, new StreamPipeWriterOptions(minimumBufferSize: DefaultWriterSegmentSize));
+        Reader = new StreamSyncCapablePipeReader(stream, new StreamPipeReaderOptions(bufferSize: DefaultReaderSegmentSize, useZeroByteReads: false));
+        var writer = new StreamSyncCapablePipeWriter(stream, new StreamPipeWriterOptions(minimumBufferSize: DefaultWriterSegmentSize));
         Writer = writer;
     }
 
-    public override IPipeReaderSyncSupport Reader { get; }
-    public override IPipeWriterSyncSupport Writer { get; }
+    public override ISyncCapablePipeReader Reader { get; }
+    public override ISyncCapablePipeWriter Writer { get; }
     public override bool CanBlock => true;
 
     public static async ValueTask<PgStreamConnection> ConnectAsync(EndPoint endPoint, CancellationToken cancellationToken = default)

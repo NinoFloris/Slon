@@ -2,7 +2,6 @@ using System;
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
-using Npgsql.Pipelines.Protocol.PgV3.Types;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
@@ -86,20 +85,4 @@ struct PgV3FrontendHeader: IFrontendHeader<PgV3FrontendHeader>
         return new PgV3FrontendHeader(code, length);
     }
     static void ThrowArgumentOutOfRange() => throw new ArgumentOutOfRangeException("length", "Length cannot be negative");
-}
-
-sealed class PgV3ProtocolParameterType: ProtocolParameterType
-{
-    protected override bool GetIsBinary()
-    {
-        throw new NotImplementedException();
-    }
-
-    protected override int? GetLength()
-    {
-        throw new NotImplementedException();
-    }
-
-    public Parameter Parameter { get; }
-    public FormatCode FormatCode { get => IsBinary ? FormatCode.Binary : FormatCode.Text; }
 }

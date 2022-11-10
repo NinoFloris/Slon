@@ -1,5 +1,4 @@
 using System;
-using Npgsql.Pipelines.Protocol.PgV3.Commands;
 
 namespace Npgsql.Pipelines.Protocol;
 
@@ -48,14 +47,17 @@ readonly struct CommandExecution
     public static CommandExecution Create(ExecutionFlags executionFlags, ICommandSession session)
     {
         if (!executionFlags.HasPreparing())
-            throw new ArgumentException("Execution flags should have Preparing.", nameof(session));
+            throw new ArgumentException("Execution flags does not have Preparing.", nameof(executionFlags));
 
         return new(executionFlags, session);
     }
     public static CommandExecution Create(ExecutionFlags executionFlags, Statement statement)
     {
         if (!executionFlags.HasPrepared())
-            throw new ArgumentException("Execution flags should have Prepared.", nameof(statement));
+            throw new ArgumentException("Execution flags does not have Prepared.", nameof(executionFlags));
+
+        if (!statement.IsComplete)
+            throw new ArgumentException("Statement is not complete.", nameof(statement));
 
         return new(executionFlags, statement);
     }
