@@ -31,7 +31,7 @@ static class BufferExtensions
         buffer.Advance(sizeof(short));
     }
 
-    public static void WriteShort<T>(ref this BufferWriter<T> buffer, short value)  where T : IBufferWriter<byte>
+    public static void WriteShort<T>(ref this BufferWriter<T> buffer, short value) where T : IBufferWriter<byte>
     {
         buffer.Ensure(sizeof(short));
         BinaryPrimitives.WriteInt16BigEndian(buffer.Span, value);

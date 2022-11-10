@@ -3,8 +3,10 @@ using Npgsql.Pipelines.Pg.Descriptors;
 namespace Npgsql.Pipelines.Pg.Types;
 
 /// Enum of the kind of types supported by postgres.
-abstract record PgKind(PgKind.Cases Tag)
+abstract record PgKind
 {
+    private protected PgKind(Cases Tag) {}
+
     public enum Cases
     {
         /// A built-in type.
