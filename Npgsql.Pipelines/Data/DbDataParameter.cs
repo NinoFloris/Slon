@@ -7,6 +7,8 @@ using System.Threading;
 
 namespace Npgsql.Pipelines.Data;
 
+// TODO store whether DBNull.Value was set as there is a difference between null and DBNull.
+
 // Size optimized base class.
 public abstract partial class DbDataParameter
 {

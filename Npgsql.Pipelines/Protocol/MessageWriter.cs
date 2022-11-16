@@ -24,14 +24,14 @@ static class MessageWriter
     public const int DefaultAdvisoryFlushThreshold = 1450;
 }
 
-class MessageWriter<T> where T : IBufferWriter<byte>
+class MessageWriter<TWriter> where TWriter : IStreamingWriter<byte>
 {
-    BufferWriter<T> _writer;
+    StreamingWriter<TWriter> _writer;
     readonly FlushControl _flushControl;
 
-    public MessageWriter(T writer, FlushControl flushControl)
+    public MessageWriter(TWriter writer, FlushControl flushControl)
     {
-        _writer = new BufferWriter<T>(writer);
+        _writer = new StreamingWriter<TWriter>(writer);
         _flushControl = flushControl;
         AdvisoryFlushThreshold = _flushControl.FlushThreshold < AdvisoryFlushThreshold ? _flushControl.FlushThreshold : MessageWriter.DefaultAdvisoryFlushThreshold;
     }
@@ -47,9 +47,19 @@ class MessageWriter<T> where T : IBufferWriter<byte>
 
     public long BufferedBytes => Writer.BufferedBytes;
     public long BytesCommitted => Writer.BytesCommitted;
-    public long UnflushedBytes => _flushControl.UnflushedBytes + Writer.BufferedBytes;
+    public long BytesPending => _flushControl.UnflushedBytes;
 
-    internal ref BufferWriter<T> Writer => ref _writer;
+    public ref StreamingWriter<TWriter> Writer => ref _writer;
+
+    public BufferWriter<TWriter> GetBufferWriter()
+    {
+        if (Writer.BufferedBytes > 0)
+            throw new InvalidOperationException("Buffer writer cannot be created if the streaming writer has buffered bytes.");
+
+        return BufferWriter<TWriter>.CreateFrom(Writer);
+    }
+
+    public void CommitBufferWriter(BufferWriter<TWriter> buffer) => Writer.CommitBufferWriter(buffer);
 
     ValueTask<FlushResult> FlushAsyncCore(bool observeFlushThreshold, CancellationToken cancellationToken)
     {
@@ -70,6 +80,6 @@ class MessageWriter<T> where T : IBufferWriter<byte>
         if (Writer.BufferedBytes > 0)
             throw new InvalidOperationException("Resetting writer while there are still buffered bytes.");
 
-        _writer = new BufferWriter<T>(Writer.Output);
+        _writer = new StreamingWriter<TWriter>(Writer.Output);
     }
 }

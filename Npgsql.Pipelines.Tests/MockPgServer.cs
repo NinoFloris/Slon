@@ -6,6 +6,7 @@ using System.IO.Pipelines;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using Npgsql.Pipelines.Buffers;
 using Npgsql.Pipelines.Pg.Descriptors;
 using Npgsql.Pipelines.Pg.Types;
 using Npgsql.Pipelines.Protocol.PgV3;
@@ -17,38 +18,6 @@ namespace Npgsql.Pipelines.Tests;
 
 class MockPgServer : IDisposable
 {
-    class InMemoryPipeReader : ISyncCapablePipeReader
-    {
-        public InMemoryPipeReader(PipeReader reader) => PipeReader = reader;
-        public PipeReader PipeReader { get; }
-
-        public ReadResult Read(TimeSpan timeout = default)
-        {
-            var task = PipeReader.ReadAsync().AsTask();
-            if (!task.Wait(timeout))
-                throw new TimeoutException();
-            return task.Result;
-        }
-    }
-
-    class InMemoryPipeWriter : ISyncCapablePipeWriter
-    {
-        public InMemoryPipeWriter(PipeWriter writer) => PipeWriter = writer;
-        public PipeWriter PipeWriter { get; }
-
-        public void Advance(int count) => PipeWriter.Advance(count);
-        public Memory<byte> GetMemory(int sizeHint = 0) => PipeWriter.GetMemory(sizeHint);
-        public Span<byte> GetSpan(int sizeHint = 0) => PipeWriter.GetSpan(sizeHint);
-
-        public FlushResult Flush(TimeSpan timeout = default)
-        {
-            var task = PipeWriter.FlushAsync().AsTask();
-            if (!task.Wait(timeout))
-                throw new TimeoutException();
-            return task.Result;
-        }
-    }
-
     static readonly Encoding Encoding = Encoding.UTF8;
 
     bool _disposed;
@@ -56,9 +25,9 @@ class MockPgServer : IDisposable
     const int BackendSecret = 12345;
     internal int ProcessId { get; }
 
-    readonly IDuplexSyncCapablePipe _serverPipe;
-    BufferWriter<ISyncCapablePipeWriter> _writer;
-    ref BufferWriter<ISyncCapablePipeWriter> Writer => ref _writer;
+    readonly IDuplexPipe _serverPipe;
+    StreamingWriter<PipeStreamingWriter> _writer;
+    ref StreamingWriter<PipeStreamingWriter> Writer => ref _writer;
     readonly SimplePipeReader _pipeReader;
 
     public MockPgServer(int processId)
@@ -68,19 +37,19 @@ class MockPgServer : IDisposable
         var input = new Pipe();
         var output = new Pipe();
 
-        var serverOutput = new InMemoryPipeWriter(output.Writer);
-        var clientInput = new InMemoryPipeReader(input.Reader);
+        var serverOutput = output.Writer;
+        var clientInput = input.Reader;
         _serverPipe = new DuplexPipe(clientInput, serverOutput);
 
-        Writer = new BufferWriter<ISyncCapablePipeWriter>(_serverPipe.Output);
+        Writer = new StreamingWriter<PipeStreamingWriter>(new PipeStreamingWriter(_serverPipe.Output));
         _pipeReader = new SimplePipeReader(_serverPipe.Input, TimeSpan.Zero);
 
-        var serverInput = new InMemoryPipeReader(output.Reader);
-        var clientOutput = new InMemoryPipeWriter(input.Writer);
+        var serverInput = output.Reader;
+        var clientOutput = input.Writer;
         ClientPipe = new DuplexPipe(serverInput, clientOutput);
     }
 
-    public IDuplexSyncCapablePipe ClientPipe { get; }
+    public IDuplexPipe ClientPipe { get; }
 
     public StatementField CreateStatementField(PgType type)
         => new(new Field("?", type), -1, 0, (Oid)0, 0, FormatCode.Binary);
@@ -202,13 +171,13 @@ class MockPgServer : IDisposable
     public async Task FlushAsync()
     {
         ThrowIfDisposed();
-        await _serverPipe.Output.PipeWriter.FlushAsync();
+        await _serverPipe.Output.FlushAsync();
     }
 
     public void Complete()
     {
-        _serverPipe.Input.PipeReader.Complete();
-        _serverPipe.Output.PipeWriter.Complete();
+        _serverPipe.Input.Complete();
+        _serverPipe.Output.Complete();
     }
 
     public MockPgServer WriteParseComplete()

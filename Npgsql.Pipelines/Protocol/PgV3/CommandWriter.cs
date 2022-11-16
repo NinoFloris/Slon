@@ -59,7 +59,7 @@ static class CommandWriter
 
         // TODO bring back async writing for large binds (needs a sum and a treshold of precomputed parameter lengths).
         public bool CanWrite => true;
-        public void Write<T>(ref SpanBufferWriter<T> buffer) where T : IBufferWriter<byte>
+        public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
         {
             try
             {

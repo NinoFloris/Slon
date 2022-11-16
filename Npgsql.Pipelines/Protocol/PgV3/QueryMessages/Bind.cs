@@ -43,11 +43,11 @@ readonly struct Bind: IFrontendMessage
             throw new InvalidOperationException($"Cannot accept more than short.MaxValue ({Parameter.MaxAmount} result columns.");
 
         var forall = true;
-        FormatCode? formatCode = _parameters.IsEmpty ? null : ((PgV3ParameterDescriptor)_parameters.Span[0].Key.Descriptor).FormatCode;
+        FormatCode? formatCode = _parameters.IsEmpty ? null : ((PgV3ParameterInfo)_parameters.Span[0].Key.Info).FormatCode;
         // Note i = 1 to start at the second param.
         for (var i = 1; i < _parameters.Length; i++)
         {
-            if (formatCode != ((PgV3ParameterDescriptor)_parameters.Span[0].Key.Descriptor).FormatCode)
+            if (formatCode != ((PgV3ParameterInfo)_parameters.Span[0].Key.Info).FormatCode)
             {
                 forall = false;
                 break;
@@ -67,9 +67,9 @@ readonly struct Bind: IFrontendMessage
     // Whatever, something like segment size can come via the constructor too, if we want to get fancy.
     public bool CanWrite => _precomputedMessageLength < 2048;
 
-    public void Write<T>(ref SpanBufferWriter<T> buffer) where T : IBufferWriter<byte>
+    public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
     {
-        PgV3FrontendHeader.Create(FrontendCode.Bind, _precomputedMessageLength).Write(ref buffer);
+        PgV3FrontendHeader.WriteHeader(ref buffer, FrontendCode.Bind, _precomputedMessageLength);
         buffer.WriteCString(_portalName);
         buffer.WriteCString(_preparedStatementName);
 
@@ -84,8 +84,8 @@ readonly struct Bind: IFrontendMessage
             foreach (var (key, value) in _parameters.Span)
             {
                 value.Write(ref buffer, key);
-                if (FrontendMessage.DebugEnabled && key.PrecomputedLength.HasValue)
-                    CheckParameterWriterOutput(key.PrecomputedLength.Value, lastBuffered, lastCommitted, buffer);
+                if (FrontendMessage.DebugEnabled && key.Length.HasValue)
+                    CheckParameterWriterOutput(key.Length.Value, lastBuffered, lastCommitted, buffer);
 
                 lastCommitted += buffer.BufferedBytes - lastBuffered;
                 lastBuffered = buffer.BufferedBytes;
@@ -95,8 +95,10 @@ readonly struct Bind: IFrontendMessage
         WriteResultColumnCodes(ref buffer);
     }
 
-    public async ValueTask<FlushResult> WriteAsync<T>(MessageWriter<T> writer, CancellationToken cancellationToken = default) where T : IBufferWriter<byte>
+    public async ValueTask<FlushResult> WriteAsync<T>(MessageWriter<T> writer, CancellationToken cancellationToken = default) where T : IStreamingWriter<byte>
     {
+        PgV3FrontendHeader.WriteHeader(ref writer.Writer, FrontendCode.Bind, _precomputedMessageLength);
+
         writer.WriteByte((byte)FrontendCode.Bind);
         writer.WriteInt(_precomputedMessageLength + MessageWriter.IntByteCount);
 
@@ -115,8 +117,8 @@ readonly struct Bind: IFrontendMessage
             {
                 var (key, value) = _parameters.Span[i];
                 value.Write(ref writer.Writer, key);
-                if (FrontendMessage.DebugEnabled && key.PrecomputedLength.HasValue)
-                    CheckParameterWriterOutput(key.PrecomputedLength.Value, lastBuffered, lastCommitted, writer.Writer);
+                if (FrontendMessage.DebugEnabled && key.Length.HasValue)
+                    CheckParameterWriterOutput(key.Length.Value, lastBuffered, lastCommitted, writer.Writer);
 
                 // Make sure we don't commit too often, as this requires a memory slice in the pipe
                 // additionally any writer loop may start writing small packets if we let it know certain memory is returned.
@@ -152,12 +154,23 @@ readonly struct Bind: IFrontendMessage
 
         foreach (var (key, _) in _parameters.Span)
         {
-            if (!key.PrecomputedLength.HasValue)
+            if (!key.Length.HasValue)
                 throw new InvalidOperationException("Every postgres parameter requires a precomputed length.");
-            length += key.PrecomputedLength.Value;
+            length += key.Length.Value;
         }
 
         return length;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    void CheckParameterWriterOutput<T>(int parameterLength, long lastBuffered, long lastCommitted, StreamingWriter<T> writer) where T : IStreamingWriter<byte>
+    {
+        if (writer.BufferedBytes - lastBuffered < 4)
+            throw new InvalidOperationException("A parameter writer should at least write 4 bytes for the length.");
+        if (writer.BytesCommitted > lastCommitted)
+            throw new InvalidOperationException("Parameter writers should not call writer.Commit(), this is handled globally.");
+        if (writer.BytesCommitted + writer.BufferedBytes - lastCommitted > parameterLength)
+            throw new InvalidOperationException("The parameter writer output was not consistent with the parameter length.");
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -171,15 +184,26 @@ readonly struct Bind: IFrontendMessage
             throw new InvalidOperationException("The parameter writer output was not consistent with the parameter length.");
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    void CheckParameterWriterOutput<T>(int parameterLength, long lastBuffered, long lastCommitted, SpanBufferWriter<T> buffer) where T : IBufferWriter<byte>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    void WriteParameterCodes<T>(ref StreamingWriter<T> writer) where T : IStreamingWriter<byte>
     {
-        if (buffer.BufferedBytes - lastBuffered < 4)
-            throw new InvalidOperationException("A parameter writer should at least write 4 bytes for the length.");
-        if (buffer.BytesCommitted > lastCommitted)
-            throw new InvalidOperationException("Parameter writers should not call writer.Commit(), this is handled globally.");
-        if (buffer.BytesCommitted + buffer.BufferedBytes - lastCommitted > parameterLength)
-            throw new InvalidOperationException("The parameter writer output was not consistent with the parameter length.");
+        if (_parameters.Length == 0)
+        {
+            writer.WriteShort(0);
+            return;
+        }
+
+        if (_parametersOverallCode is not null)
+        {
+            writer.WriteShort(1);
+            writer.WriteShort((short)_parametersOverallCode);
+        }
+        else
+        {
+            writer.WriteUShort((ushort)_parameters.Length);
+            foreach (var (key, _) in _parameters.Span)
+                writer.WriteShort((short)((PgV3ParameterInfo)_parameters.Span[0].Key.Info).FormatCode);
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -200,50 +224,28 @@ readonly struct Bind: IFrontendMessage
         {
             buffer.WriteUShort((ushort)_parameters.Length);
             foreach (var (key, _) in _parameters.Span)
-                buffer.WriteShort((short)((PgV3ParameterDescriptor)_parameters.Span[0].Key.Descriptor).FormatCode);
+                buffer.WriteShort((short)((PgV3ParameterInfo)_parameters.Span[0].Key.Info).FormatCode);
         }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    void WriteParameterCodes<T>(ref SpanBufferWriter<T> buffer) where T : IBufferWriter<byte>
+    void WriteResultColumnCodes<T>(ref StreamingWriter<T> writer) where T : IStreamingWriter<byte>
     {
-        if (_parameters.Length == 0)
+        if (_resultColumnCodes.IsOverallCode)
         {
-            buffer.WriteShort(0);
-            return;
-        }
-
-        if (_parametersOverallCode is not null)
-        {
-            buffer.WriteShort(1);
-            buffer.WriteShort((short)_parametersOverallCode);
+            writer.WriteShort(1);
+            writer.WriteShort((short)_resultColumnCodes.OverallCode);
         }
         else
         {
-            buffer.WriteUShort((ushort)_parameters.Length);
-            foreach (var (key, _) in _parameters.Span)
-                buffer.WriteShort((short)((PgV3ParameterDescriptor)_parameters.Span[0].Key.Descriptor).FormatCode);
+            writer.WriteShort((short)_resultColumnCodes.PerColumnCodes.Length);
+            foreach (var code in _resultColumnCodes.PerColumnCodes.Span)
+                writer.WriteShort((short)code);
         }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     void WriteResultColumnCodes<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
-    {
-        if (_resultColumnCodes.IsOverallCode)
-        {
-            buffer.WriteShort(1);
-            buffer.WriteShort((short)_resultColumnCodes.OverallCode);
-        }
-        else
-        {
-            buffer.WriteShort((short)_resultColumnCodes.PerColumnCodes.Length);
-            foreach (var code in _resultColumnCodes.PerColumnCodes.Span)
-                buffer.WriteShort((short)code);
-        }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    void WriteResultColumnCodes<T>(ref SpanBufferWriter<T> buffer) where T : IBufferWriter<byte>
     {
         if (_resultColumnCodes.IsOverallCode)
         {

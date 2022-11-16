@@ -25,10 +25,10 @@ readonly struct Parse: IFrontendMessage
     }
 
     public bool CanWrite => true;
-    public void Write<T>(ref SpanBufferWriter<T> buffer) where T : IBufferWriter<byte>
+    public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
         => WriteMessage(ref buffer, _commandText, _parameters, _preparedStatementName, _precomputedLength);
 
-    public static void WriteMessage<T>(scoped ref SpanBufferWriter<T> buffer, string commandText, scoped in ReadOnlyMemory<KeyValuePair<CommandParameter, ParameterWriter>> parameters, string? preparedStatementName, int precomputedLength = -1)
+    public static void WriteMessage<T>(ref BufferWriter<T> buffer, string commandText, in ReadOnlyMemory<KeyValuePair<CommandParameter, ParameterWriter>> parameters, string? preparedStatementName, int precomputedLength = -1)
         where T : IBufferWriter<byte>
     {
         if (FrontendMessage.DebugEnabled && parameters.Length > Parameter.MaxAmount)
@@ -44,7 +44,7 @@ readonly struct Parse: IFrontendMessage
         buffer.WriteUShort((ushort)parameters.Length);
 
         foreach (var (key, _) in parameters.Span)
-            buffer.WriteUInt(((PgV3ParameterDescriptor)key.Descriptor).Parameter.Oid);
+            buffer.WriteUInt(((PgV3ParameterInfo)key.Info).Parameter.Oid);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

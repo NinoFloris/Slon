@@ -23,12 +23,12 @@ readonly struct StartupRequest: IStreamingFrontendMessage
     }
 
     public bool CanWrite => false;
-    public void Write<T>(ref SpanBufferWriter<T> buffer) where T : IBufferWriter<byte> => throw new NotSupportedException();
+    public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte> => throw new NotSupportedException();
 
-    public ValueTask<FlushResult> WriteAsync<T>(MessageWriter<T> writer, CancellationToken cancellationToken = default) where T : IBufferWriter<byte>
+    public ValueTask<FlushResult> WriteAsync<T>(MessageWriter<T> writer, CancellationToken cancellationToken = default) where T : IStreamingWriter<byte>
     {
         // Getting the thread static is safe as long as we don't go async before returning it.
-        var memWriter = new BufferWriter<MemoryBufferWriter>(MemoryBufferWriter.Get());
+        var memWriter = new StreamingWriter<MemoryBufferWriter>(MemoryBufferWriter.Get());
         try
         {
             const int protocolVersion3 = 3 << 16; // 196608

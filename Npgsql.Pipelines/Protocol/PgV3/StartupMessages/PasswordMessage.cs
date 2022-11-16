@@ -15,7 +15,7 @@ readonly struct PasswordMessage : IFrontendMessage
     }
 
     public bool CanWrite => true;
-    public void Write<T>(ref SpanBufferWriter<T> buffer) where T : IBufferWriter<byte>
+    public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
     {
         PgV3FrontendHeader.Create(FrontendCode.Password, MessageWriter.GetCStringByteCount(_hashedPassword)).Write(ref buffer);
         buffer.WriteCString(_hashedPassword);

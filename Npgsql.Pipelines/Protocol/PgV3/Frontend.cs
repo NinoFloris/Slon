@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
+using Npgsql.Pipelines.Buffers;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
@@ -45,24 +46,8 @@ struct PgV3FrontendHeader: IFrontendHeader<PgV3FrontendHeader>
         }
     }
 
-    public readonly void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
+    public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
         => WriteHeader(ref buffer, _code, _length);
-
-    public void Write<T>(ref SpanBufferWriter<T> buffer) where T : IBufferWriter<byte>
-        => WriteHeader(ref buffer, _code, _length);
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static void WriteHeader<T>(ref SpanBufferWriter<T> buffer, FrontendCode code, int length) where T : IBufferWriter<byte>
-    {
-        if (length < 0)
-            ThrowArgumentOutOfRange();
-
-        buffer.Ensure(ByteCount);
-        var header = buffer.Span;
-        header[0] = (byte)code;
-        BinaryPrimitives.WriteInt32BigEndian(header.Slice(1), length + sizeof(int));
-        buffer.Advance(ByteCount);
-    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void WriteHeader<T>(ref BufferWriter<T> buffer, FrontendCode code, int length) where T : IBufferWriter<byte>
@@ -75,6 +60,16 @@ struct PgV3FrontendHeader: IFrontendHeader<PgV3FrontendHeader>
         header[0] = (byte)code;
         BinaryPrimitives.WriteInt32BigEndian(header.Slice(1), length + sizeof(int));
         buffer.Advance(ByteCount);
+    }
+
+    public static void WriteHeader<T>(ref StreamingWriter<T> writer, FrontendCode code, int length) where T : IStreamingWriter<byte>
+    {
+        if (length < 0)
+            ThrowArgumentOutOfRange();
+
+        var buffer = writer.GetBufferWriter();
+        WriteHeader(ref buffer, code, length);
+        writer.CommitBufferWriter(buffer);
     }
 
     public static PgV3FrontendHeader Create(FrontendCode code, int length)

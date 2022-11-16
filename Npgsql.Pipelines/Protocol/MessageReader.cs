@@ -385,19 +385,20 @@ static class MessageReaderExtensions
         return reader.TryReadShort(out Unsafe.As<ushort, short>(ref value));
     }
 
-    public static bool TryReadBool<THeader>(this ref MessageReader<THeader> reader, out bool value)
+    public static OperationStatus TryReadBool<THeader>(this ref MessageReader<THeader> reader, out bool value)
         where THeader : struct, IHeader<THeader>
     {
-        if (!reader.TryReadByte(out var b))
+        var copy = reader;
+
+        if (!reader.TryReadByte(out var b) || b > 1)
         {
+            reader = copy;
             value = false;
-            return false;
+            return b > 1 ? OperationStatus.InvalidData : OperationStatus.NeedMoreData;
         }
 
-        const byte mask = 00000001;
-        b = (byte)(b & mask);
-        value = Unsafe.As<byte, bool>(ref b);
-        return true;
+        value = b == 1;
+        return OperationStatus.Done;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

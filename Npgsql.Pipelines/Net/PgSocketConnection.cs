@@ -14,8 +14,8 @@ namespace Npgsql.Pipelines;
 abstract class PgSocketConnection
 {
     public abstract bool CanBlock { get; }
-    public abstract ISyncCapablePipeReader Reader { get; }
-    public abstract ISyncCapablePipeWriter Writer { get; }
+    public abstract PipeReader Reader { get; }
+    public abstract PipeWriter Writer { get; }
 
     protected const int DefaultReaderSegmentSize = 8192;
     protected const int DefaultWriterSegmentSize = DefaultReaderSegmentSize;
@@ -89,12 +89,12 @@ sealed class PgPipeConnection: PgSocketConnection, IDisposable
     PgPipeConnection(SocketConnection connection)
     {
         _connection = connection;
-        Reader = new AsyncOnlySyncCapablePipeReader(connection.Input);
-        Writer = new AsyncOnlySyncCapablePipeWriter(new PipeWriterUnflushedBytes(connection.Output));
+        Reader = connection.Input;
+        Writer = new PipeWriterUnflushedBytes(connection.Output);
     }
 
-    public override ISyncCapablePipeReader Reader { get; }
-    public override ISyncCapablePipeWriter Writer { get; }
+    public override PipeReader Reader { get; }
+    public override PipeWriter Writer { get; }
     public override bool CanBlock => false;
 
     public PipeShutdownKind ShutdownKind => _connection.ShutdownKind;
@@ -134,8 +134,8 @@ sealed class PgStreamConnection : PgSocketConnection, IDisposable, IAsyncDisposa
         Writer = writer;
     }
 
-    public override ISyncCapablePipeReader Reader { get; }
-    public override ISyncCapablePipeWriter Writer { get; }
+    public override PipeReader Reader { get; }
+    public override PipeWriter Writer { get; }
     public override bool CanBlock => true;
 
     public static async ValueTask<PgStreamConnection> ConnectAsync(EndPoint endPoint, CancellationToken cancellationToken = default)
@@ -179,15 +179,15 @@ sealed class PgStreamConnection : PgSocketConnection, IDisposable, IAsyncDisposa
 
     public void Dispose()
     {
-        Reader.PipeReader.Complete();
-        Writer.PipeWriter.Complete();
+        Reader.Complete();
+        Writer.Complete();
         _stream.Dispose();
     }
 
     public async ValueTask DisposeAsync()
     {
-        await Reader.PipeReader.CompleteAsync().ConfigureAwait(false);
-        await Writer.PipeWriter.CompleteAsync().ConfigureAwait(false);
+        await Reader.CompleteAsync().ConfigureAwait(false);
+        await Writer.CompleteAsync().ConfigureAwait(false);
 #if !NETSTANDARD2_0
         await _stream.DisposeAsync().ConfigureAwait(false);
 #else

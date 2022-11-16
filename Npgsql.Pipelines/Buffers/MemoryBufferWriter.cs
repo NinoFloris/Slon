@@ -9,10 +9,11 @@ using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using Npgsql.Pipelines.Buffers;
 
 namespace Microsoft.AspNetCore.Internal;
 
-internal sealed class MemoryBufferWriter : Stream, IBufferWriter<byte>, ICopyableBuffer<byte>
+internal sealed class MemoryBufferWriter : Stream, IStreamingWriter<byte>, ICopyableBuffer<byte>
 {
     [ThreadStatic]
     private static MemoryBufferWriter? _cachedInstance;
@@ -272,6 +273,14 @@ internal sealed class MemoryBufferWriter : Stream, IBufferWriter<byte>, ICopyabl
     }
 
     public override void Flush() { }
+    public void Flush(TimeSpan timeout = default)
+    {
+    }
+    ValueTask IStreamingWriter<byte>.FlushAsync(CancellationToken cancellationToken)
+    {
+        return new ValueTask();
+    }
+
     public override Task FlushAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();

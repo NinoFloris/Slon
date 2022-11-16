@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using Npgsql.Pipelines.Buffers;
 
 namespace Npgsql.Pipelines.Protocol;
 
@@ -15,7 +16,7 @@ enum ParameterKind: byte
 }
 
 /// A class describing the parameter type and its other properties.
-abstract class ParameterDescriptor
+abstract class ParameterInfo
 {
     /// Whether the parameter value is communicated in binary form.
     protected abstract bool GetIsBinary();
@@ -49,20 +50,20 @@ interface IParameterSession<T>: IParameterSession
 
 readonly struct CommandParameter
 {
-    readonly ParameterDescriptor _descriptor;
+    readonly ParameterInfo _info;
     readonly object _value;
-    readonly int? _precomputedLength;
+    readonly int? _length;
 
-    public CommandParameter(ParameterDescriptor descriptor, object value, int? precomputedLength = null)
+    public CommandParameter(ParameterInfo info, object value, int? length = null)
     {
-        _descriptor = descriptor;
+        _info = info;
         _value = value;
-        _precomputedLength = precomputedLength;
+        _length = length;
     }
 
-    public ParameterDescriptor Descriptor => _descriptor;
+    public ParameterInfo Info => _info;
     public ParameterKind Kind => _value is IParameterSession ep ? ep.Kind : ParameterKind.Input;
-    public int? PrecomputedLength => _precomputedLength;
+    public int? Length => _length;
 
     /// Value can be an instance of IParameterSession or a direct parameter value (or some custom behavior).
     public object Value => _value;
@@ -87,6 +88,6 @@ readonly struct CommandParameters
 
 abstract class ParameterWriter
 {
+    public abstract void Write<T>(ref StreamingWriter<T> writer, CommandParameter parameter) where T : IStreamingWriter<byte>;
     public abstract void Write<T>(ref BufferWriter<T> writer, CommandParameter parameter) where T : IBufferWriter<byte>;
-    public abstract void Write<T>(ref SpanBufferWriter<T> writer, CommandParameter parameter) where T : IBufferWriter<byte>;
 }

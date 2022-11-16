@@ -12,7 +12,6 @@ namespace Npgsql.Pipelines;
 /// </summary>
 sealed class SimplePipeReader
 {
-    readonly ISyncCapablePipeReader _readerSync;
     readonly TimeSpan _readTimeout;
     readonly PipeReader _reader;
     CancellationTokenSource? _readTimeoutSource;
@@ -23,11 +22,10 @@ sealed class SimplePipeReader
     long _largestMinimumSize;
     bool _completed;
 
-    public SimplePipeReader(ISyncCapablePipeReader reader, TimeSpan readTimeout)
+    public SimplePipeReader(PipeReader reader, TimeSpan readTimeout)
     {
-        _readerSync = reader;
+        _reader = reader;
         _readTimeout = readTimeout;
-        _reader = reader.PipeReader;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -101,6 +99,8 @@ sealed class SimplePipeReader
 
     public ReadOnlySequence<byte> ReadAtLeast(int minimumSize, TimeSpan timeout)
     {
+        var reader = ThrowIfNotSyncCapable();
+
         if (!_completed && minimumSize != 0 && _bufferLength - _consumed >= minimumSize)
             return _buffer.Slice(_consumed);
 
@@ -110,7 +110,7 @@ sealed class SimplePipeReader
             _unfinishedRead = false;
         }
 
-        var result = _readerSync.ReadAtLeast(minimumSize, timeout);
+        var result = reader.ReadAtLeast(minimumSize, timeout);
         HandleReadResult(result, minimumSize);
         return result.Buffer;
     }
@@ -148,6 +148,14 @@ sealed class SimplePipeReader
         _reader.AdvanceTo(consumedPosition, examined > consumed ? _buffer.GetPosition(examined) : consumedPosition);
         _bufferLength = 0;
         _consumed = 0;
+    }
+
+    ISyncCapablePipeReader ThrowIfNotSyncCapable()
+    {
+        if (_reader is not ISyncCapablePipeReader reader)
+            throw new NotSupportedException("The underlying reader does not support sync operations.");
+
+        return reader;
     }
 
     public ValueTask CompleteAsync(Exception? exception = null)

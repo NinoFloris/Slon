@@ -7,6 +7,8 @@ using System.Threading.Tasks;
 
 namespace Npgsql.Pipelines.Buffers;
 
+// TODO revisit FlushControl now we have IStreamingWriter.
+
 readonly struct FlushResult
 {
     [Flags]
@@ -48,18 +50,18 @@ abstract class FlushControl: IDisposable
     public abstract ValueTask<FlushResult> FlushAsync(bool observeFlushThreshold = true, CancellationToken cancellationToken = default);
     protected bool _disposed;
 
-    public static FlushControl Create(ISyncCapablePipeWriter writer, TimeSpan flushTimeout, int flushThreshold)
+    public static FlushControl Create(PipeWriter writer, TimeSpan flushTimeout, int flushThreshold)
     {
-        if (!writer.PipeWriter.CanGetUnflushedBytes)
+        if (!writer.CanGetUnflushedBytes)
             throw new ArgumentException("Cannot accept PipeWriters that don't support UnflushedBytes.", nameof(writer));
         var flushControl = new ResettableFlushControl(writer, flushTimeout, flushThreshold);
         flushControl.Initialize();
         return flushControl;
     }
 
-    public static FlushControl Create(ISyncCapablePipeWriter writer, TimeSpan flushTimeout, int flushThreshold, TimeSpan userTimeout)
+    public static FlushControl Create(PipeWriter writer, TimeSpan flushTimeout, int flushThreshold, TimeSpan userTimeout)
     {
-        if (!writer.PipeWriter.CanGetUnflushedBytes)
+        if (!writer.CanGetUnflushedBytes)
             throw new ArgumentException("Cannot accept PipeWriters that don't support UnflushedBytes.", nameof(writer));
         var flushControl = new ResettableFlushControl(writer, flushTimeout, flushThreshold);
         flushControl.InitializeAsBlocking(userTimeout);
@@ -88,17 +90,15 @@ abstract class FlushControl: IDisposable
 
 class ResettableFlushControl: FlushControl
 {
-    readonly ISyncCapablePipeWriter _writer;
-    readonly PipeWriter _pipeWriter;
+    readonly PipeWriter _writer;
     TimeSpan _userTimeout;
     CancellationTokenSource? _timeoutSource;
     CancellationTokenRegistration? _registration;
     long _start = -2;
 
-    public ResettableFlushControl(ISyncCapablePipeWriter writer, TimeSpan flushTimeout, int flushThreshold)
+    public ResettableFlushControl(PipeWriter writer, TimeSpan flushTimeout, int flushThreshold)
     {
         _writer = writer;
-        _pipeWriter = writer.PipeWriter;
         FlushTimeout = flushTimeout;
         FlushThreshold = flushThreshold;
     }
@@ -108,7 +108,7 @@ class ResettableFlushControl: FlushControl
     public override CancellationToken TimeoutCancellationToken => _timeoutSource?.Token ?? CancellationToken.None;
     [MemberNotNullWhen(false, nameof(_timeoutSource))]
     public override bool IsFlushBlocking => _timeoutSource is null;
-    public override long UnflushedBytes => _pipeWriter.UnflushedBytes;
+    public override long UnflushedBytes => _writer.UnflushedBytes;
 
     public bool WriterCompleted { get; private set; }
 
@@ -161,10 +161,10 @@ class ResettableFlushControl: FlushControl
     {
         ThrowIfDisposed();
 
-        if (observeFlushThreshold && FlushThreshold != -1 && FlushThreshold > _pipeWriter.UnflushedBytes)
+        if (observeFlushThreshold && FlushThreshold != -1 && FlushThreshold > _writer.UnflushedBytes)
             return new ValueTask<FlushResult>(new FlushResult(isCanceled: false, isCompleted: WriterCompleted));
 
-        if (_pipeWriter.UnflushedBytes == 0)
+        if (_writer.UnflushedBytes == 0)
             return new ValueTask<FlushResult>(new FlushResult(isCanceled: false, isCompleted: WriterCompleted));
 
         return Core(this, cancellationToken);
@@ -179,13 +179,13 @@ class ResettableFlushControl: FlushControl
             {
                 if (instance.IsFlushBlocking)
                 {
-                    result = instance._writer.Flush(instance.GetTimeout());
+                    result = ((ISyncCapablePipeWriter)instance._writer).Flush(instance.GetTimeout());
                 }
                 else
                 {
                     try
                     {
-                        result = await instance._pipeWriter.FlushAsync(instance.GetToken(cancellationToken)).ConfigureAwait(false);
+                        result = await instance._writer.FlushAsync(instance.GetToken(cancellationToken)).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException ex) when (instance.TimeoutCancellationToken.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
                     {
@@ -207,6 +207,7 @@ class ResettableFlushControl: FlushControl
         ThrowIfDisposed();
         if (IsInitialized)
             throw new InvalidOperationException("Initialize called before Reset, concurrent use is not supported.");
+        ThrowIfNotSyncCapable();
 
         _start = _userTimeout.Ticks <= 0 ? -1 : TickCount64Shim.Get();
         _userTimeout = timeout;
@@ -225,6 +226,12 @@ class ResettableFlushControl: FlushControl
     }
 
     void ThrowWriterCompleted() => throw new InvalidOperationException("PipeWriter is completed.");
+
+    void ThrowIfNotSyncCapable()
+    {
+        if (_writer is not ISyncCapablePipeWriter)
+            throw new NotSupportedException("The underlying writer does not support sync operations.");
+    }
 
     internal void Reset()
     {
