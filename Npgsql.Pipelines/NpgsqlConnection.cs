@@ -453,7 +453,7 @@ public sealed partial class NpgsqlConnection
         if (_disposed)
             return;
         _disposed = true;
-        await CloseCore(async).ConfigureAwait(false);;
+        await CloseCore(async).ConfigureAwait(false);
     }
 
     NpgsqlTransaction BeginTransactionCore(IsolationLevel isolationLevel)

@@ -47,10 +47,10 @@ struct RowDescription: IPgV3BackendMessage
             fields[i] = new(
                 new Field(
                     Name:              name!,
-                    Oid:               new Oid(oid)
+                    Oid:               new Oid(oid),
+                    TypeModifier:      typeModifier
                 ),
                 FieldTypeSize:          typeSize,
-                FieldTypeModifier:      typeModifier,
                 TableOid:              new Oid(tableOid),
                 ColumnAttributeNumber: columnAttributeNumber,
                 FormatCode:            (FormatCode)formatCode

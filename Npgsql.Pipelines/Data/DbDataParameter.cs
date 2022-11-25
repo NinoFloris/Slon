@@ -7,6 +7,7 @@ using System.Threading;
 
 namespace Npgsql.Pipelines.Data;
 
+// TODO Maybe want to use a BitVector32 for _combinedEnums.
 // TODO store whether DBNull.Value was set as there is a difference between null and DBNull.
 
 // Size optimized base class.

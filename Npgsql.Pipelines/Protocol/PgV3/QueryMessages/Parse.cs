@@ -44,7 +44,7 @@ readonly struct Parse: IFrontendMessage
         buffer.WriteUShort((ushort)parameters.Length);
 
         foreach (var (key, _) in parameters.Span)
-            buffer.WriteUInt(((PgV3ParameterInfo)key.Info).Parameter.Oid);
+            buffer.WriteUInt((uint)((PgV3ParameterInfo)key.Info).Parameter.Oid);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

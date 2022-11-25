@@ -52,7 +52,7 @@ class MockPgServer : IDisposable
     public IDuplexPipe ClientPipe { get; }
 
     public StatementField CreateStatementField(PgType type)
-        => new(new Field("?", type), -1, 0, (Oid)0, 0, FormatCode.Binary);
+        => new(new Field("?", type, 0), -1, 0, 0, FormatCode.Binary);
 
     public async Task Startup(MockState state)
     {
@@ -207,11 +207,11 @@ class MockPgServer : IDisposable
         foreach (var field in fields)
         {
             Writer.WriteCString(field.Field.Name);
-            Writer.WriteUInt(field.TableOid);
+            Writer.WriteUInt((uint)field.TableOid);
             Writer.WriteShort(field.ColumnAttributeNumber);
-            Writer.WriteUInt(field.Field.Oid);
+            Writer.WriteUInt((uint)field.Field.Oid);
             Writer.WriteShort(field.FieldTypeSize);
-            Writer.WriteInt(field.FieldTypeModifier);
+            Writer.WriteInt(field.Field.TypeModifier);
             Writer.WriteShort((short)field.FormatCode);
         }
 
