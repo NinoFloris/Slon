@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics.CodeAnalysis;
 
 namespace Npgsql.Pipelines.Protocol;
 
@@ -13,16 +12,15 @@ enum PreparationKind
     Global
 }
 
-abstract record Statement
+abstract class Statement
 {
-    [SetsRequiredMembers]
-    protected Statement(PreparationKind kind)
+    public Statement(PreparationKind kind)
     {
         Kind = kind;
     }
 
+    public PreparationKind Kind { get; }
     // Whether the statement has gone through all the required operations to be used to run matching commands in a prepared fashion.
     public abstract bool IsComplete { get; }
     public Guid Id { get; } = Guid.NewGuid();
-    public required PreparationKind Kind { get; init; }
 }

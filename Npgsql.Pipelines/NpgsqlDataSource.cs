@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Immutable;
 using System.Data.Common;
 using System.Net;
 using System.Net.Sockets;
@@ -6,11 +7,21 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
+using Npgsql.Pipelines.Data;
+using Npgsql.Pipelines.Pg;
+using Npgsql.Pipelines.Pg.Types;
 using Npgsql.Pipelines.Protocol;
 using Npgsql.Pipelines.Protocol.Pg;
 using Npgsql.Pipelines.Protocol.PgV3;
+using Npgsql.Pipelines.Protocol.PgV3.Descriptors;
 
 namespace Npgsql.Pipelines;
+
+interface IFrontendTypeCatalog
+{
+    DataTypeName GetDataTypeName(PgTypeId pgTypeId);
+    bool TryGetIdentifiers(NpgsqlDbType npgsqlDbType, out PgTypeId canonicalTypeId, out DataTypeName dataTypeName);
+}
 
 record NpgsqlDataSourceOptions
 {
@@ -38,6 +49,7 @@ record NpgsqlDataSourceOptions
     /// Default is infinite, where behavior purely relies on read and write timeouts of the underlying protocol.
     /// </summary>
     public TimeSpan CommandTimeout { get; init; } = DefaultCommandTimeout;
+    public int AutoPrepareMinimumUses { get; set; }
 
     internal PgOptions ToPgOptions() => new()
     {
@@ -54,151 +66,40 @@ record NpgsqlDataSourceOptions
     }
 }
 
-public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>, ICommandExecutionProvider
+// Multiplexing
+public partial class NpgsqlDataSource : ICommandExecutionProvider<CommandExecution>
 {
-    readonly NpgsqlDataSourceOptions _options;
-    readonly PgOptions _pgOptions;
-    readonly PgV3ProtocolOptions _pgV3ProtocolOptions;
-    readonly ConnectionSource<PgV3Protocol> _connectionSource;
-    readonly ChannelWriter<OperationSource> _channelWriter;
-
-    internal NpgsqlDataSource(NpgsqlDataSourceOptions options, PgV3ProtocolOptions pgV3ProtocolOptions)
-    {
-        options.Validate();
-        _options = options;
-        EndPointRepresentation = options.EndPoint.AddressFamily is AddressFamily.InterNetwork or AddressFamily.InterNetworkV6 ? $"tcp://{options.EndPoint}" : options.EndPoint.ToString()!;
-        _pgOptions = options.ToPgOptions();
-        _pgV3ProtocolOptions = pgV3ProtocolOptions;
-        _connectionSource = new ConnectionSource<PgV3Protocol>(this, options.MaxPoolSize);
-        var channel = Channel.CreateUnbounded<OperationSource>(new UnboundedChannelOptions()
+    Channel<OperationSource> CreateChannel() =>
+        Channel.CreateUnbounded<OperationSource>(new UnboundedChannelOptions()
         {
             SingleReader = true,
             AllowSynchronousContinuations = false,
         });
 
-        _channelWriter = channel.Writer;
-        var _ = Task.Run(() => MultiplexingCommandWriter(channel.Reader, _connectionSource, options).ContinueWith(t => t.Exception, TaskContinuationOptions.OnlyOnFaulted));
-    }
-
-    internal TimeSpan DefaultConnectionTimeout => _options.ConnectionTimeout;
-    internal TimeSpan DefaultCancellationTimeout => _options.CancellationTimeout;
-    internal TimeSpan DefaultCommandTimeout => _options.CommandTimeout;
-    internal string Database => _options.Database ?? _options.Username;
-    internal string EndPointRepresentation { get; }
-
-    // TODO should be populated by Start and returned as a a result, cache only once on the datasource, not per connection.
-    internal string ServerVersion => throw new NotImplementedException();
-
-    internal void PerformUserCancellation(Protocol.Protocol protocol, TimeSpan timeout)
+    struct MultiplexingItem: IPgCommand
     {
-        // TODO
-        // spin up a connection and write out cancel
-    }
+        readonly IPgCommand.BeginExecutionDelegate _beginExecutionDelegate;
+        IPgCommand.Values _values;
 
-    struct MultiplexingItem: ICommand
-    {
-        readonly CreateExecutionDelegate _createExecutionDelegate;
-        ICommand.Values _values;
-
-        public MultiplexingItem(CreateExecutionDelegate createExecutionDelegate, in ICommand.Values values)
+        public MultiplexingItem(IPgCommand.BeginExecutionDelegate beginExecutionDelegate, in IPgCommand.Values values)
         {
-            _createExecutionDelegate = createExecutionDelegate;
+            _beginExecutionDelegate = beginExecutionDelegate;
             _values = values;
         }
 
         public CommandExecution CommandExecution { get; private set; }
 
-        public ICommand.Values GetValues() => _values;
-        CreateExecutionDelegate ICommand.CreateExecutionDelegate => throw new NotSupportedException();
-        public CommandExecution CreateExecution(in ICommand.Values values)
+        public IPgCommand.Values GetValues() => _values;
+        public IPgCommand.BeginExecutionDelegate BeginExecutionMethod => throw new NotSupportedException();
+        public CommandExecution BeginExecution(in IPgCommand.Values values)
         {
-            DebugShim.Assert(values == _values);
             // Null out the values so any heap objects can be freed before the entire operation is done.
             _values = default;
-            return CommandExecution = _createExecutionDelegate(values);
+            return CommandExecution = _beginExecutionDelegate(values);
         }
     }
 
-    internal ValueTask<CommandContextBatch> WriteMultiplexingCommand<TCommand>(TCommand command, CancellationToken cancellationToken = default)
-        where TCommand: ICommand
-    {
-        var item = new MultiplexingItem(command.CreateExecutionDelegate, command.GetValues());
-        var source = PgV3Protocol.CreateUnboundOperationSource(item, cancellationToken);
-
-        if (_channelWriter.TryWrite(source))
-            return new (CommandContext.Create(new IOCompletionPair(new (WriteResult.Unknown), source), this));
-
-        return WriteAsync(this, source, cancellationToken);
-
-#if !NETSTANDARD2_0
-        [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
-#endif
-        static async ValueTask<CommandContextBatch> WriteAsync(NpgsqlDataSource instance, OperationSource source, CancellationToken cancellationToken)
-        {
-            await instance._channelWriter.WriteAsync(source, cancellationToken).ConfigureAwait(false);
-            return CommandContext.Create(new IOCompletionPair(new (WriteResult.Unknown), source), instance);
-        }
-    }
-
-    internal CommandContext WriteCommand<TCommand>(OperationSlot slot, TCommand command) where TCommand: ICommand
-    {
-        // TODO SingleThreadSynchronizationContext for sync writes happening async.
-        return WriteCommandAsync(slot, command, CancellationToken.None);
-    }
-
-    internal CommandContext WriteCommandAsync<TCommand>(OperationSlot slot, TCommand command, CancellationToken cancellationToken = default)
-        where TCommand: ICommand
-        => CommandWriter.WriteExtendedAsync(slot, ref command, flushHint: true, cancellationToken: cancellationToken);
-
-    internal ValueTask<OperationSlot> OpenAsync(bool exclusiveUse, TimeSpan connectionTimeout, CancellationToken cancellationToken = default)
-        => _connectionSource.GetAsync(exclusiveUse, connectionTimeout, cancellationToken);
-
-    internal OperationSlot Open(bool exclusiveUse, TimeSpan connectionTimeout)
-        => _connectionSource.Get(exclusiveUse, connectionTimeout);
-
-    PgV3Protocol IConnectionFactory<PgV3Protocol>.Create(TimeSpan timeout)
-    {
-        throw new NotImplementedException();
-    }
-
-    async ValueTask<PgV3Protocol> IConnectionFactory<PgV3Protocol>.CreateAsync(CancellationToken cancellationToken)
-    {
-        var pipes = await PgStreamConnection.ConnectAsync(_options.EndPoint, cancellationToken);
-        return await PgV3Protocol.StartAsync(pipes.Writer, pipes.Reader, _pgOptions, _pgV3ProtocolOptions);
-    }
-
-    public override string ConnectionString => throw new NotImplementedException();
-
-    protected override DbConnection CreateDbConnection() => new NpgsqlConnection(this);
-    public new NpgsqlConnection CreateConnection() => (NpgsqlConnection)CreateDbConnection();
-    public new NpgsqlConnection OpenConnection() => (NpgsqlConnection)base.OpenConnection();
-    public new async ValueTask<NpgsqlConnection> OpenConnectionAsync(CancellationToken cancellationToken)
-    {
-        var connection = CreateConnection();
-        try
-        {
-            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-            return connection;
-        }
-        catch
-        {
-            connection.Dispose();
-            throw;
-        }
-    }
-
-    protected override DbCommand CreateDbCommand(string? commandText = null)
-        => new NpgsqlCommand(commandText, this);
-
-    public new NpgsqlCommand CreateCommand(string? commandText = null)
-        => (NpgsqlCommand)CreateDbCommand(commandText);
-
-    protected override void Dispose(bool disposing)
-    {
-        _channelWriter.Complete();
-    }
-
-    static async Task MultiplexingCommandWriter(ChannelReader<OperationSource> reader, ConnectionSource<PgV3Protocol> connectionSource, NpgsqlDataSourceOptions options)
+    static async Task MultiplexingCommandWriter(ChannelReader<OperationSource> reader, NpgsqlDataSource dataSource)
     {
         const int writeThreshold = 1000; // TODO arbitrary constant, it works well though...
         var failedToEnqueue = false;
@@ -212,7 +113,7 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>, I
                 if (failedToEnqueue || reader.TryRead(out source!))
                 {
                     // Bind slot, this might throw.
-                    await connectionSource.BindAsync(source, options.ConnectionTimeout, source.CancellationToken).ConfigureAwait(false);
+                    await dataSource.ConnectionSource.BindAsync(source, dataSource.ConnectionTimeout, source.CancellationToken).ConfigureAwait(false);
                     protocol = (PgV3Protocol)source.Protocol!;
 
                     if (failedToEnqueue)
@@ -228,8 +129,9 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>, I
                     // TODO this should probably only trigger if it also wrote a substantial amount (as a crude proxy for query compute cost)
                     var fewPending = false; // pending <= 2;
 
+                    // D
                     // Write command, might throw.
-                    var writeTask = WriteCommand(source, flushHint: fewPending);
+                    var writeTask = WriteCommand(dataSource.GetDbDependencies().CommandWriter, source, flushHint: fewPending);
 
                     // Flush (if necessary).
                     var didFlush = fewPending;
@@ -272,20 +174,391 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>, I
                 }
                 catch(Exception completionException)
                 {
+                    // TODO
                     Console.WriteLine(completionException.Message);
                 }
             }
         }
 
-        static ValueTask<WriteResult> WriteCommand(OperationSource source, bool flushHint)
+        static ValueTask<WriteResult> WriteCommand(PgV3CommandWriter commandWriter, OperationSource source, bool flushHint)
         {
             ref var command = ref PgV3Protocol.GetDataRef<MultiplexingItem>(source);
-            var commandContext = CommandWriter.WriteExtendedAsync(source, ref command, flushHint, source.CancellationToken);
+            var commandContext = commandWriter.WriteAsync(source, ref command, flushHint, source.CancellationToken);
             // We can drop the commandContext as it was written into the source data to be retrieved via the ICommandExecutionProvider.
             return commandContext.WriteTask;
         }
     }
 
-    CommandExecution ICommandExecutionProvider.Get(in CommandContext context)
+    CommandExecution ICommandExecutionProvider<CommandExecution>.Get(in CommandContext<CommandExecution> context)
         => PgV3Protocol.GetDataRef<MultiplexingItem>(context.ReadSlot).CommandExecution;
+
+    internal async ValueTask<CommandContextBatch<CommandExecution>> WriteMultiplexingCommand<TCommand>(TCommand command, CancellationToken cancellationToken = default)
+        where TCommand: IPgCommand
+    {
+        await EnsureInitializedAsync(cancellationToken);
+
+        var item = new MultiplexingItem(command.BeginExecutionMethod, command.GetValues());
+        var source = PgV3Protocol.CreateUnboundOperationSource(item, cancellationToken);
+
+        if (ChannelWriter.TryWrite(source))
+            return (CommandContext<CommandExecution>.Create(new IOCompletionPair(new (WriteResult.Unknown), source), this));
+
+        return await WriteAsync(this, source, cancellationToken);
+
+#if !NETSTANDARD2_0
+        [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+#endif
+        static async ValueTask<CommandContextBatch<CommandExecution>> WriteAsync(NpgsqlDataSource instance, OperationSource source, CancellationToken cancellationToken)
+        {
+            await instance.ChannelWriter.WriteAsync(source, cancellationToken).ConfigureAwait(false);
+            return CommandContext<CommandExecution>.Create(new IOCompletionPair(new (WriteResult.Unknown), source), instance);
+        }
+    }
+}
+
+class PgDatabaseInfo
+{
+    public PgDatabaseInfo(PgTypeCatalog typeCatalog)
+    {
+        TypeCatalog = typeCatalog;
+        ServerVersion = "PG";
+    }
+
+    public string ServerVersion { get; }
+
+    public PgTypeCatalog TypeCatalog { get; }
+}
+
+
+interface IPgDatabaseInfoProvider
+{
+    PgDatabaseInfo Get(PgOptions pgOptions, TimeSpan timeSpan);
+    ValueTask<PgDatabaseInfo> GetAsync(PgOptions pgOptions, CancellationToken cancellationToken = default);
+}
+
+class DefaultPgDatabaseInfoProvider: IPgDatabaseInfoProvider
+{
+    PgDatabaseInfo Create() => new(PgTypeCatalog.Default);
+    public PgDatabaseInfo Get(PgOptions pgOptions, TimeSpan timeSpan) => Create();
+    public ValueTask<PgDatabaseInfo> GetAsync(PgOptions pgOptions, CancellationToken cancellationToken = default) => new(Create());
+}
+public partial class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>
+{
+    readonly NpgsqlDataSourceOptions _options;
+    readonly PgOptions _pgOptions;
+    readonly PgV3ProtocolOptions _pgV3ProtocolOptions;
+    readonly IPgDatabaseInfoProvider _pgDatabaseInfoProvider;
+    readonly IdentityFacetsTransformer _facetsTransformer;
+    readonly SemaphoreSlim _lifecycleLock;
+
+    // Initialized on the first real use.
+    ConnectionSource<PgV3Protocol>? _connectionSource;
+    ChannelWriter<OperationSource>? _channelWriter;
+    PgDbDependencies? _dbDependencies;
+    bool _isInitialized;
+
+    internal NpgsqlDataSource(NpgsqlDataSourceOptions options, PgV3ProtocolOptions pgV3ProtocolOptions, IPgDatabaseInfoProvider? pgDatabaseInfoProvider = null)
+    {
+        options.Validate();
+        _options = options;
+        EndPointRepresentation = options.EndPoint.AddressFamily is AddressFamily.InterNetwork or AddressFamily.InterNetworkV6 ? $"tcp://{options.EndPoint}" : options.EndPoint.ToString()!;
+        _pgOptions = options.ToPgOptions();
+        _pgV3ProtocolOptions = pgV3ProtocolOptions;
+        _pgDatabaseInfoProvider = pgDatabaseInfoProvider ?? new DefaultPgDatabaseInfoProvider();
+        _lifecycleLock = new(1);
+        _facetsTransformer = new IdentityFacetsTransformer();
+    }
+
+    Exception NotInitializedException() => new InvalidOperationException("DataSource is not initialized yet, at least one connection needs to be opened first.");
+
+    ChannelWriter<OperationSource> ChannelWriter => _channelWriter ?? throw NotInitializedException();
+    ConnectionSource<PgV3Protocol> ConnectionSource => _connectionSource ?? throw NotInitializedException();
+
+    // Store the result if multiple dependencies are required. The instance may be switched out during reloading.
+    // To prevent any inconsistencies without having to obtain a lock on the data we instead use an immutable instance.
+    // All relevant depedencies are bundled to provide a consistent view, it's either all new or all old data.
+    PgDbDependencies GetDbDependencies() => _dbDependencies ?? throw NotInitializedException();
+
+    // False for datasources that dispatch commands across different backends.
+    // Among other effects this impacts cacheability of state derived from unstable backend type information.
+    // Its value should be static for the lifetime of the instance.
+    internal bool IsPhysicalDataSource => true;
+    // This is to get back to the multi-host datasource that owns its host sources.
+    // It also helps commands to keep caches intact when switching sources from the same owner.
+    internal NpgsqlDataSource DataSourceOwner => this;
+
+    internal TimeSpan ConnectionTimeout => _options.ConnectionTimeout;
+    internal TimeSpan DefaultCancellationTimeout => _options.CancellationTimeout;
+    internal TimeSpan DefaultCommandTimeout => _options.CommandTimeout;
+    internal string Database => _options.Database ?? _options.Username;
+    internal string EndPointRepresentation { get; }
+
+    internal string ServerVersion => GetDbDependencies().PgDatabaseInfo.ServerVersion;
+
+    int DbDepsRevision { get; set; }
+
+     ValueTask Initialize(bool async, CancellationToken cancellationToken)
+    {
+        if (_isInitialized)
+            return new ValueTask();
+
+        return Core();
+
+        async ValueTask Core()
+        {
+            if (async)
+                await _lifecycleLock.WaitAsync(cancellationToken);
+            else
+                _lifecycleLock.Wait(cancellationToken);
+            try
+            {
+                if (_isInitialized)
+                    return;
+
+                // We don't flow cancellationToken past this point, at least one thread has to finish the init.
+                // We do DbDeps first as it may throw, otherwise we'd need to cleanup the other dependencies again.
+                _dbDependencies = await CreateDbDeps(async, Timeout.InfiniteTimeSpan, CancellationToken.None); // TODO for now we could hook up the right things (init timeout?) later.
+
+                var channel = CreateChannel();
+                _channelWriter = channel.Writer;
+                _connectionSource = new ConnectionSource<PgV3Protocol>(this, _options.MaxPoolSize);
+                var _ = Task.Run(() => MultiplexingCommandWriter(channel.Reader, this).ContinueWith(t => t.Exception, TaskContinuationOptions.OnlyOnFaulted));
+                _isInitialized = true;
+                // We insert a memory barrier to make sure _isInitialized is published to all processors before we release the semaphore.
+                // This is needed to be sure no other initialization will be started on another core that doesn't see _isInitialized = true yet but was already waiting for the lock.
+                Thread.MemoryBarrier();
+            }
+            finally
+            {
+                _lifecycleLock.Release();
+            }
+        }
+    }
+
+    void EnsureInitialized() => Initialize(false, CancellationToken.None).GetAwaiter().GetResult();
+    ValueTask EnsureInitializedAsync(CancellationToken cancellationToken) => Initialize(true, cancellationToken);
+
+    async ValueTask<PgDbDependencies> CreateDbDeps(bool async, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        var databaseInfo = async
+            ? _pgDatabaseInfoProvider.Get(_pgOptions, timeout)
+            : await _pgDatabaseInfoProvider.GetAsync(_pgOptions, cancellationToken);
+
+        var converterOptions = new PgConverterOptions
+        {
+            TypeCatalog = databaseInfo.TypeCatalog,
+            TextEncoding = _pgOptions.Encoding,
+            ConverterInfoResolver = new DefaultConverterInfoResolver()
+        };
+
+        return new PgDbDependencies(databaseInfo, converterOptions, new StatementTracker(_options.AutoPrepareMinimumUses), DbDepsRevision++);
+    }
+
+    internal void PerformUserCancellation(Protocol.Protocol protocol, TimeSpan timeout)
+    {
+        // TODO spin up a connection and write out cancel
+    }
+
+    internal CommandContext<CommandExecution> WriteCommand<TCommand>(OperationSlot slot, TCommand command) where TCommand: IPgCommand
+    {
+        EnsureInitialized();
+        // TODO SingleThreadSynchronizationContext for sync writes happening async.
+        return GetDbDependencies().CommandWriter.WriteAsync(slot, ref command, flushHint: true, CancellationToken.None);
+    }
+
+    internal async ValueTask<CommandContext<CommandExecution>> WriteCommandAsync<TCommand>(OperationSlot slot, TCommand command, CancellationToken cancellationToken = default)
+        where TCommand : IPgCommand
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        return GetDbDependencies().CommandWriter.WriteAsync(slot, ref command, flushHint: true, cancellationToken);
+    }
+
+    internal async ValueTask<OperationSlot> GetSlotAsync(bool exclusiveUse, TimeSpan connectionTimeout, CancellationToken cancellationToken = default)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        return await ConnectionSource.GetAsync(exclusiveUse, connectionTimeout, cancellationToken);
+    }
+
+    internal OperationSlot GetSlot(bool exclusiveUse, TimeSpan connectionTimeout)
+    {
+        EnsureInitialized();
+        return ConnectionSource.Get(exclusiveUse, connectionTimeout);
+    }
+
+    PgV3Protocol IConnectionFactory<PgV3Protocol>.Create(TimeSpan timeout)
+    {
+        throw new NotImplementedException();
+    }
+
+    async ValueTask<PgV3Protocol> IConnectionFactory<PgV3Protocol>.CreateAsync(CancellationToken cancellationToken)
+    {
+        var pipes = await PgStreamConnection.ConnectAsync(_options.EndPoint, cancellationToken);
+        return await PgV3Protocol.StartAsync(pipes.Writer, pipes.Reader, _pgOptions, _pgV3ProtocolOptions);
+    }
+
+    internal string SensitiveConnectionString => throw new NotImplementedException();
+    public override string ConnectionString => ""; //TODO
+
+    protected override DbConnection CreateDbConnection() => new NpgsqlConnection(this);
+    public new NpgsqlConnection CreateConnection() => (NpgsqlConnection)CreateDbConnection();
+    public new NpgsqlConnection OpenConnection() => (NpgsqlConnection)base.OpenConnection();
+    public new async ValueTask<NpgsqlConnection> OpenConnectionAsync(CancellationToken cancellationToken)
+    {
+        var connection = CreateConnection();
+        try
+        {
+            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+            return connection;
+        }
+        catch
+        {
+            connection.Dispose();
+            throw;
+        }
+    }
+
+    protected override DbCommand CreateDbCommand(string? commandText = null)
+        => new NpgsqlCommand(commandText, this);
+
+    public new NpgsqlCommand CreateCommand(string? commandText = null)
+        => (NpgsqlCommand)CreateDbCommand(commandText);
+
+    protected override void Dispose(bool disposing)
+    {
+        _channelWriter?.Complete();
+    }
+
+    internal ParameterContextFactory GetNpgsqlParameterContextFactory(string? statementText = null)
+    {
+        var dbDeps = GetDbDependencies();
+        return new(dbDeps, _facetsTransformer, dbDeps.ParameterContextBuilderFactory,
+            PgV3CommandWriter.EstimateParameterBufferSize(PgStreamConnection.WriterSegmentSize, statementText));
+    }
+
+    internal Statement CreateCommandStatement(PgTypeIdView parameterTypes)
+    {
+        if (parameterTypes.IsEmpty)
+            return PgV3Statement.CreateUnprepared(PreparationKind.Command);
+
+        // We can return backend specific statements when this is a physical data source.
+        if (IsPhysicalDataSource)
+        {
+            var dbDeps = GetDbDependencies();
+            var typeNamesBuilder = ImmutableArray.CreateBuilder<PgTypeId>(parameterTypes.Length);
+            var statementParameterBuilder = ImmutableArray.CreateBuilder<StatementParameter>(parameterTypes.Length);
+            foreach (var name in parameterTypes)
+            {
+                typeNamesBuilder.Add(name);
+                statementParameterBuilder.Add(new(dbDeps.TypeCatalog.GetOid(name)));
+            }
+
+            return PgV3Statement.CreateUnprepared(PreparationKind.Command, typeNamesBuilder.MoveToImmutable(), statementParameterBuilder.MoveToImmutable());
+        }
+        else
+        {
+            var typeNamesBuilder = ImmutableArray.CreateBuilder<PgTypeId>(parameterTypes.Length);
+            foreach (var name in parameterTypes)
+                typeNamesBuilder.Add(name);
+
+            return PgV3Statement.CreateDbAgnostic(PreparationKind.Command, typeNamesBuilder.MoveToImmutable());
+        }
+    }
+
+    internal Statement? GetStatement(string statementText, PgTypeIdView parameterTypes)
+    {
+        var dbDeps = GetDbDependencies();
+        if (dbDeps.StatementsTracker.Lookup(statementText, parameterTypes) is { } statement)
+            return statement;
+
+        if (parameterTypes.IsEmpty)
+            statement = dbDeps.StatementsTracker.Add(PgV3Statement.CreateUnprepared(PreparationKind.Auto));
+        else
+        {
+            var typeNamesBuilder = ImmutableArray.CreateBuilder<PgTypeId>(parameterTypes.Length);
+            var statementParameterBuilder = ImmutableArray.CreateBuilder<StatementParameter>(parameterTypes.Length);
+            foreach (var name in parameterTypes)
+            {
+                typeNamesBuilder.Add(name);
+                statementParameterBuilder.Add(new(dbDeps.TypeCatalog.GetOid(name)));
+            }
+
+            var result = PgV3Statement.CreateUnprepared(PreparationKind.Auto, typeNamesBuilder.MoveToImmutable(), statementParameterBuilder.MoveToImmutable());
+            statement = dbDeps.StatementsTracker.Add(result);
+        }
+
+        return statement;
+    }
+
+    // Internal for testing.
+    internal class PgDbDependencies: IFrontendTypeCatalog
+    {
+        public PgDbDependencies(PgDatabaseInfo pgDatabaseInfo, PgConverterOptions converterOptions, StatementTracker statementsTracker, int revision)
+        {
+            PgDatabaseInfo = pgDatabaseInfo;
+            CommandWriter = new(pgDatabaseInfo.TypeCatalog, converterOptions.TextEncoding, MapAgnosticStatement);
+            ConverterOptions = converterOptions;
+            StatementsTracker = statementsTracker;
+            Revision = revision;
+            ParameterContextBuilderFactory = GetParameterContextBuilder;
+        }
+
+        public PgDatabaseInfo PgDatabaseInfo { get; }
+        public PgV3CommandWriter CommandWriter { get; }
+        public PgConverterOptions ConverterOptions { get; }
+        public StatementTracker StatementsTracker { get; }
+        public int Revision { get; }
+
+        public ParameterContextBuilderFactory ParameterContextBuilderFactory { get; }
+        public PgTypeCatalog TypeCatalog => PgDatabaseInfo.TypeCatalog;
+
+        ParameterContextBuilder GetParameterContextBuilder(int length, int estimatedParameterBufferLength)
+            => new(length, estimatedParameterBufferLength, Revision, ConverterOptions);
+
+        PgV3Statement MapAgnosticStatement(PgV3Statement statement)
+        {
+            // We don't track statements for individual commands at the data source level.
+            if (statement.Kind is PreparationKind.Command)
+                return Map(statement, PgDatabaseInfo.TypeCatalog);
+
+            if (StatementsTracker.Lookup(statement.Id) is { } mapped)
+                return mapped;
+
+            mapped = Map(statement, PgDatabaseInfo.TypeCatalog);
+            StatementsTracker.Add(mapped);
+            return mapped;
+
+            static PgV3Statement Map(PgV3Statement statement, PgTypeCatalog pgTypecatalog)
+            {
+                if (statement.ParameterTypes.IsEmpty)
+                    return PgV3Statement.CreateUnprepared(PreparationKind.Command);
+
+                var parameterTypeNames = statement.ParameterTypes;
+                var typeNamesBuilder = ImmutableArray.CreateBuilder<PgTypeId>(parameterTypeNames.Length);
+                var statementParameterBuilder = ImmutableArray.CreateBuilder<StatementParameter>(parameterTypeNames.Length);
+                foreach (var name in parameterTypeNames)
+                {
+                    typeNamesBuilder.Add(name);
+                    statementParameterBuilder.Add(new(pgTypecatalog.GetOid(name)));
+                }
+
+                return PgV3Statement.CreateUnprepared(PreparationKind.Command, typeNamesBuilder.MoveToImmutable(), statementParameterBuilder.MoveToImmutable());
+            }
+        }
+
+        public bool TryGetIdentifiers(NpgsqlDbType npgsqlDbType, out PgTypeId canonicalTypeId, out DataTypeName dataTypeName)
+            => TryGetIdentifiers(TypeCatalog, npgsqlDbType, out canonicalTypeId, out dataTypeName);
+
+        public DataTypeName GetDataTypeName(PgTypeId typeId) => TypeCatalog.GetDataTypeName(typeId);
+
+        internal static bool TryGetIdentifiers(PgTypeCatalog typeCatalog, NpgsqlDbType npgsqlDbType, out PgTypeId canonicalTypeId, out DataTypeName dataTypeName)
+        {
+            if (npgsqlDbType.ResolveArrayType)
+                return typeCatalog.TryGetArrayIdentifiers(npgsqlDbType.DataTypeName, out canonicalTypeId, out dataTypeName);
+
+            if (npgsqlDbType.ResolveMultiRangeType)
+                return typeCatalog.TryGetMultiRangeIdentifiers(npgsqlDbType.DataTypeName, out canonicalTypeId, out dataTypeName);
+
+            return typeCatalog.TryGetIdentifiers(npgsqlDbType.DataTypeName, out canonicalTypeId, out dataTypeName);
+        }
+    }
 }

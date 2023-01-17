@@ -22,11 +22,28 @@ public sealed class NpgsqlParameterCollection: DbDataParameterCollection<NpgsqlD
 
     public void Add<T>(T? value) => AddCore(PositionalName, value);
 
-    public void Add<T>(DbType type, T? value)
+    public void Add<T>(DbType dbType, T? value)
     {
         var parameter = CreateParameter(PositionalName, value);
-        parameter.DbType = type;
+        parameter.DbType = dbType;
         AddCore(null, parameter);
+    }
+
+    public void Add<T>(NpgsqlDbType dbType, T? value)
+    {
+        var parameter = CreateParameter(PositionalName, value);
+        parameter.NpgsqlDbType = dbType;
+        AddCore(null, parameter);
+    }
+
+    public void Add<T>(string parameterName, NpgsqlDbType dbType, T? value)
+    {
+        if (parameterName is null)
+            throw new ArgumentNullException(nameof(parameterName));
+
+        var parameter = CreateParameter(parameterName, value);
+        parameter.NpgsqlDbType = dbType;
+        AddCore(parameterName, parameter);
     }
 
     bool TryGetValueCore(string parameterName, [NotNullWhen(true)]out NpgsqlDbParameter? parameter)

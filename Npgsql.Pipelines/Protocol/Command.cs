@@ -13,50 +13,48 @@ enum ExecutionFlags
     SingleRow = 8, // data, hint single row and single result, may affect database - doesn't apply to child(chapter) results
     SequentialAccess = 16,
 
-    Unprepared = 64,
-    Preparing = 128,
-    Prepared = 256,
-    ErrorBarrier = 512, // Can be combined with one of the three previous flags.
+    Unprepared = 128,
+    Preparing = 256,
+    Prepared = 512,
 }
 
 static class ExecutionFlagsExtensions
 {
-    public static bool HasUnprepared(this ExecutionFlags flags) => (flags & ExecutionFlags.Unprepared) == ExecutionFlags.Unprepared;
-    public static bool HasErrorBarrier(this ExecutionFlags flags) => (flags & ExecutionFlags.ErrorBarrier) == ExecutionFlags.ErrorBarrier;
-    public static bool HasPreparing(this ExecutionFlags flags) => (flags & ExecutionFlags.Preparing) == ExecutionFlags.Preparing;
-    public static bool HasPrepared(this ExecutionFlags flags) => (flags & ExecutionFlags.Prepared) == ExecutionFlags.Prepared;
+    public static bool HasUnprepared(this ExecutionFlags flags) => (flags & ExecutionFlags.Unprepared) != 0;
+    public static bool HasPreparing(this ExecutionFlags flags) => (flags & ExecutionFlags.Preparing) != 0;
+    public static bool HasPrepared(this ExecutionFlags flags) => (flags & ExecutionFlags.Prepared) != 0;
 }
 
-/// <summary>
-/// Called right before the write commences.
-/// </summary>
-/// <param name="values">Values containing any updated (effective) ExecutionFlags for the protocol it will execute on.</param>
-/// <returns>CommandExecution state that is used for the duration of the execution.</returns>
-delegate CommandExecution CreateExecutionDelegate(in ICommand.Values values);
-
-interface ICommand
+interface ICommand<TAdditionalValues, TExecutionState>
 {
     // The underlying values might change so we hand out a copy.
     Values GetValues();
-
-    // Also exposed as a delegate to help struct composition where carrying an interface constraint or boxing is not desired
-    // CreateExecution should not depend on instance state anyway, if it needs any then Values.State is the vehicle of choice.
-    CreateExecutionDelegate CreateExecutionDelegate { get; }
 
     /// <summary>
     /// Called right before the write commences.
     /// </summary>
     /// <param name="values">Values containing any updated (effective) ExecutionFlags for the protocol it will execute on.</param>
-    /// <returns>CommandExecution state that is used for the duration of the execution.</returns>
-    public CommandExecution CreateExecution(in Values values);
+    /// <returns>Execution state that is available for the duration of the execution.</returns>
+    TExecutionState BeginExecution(in Values values);
 
-    public readonly record struct Values
+    // Also exposed as a delegate to help struct composition where carrying an interface constraint or boxing is not desired
+    // CreateExecution should not depend on instance state anyway, if it needs any then Values.State is the vehicle of choice.
+    BeginExecutionDelegate BeginExecutionMethod { get; }
+
+    readonly struct Values
     {
-        public required CommandParameters CommandParameters { get; init; }
-        public required string StatementText { get; init; }
-        public required TimeSpan Timeout { get; init; }
+        // Can be set to an empty string when a completed statement is also set.
+        public required SizedString StatementText { get; init; }
         public required ExecutionFlags ExecutionFlags { get; init; }
+        public required TimeSpan ExecutionTimeout { get; init; }
         public Statement? Statement { get; init; }
-        public object? State { get; init; }
+        public TAdditionalValues Additional { get; init; }
     }
+
+    /// <summary>
+    /// Called right before the write commences.
+    /// </summary>
+    /// <param name="values">Values containing any updated (effective) ExecutionFlags for the protocol it will execute on.</param>
+    /// <returns>Execution state that is available for the duration of the execution.</returns>
+    delegate TExecutionState BeginExecutionDelegate(in Values values);
 }

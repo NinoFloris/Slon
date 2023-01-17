@@ -10,6 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Threading.Tasks.Sources;
 using Npgsql.Pipelines.Buffers;
+using Npgsql.Pipelines.Pg;
 using Npgsql.Pipelines.Protocol.Pg;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
@@ -30,6 +31,7 @@ class PgV3Protocol : Protocol
     readonly PgV3ProtocolOptions _protocolOptions;
     readonly SimplePipeReader _reader;
     readonly PipeWriter _pipeWriter;
+    readonly PgWriter _pgWriter;
 
     readonly ResettableFlushControl _flushControl;
     readonly MessageWriter<PipeStreamingWriter> _defaultMessageWriter;
@@ -43,7 +45,7 @@ class PgV3Protocol : Protocol
 
     // The pool exists as there is a timeframe between a reader completing (and its slot) and the owner resetting it.
     // During this time the next operation in the queue might request a reader as well.
-    readonly ObjectPool<CommandReader> _commandReaderPool;
+    readonly ObjectPool<PgV3CommandReader> _commandReaderPool;
     // Arbitrary but it should not be the case that it takes more than 5 ops all completing before a single reader is returned again.
     const int maxReaderPoolSize = 5;
 
@@ -57,6 +59,7 @@ class PgV3Protocol : Protocol
         _pipeWriter = writer;
         _flushControl = new ResettableFlushControl(writer, _protocolOptions.WriteTimeout, Math.Max(MessageWriter.DefaultAdvisoryFlushThreshold , _protocolOptions.FlushThreshold));
         _defaultMessageWriter = new MessageWriter<PipeStreamingWriter>(new PipeStreamingWriter(_pipeWriter), _flushControl);
+        _pgWriter = new(_defaultMessageWriter.Writer.Output);
         _reader = new SimplePipeReader(reader, _protocolOptions.ReadTimeout);
         _operations = new Queue<PgV3OperationSource>();
         _operationSourceSingleton = new PgV3OperationSource(this, exclusiveUse: false, pooled: true);
@@ -64,7 +67,7 @@ class PgV3Protocol : Protocol
         _commandReaderPool = new(pool =>
         {
             var returnAction = pool.Return;
-            return () => new CommandReader(encoding, returnAction);
+            return () => new PgV3CommandReader(encoding, returnAction);
         }, maxReaderPoolSize);
         Encoding = encoding;
     }
@@ -146,8 +149,19 @@ class PgV3Protocol : Protocol
 
     Encoding Encoding { get; }
 
-    // TODO maybe add some ownership transfer logic here, allocating new instances if the singleton isn't back yet.
-    public override CommandReader GetCommandReader() => _commandReaderPool.Rent();
+    public override PgV3CommandReader GetCommandReader() => _commandReaderPool.Rent();
+
+    public PgWriter RentPgWriter(FlushMode flushMode, PgTypeCatalog typeCatalog)
+    {
+        var writer = _pgWriter;
+        writer.Initialize(flushMode, typeCatalog);
+        return writer;
+    }
+
+    public void ReturnPgWriter(PgWriter writer)
+    {
+        writer.Reset();
+    }
 
     public IOCompletionPair WriteMessageAsync<T>(OperationSlot slot, T message, bool flushHint = true, CancellationToken cancellationToken = default) where T : IFrontendMessage
         => WriteMessageBatchAsync(slot, (batchWriter, message, cancellationToken) => batchWriter.WriteMessageAsync(message, cancellationToken), message, flushHint, cancellationToken);
@@ -872,6 +886,7 @@ class PgV3Protocol : Protocol
     long _statementCounter;
     readonly Dictionary<Guid, SizedString> _trackedStatements = new();
 
+
     /// <summary>
     /// 
     /// </summary>
@@ -897,6 +912,20 @@ class PgV3Protocol : Protocol
             _trackedStatements[statement.Id] = name;
             return true;
         }
+    }
+
+    public void CloseStatement(Statement statement)
+    {
+        SizedString name;
+        lock (_trackedStatements)
+        {
+            if (_trackedStatements.TryGetValue(statement.Id, out name))
+                _trackedStatements.Remove(statement.Id);
+        }
+
+        // TODO enqueue on an event loop that takes care of this, notices, notifications etc.
+        if (name.ByteCount is not 0)
+            return;
     }
 
     public bool ContainsStatement(Statement statement)

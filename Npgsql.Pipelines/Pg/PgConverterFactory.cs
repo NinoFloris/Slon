@@ -1,0 +1,23 @@
+using System;
+using System.Buffers;
+using System.Threading;
+using System.Threading.Tasks;
+using Npgsql.Pipelines.Pg.Types;
+using Npgsql.Pipelines.Protocol;
+
+namespace Npgsql.Pipelines.Pg;
+
+abstract class PgConverterFactory : PgConverter
+{
+    public abstract PgConverter? CreateConverter(Type type, PgConverterOptions options, PgTypeId? pgTypeId = null);
+
+    internal sealed override bool IsDbNullValueAsObject(object? value, PgConverterOptions options) => throw new NotSupportedException();
+    internal sealed override SizeResult GetSizeAsObject(object value, int bufferLength, ref object? writeState, PgConverterOptions options) => throw new NotSupportedException();
+    internal sealed override ReadStatus ReadAsObject(ref SequenceReader<byte> reader, int byteCount, out object? value, PgConverterOptions options) => throw new NotSupportedException();
+    internal sealed override void WriteAsObject(PgWriter writer, object? value, PgConverterOptions options) => throw new NotSupportedException();
+    internal sealed override ValueTask WriteAsObjectAsync(PgWriter writer, object? value, PgConverterOptions options, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    internal sealed override SizeResult GetTextSizeAsObject(object value, int bufferLength, ref object? writeState, PgConverterOptions options) => throw new NotSupportedException();
+    internal sealed override ReadStatus ReadTextAsObject(ref SequenceReader<byte> reader, int byteCount, out object? value, PgConverterOptions options) => throw new NotSupportedException();
+    internal sealed override void WriteTextAsObject(PgWriter writer, object? value, PgConverterOptions options) => throw new NotSupportedException();
+    internal sealed override ValueTask WriteTextAsObjectAsync(PgWriter writer, object? value, PgConverterOptions options, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+}

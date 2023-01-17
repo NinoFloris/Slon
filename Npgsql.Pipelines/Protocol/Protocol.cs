@@ -28,7 +28,7 @@ abstract class Protocol
 
     // TODO maybe this doesn't belong here, we'd need some other place that pools these though.
     // TODO this is part of PgV3 though there is a fairly abstract api ready inside of it.
-    public abstract CommandReader GetCommandReader();
+    public abstract PgV3CommandReader GetCommandReader();
 }
 
 [Flags]

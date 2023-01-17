@@ -7,6 +7,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Buffers;
+using Npgsql.Pipelines.Pg;
 using Npgsql.Pipelines.Pg.Descriptors;
 using Npgsql.Pipelines.Pg.Types;
 using Npgsql.Pipelines.Protocol.PgV3;
@@ -50,8 +51,8 @@ class MockPgServer : IDisposable
 
     public IDuplexPipe ClientPipe { get; }
 
-    public StatementField CreateStatementField(PgType type)
-        => new(new Field("?", type, 0), -1, 0, 0, FormatCode.Binary);
+    public StatementField CreateStatementField(DataTypeName dataTypeName)
+        => new(new Field("?", PgTypeCatalog.Default.GetPgType(dataTypeName), 0), -1, 0, 0, FormatCode.Binary);
 
     public async Task Startup(MockState state)
     {
@@ -112,12 +113,12 @@ class MockPgServer : IDisposable
 
         return WriteParseComplete()
             .WriteBindComplete()
-            .WriteRowDescription(CreateStatementField(WellKnownTypes.Bool))
+            .WriteRowDescription(CreateStatementField(DataTypeNames.Bool))
             .WriteDataRow(BitConverter.GetBytes(isStandby))
             .WriteCommandComplete()
             .WriteParseComplete()
             .WriteBindComplete()
-            .WriteRowDescription(CreateStatementField(WellKnownTypes.Text))
+            .WriteRowDescription(CreateStatementField(DataTypeNames.Text))
             .WriteDataRow(Encoding.ASCII.GetBytes(transactionReadOnly))
             .WriteCommandComplete()
             .WriteReadyForQuery()
@@ -208,7 +209,7 @@ class MockPgServer : IDisposable
             Writer.WriteCString(field.Field.Name, Encoding);
             Writer.WriteUInt((uint)field.TableOid);
             Writer.WriteShort(field.ColumnAttributeNumber);
-            Writer.WriteUInt((uint)field.Field.Oid);
+            Writer.WriteUInt((uint)field.Field.PgTypeId.Oid);
             Writer.WriteShort(field.FieldTypeSize);
             Writer.WriteInt(field.Field.TypeModifier);
             Writer.WriteShort((short)field.FormatCode);
@@ -346,7 +347,7 @@ static class MockPgServerExtensions
     public static Task WriteScalarResponseAndFlush(this MockPgServer server, int value)
         => server.WriteParseComplete()
             .WriteBindComplete()
-            .WriteRowDescription(server.CreateStatementField(WellKnownTypes.Int4))
+            .WriteRowDescription(server.CreateStatementField(DataTypeNames.Int4))
             .WriteDataRow(BitConverter.GetBytes(BinaryPrimitives.ReverseEndianness(value)))
             .WriteCommandComplete()
             .WriteReadyForQuery()
@@ -355,7 +356,7 @@ static class MockPgServerExtensions
     public static Task WriteScalarResponseAndFlush(this MockPgServer server, bool value)
         => server.WriteParseComplete()
             .WriteBindComplete()
-            .WriteRowDescription(server.CreateStatementField(WellKnownTypes.Bool))
+            .WriteRowDescription(server.CreateStatementField(DataTypeNames.Bool))
             .WriteDataRow(BitConverter.GetBytes(value))
             .WriteCommandComplete()
             .WriteReadyForQuery()
@@ -364,7 +365,7 @@ static class MockPgServerExtensions
     public static Task WriteScalarResponseAndFlush(this MockPgServer server, string value)
         => server.WriteParseComplete()
             .WriteBindComplete()
-            .WriteRowDescription(server.CreateStatementField(WellKnownTypes.Text))
+            .WriteRowDescription(server.CreateStatementField(DataTypeNames.Text))
             .WriteDataRow(Encoding.UTF8.GetBytes(value))
             .WriteCommandComplete()
             .WriteReadyForQuery()

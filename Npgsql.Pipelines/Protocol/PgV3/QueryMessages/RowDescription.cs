@@ -51,13 +51,13 @@ struct RowDescription: IPgV3BackendMessage
             fields[i] = new(
                 new Field(
                     Name:              name!,
-                    Oid:        new Oid(oid),
+                    PgTypeId:        new Oid(oid),
                     TypeModifier:      typeModifier
                 ),
-                FieldTypeSize:          typeSize,
-                TableOid:              new Oid(tableOid),
-                ColumnAttributeNumber: columnAttributeNumber,
-                FormatCode:            (FormatCode)formatCode
+                fieldTypeSize:          typeSize,
+                tableOid:              new Oid(tableOid),
+                columnAttributeNumber: columnAttributeNumber,
+                formatCode:            (FormatCode)formatCode
             );
             if (nameIndex is not null)
                 nameIndex.TryAdd(name!, i);

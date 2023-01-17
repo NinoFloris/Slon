@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Threading.Tasks.Sources;
 using Npgsql.Pipelines.Protocol;
+using Npgsql.Pipelines.Protocol.Pg;
 
 namespace Npgsql.Pipelines;
 
@@ -261,8 +262,8 @@ public sealed partial class NpgsqlConnection
 #if !NETSTANDARD2_0
         [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
 #endif
-        public async ValueTask<CommandContextBatch> WriteCommand<TCommand>(bool allowPipelining, TCommand command, bool closeConnection, CancellationToken cancellationToken = default)
-            where TCommand : ICommand
+        public async ValueTask<CommandContextBatch<CommandExecution>> WriteCommand<TCommand>(bool allowPipelining, TCommand command, bool closeConnection, CancellationToken cancellationToken = default)
+            where TCommand : IPgCommand
         {
             _instance.ThrowIfNoSlot();
 
@@ -282,7 +283,7 @@ public sealed partial class NpgsqlConnection
             try
             {
                 _instance.MoveToExecuting();
-                var result = _instance.DbDataSource.WriteCommandAsync(slot, command, cancellationToken);
+                var result = await _instance.DbDataSource.WriteCommandAsync(slot, command, cancellationToken);
                 writeTask = result.WriteTask;
                 return result.WithIOCompletionPair(new IOCompletionPair(writeTask, subSlot));
             }
@@ -482,8 +483,8 @@ public sealed partial class NpgsqlConnection
         {
             // First we get a slot (could be a connection open but usually this is synchronous)
             _operationSlot = async
-                ? await DbDataSource.OpenAsync(exclusiveUse: true, DbDataSource.DefaultConnectionTimeout, cancellationToken).ConfigureAwait(false)
-                : DbDataSource.Open(exclusiveUse: true, DbDataSource.DefaultConnectionTimeout);
+                ? await DbDataSource.GetSlotAsync(exclusiveUse: true, DbDataSource.ConnectionTimeout, cancellationToken).ConfigureAwait(false)
+                : DbDataSource.GetSlot(exclusiveUse: true, DbDataSource.ConnectionTimeout);
             if (!async)
                 Debug.Assert(_operationSlot.Task.IsCompleted);
             // Then we await until the connection is fully ready for us (both tasks are covered by the same cancellationToken).
@@ -551,7 +552,7 @@ public sealed partial class NpgsqlConnection : DbConnection, ICloneable
     }
     public override string Database => DbDataSource.Database;
     public override string DataSource => DbDataSource.EndPointRepresentation;
-    public override int ConnectionTimeout => (int)DbDataSource.DefaultConnectionTimeout.TotalSeconds;
+    public override int ConnectionTimeout => (int)DbDataSource.ConnectionTimeout.TotalSeconds;
     public override string ServerVersion => DbDataSource.ServerVersion;
     public override ConnectionState State => _state;
 

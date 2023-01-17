@@ -1,87 +1,89 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 
 namespace Npgsql.Pipelines.Protocol;
 
-readonly struct CommandContext
+// Used to link up CommandContexts constructed before a session is available with an actual session or statement later on.
+interface ICommandExecutionProvider<TExecution>
+{
+    public TExecution Get(in CommandContext<TExecution> context);
+}
+
+readonly struct CommandContext<TExecution>
 {
     readonly IOCompletionPair _completionPair;
-    readonly ExecutionFlags _executionFlags;
-    readonly object? _providerOrSessionOrStatement;
+    readonly TExecution _commandExecution;
+    readonly ICommandExecutionProvider<TExecution>? _provider;
 
-    CommandContext(IOCompletionPair completionPair, ICommandExecutionProvider provider)
+    CommandContext(IOCompletionPair completionPair, ICommandExecutionProvider<TExecution> provider)
     {
         _completionPair = completionPair;
-        _providerOrSessionOrStatement = provider;
+        _provider = provider;
+        _commandExecution = default!;
     }
 
-    CommandContext(IOCompletionPair completionPair, CommandExecution commandExecution)
+    CommandContext(IOCompletionPair completionPair, TExecution commandExecution)
     {
         _completionPair = completionPair;
-        // We unpack to save space.
-        _executionFlags = commandExecution.TryGetSessionOrStatement(out var session, out var statement);
-        _providerOrSessionOrStatement = (object?)session ?? statement;
+        _commandExecution = commandExecution;
     }
 
     // Copy constructor
-    CommandContext(IOCompletionPair completionPair, ExecutionFlags executionFlags, object? providerOrSessionOrStatement)
+    CommandContext(IOCompletionPair completionPair, TExecution commandExecution, ICommandExecutionProvider<TExecution>? provider)
     {
         _completionPair = completionPair;
-        _executionFlags = executionFlags;
-        _providerOrSessionOrStatement = providerOrSessionOrStatement;
+        _commandExecution = commandExecution;
+        _provider = provider;
     }
 
-    /// Only reliable to be called once, cache the result if multiple lookups are needed.
-    public CommandExecution GetCommandExecution()
-        => _providerOrSessionOrStatement switch
-        {
-            ICommandExecutionProvider provider => provider.Get(this),
-            ICommandSession session => CommandExecution.Create(_executionFlags, session),
-            Statement statement => CommandExecution.Create(_executionFlags, statement),
-            _ => CommandExecution.Create(_executionFlags)
-        };
+    /// Only reliable to be called once, store the result if multiple lookups are needed.
+    public TExecution GetCommandExecution()
+    {
+        if (_provider is { } provider)
+            return provider.Get(this);
+
+        return _commandExecution;
+    }
 
     public bool IsCompleted => _completionPair.ReadSlot.IsCompleted;
     public ValueTask<WriteResult> WriteTask => _completionPair.Write;
     public OperationSlot ReadSlot => _completionPair.ReadSlot;
 
-    /// Only safe to be awaited once, multiple calls to retrieve any pending write status are allowed.
     public ValueTask<Operation> GetOperation() => _completionPair.SelectAsync();
 
-    public CommandContext WithIOCompletionPair(IOCompletionPair completionPair)
-        => new(completionPair, _executionFlags, _providerOrSessionOrStatement);
+    public CommandContext<TExecution> WithIOCompletionPair(IOCompletionPair completionPair)
+        => new(completionPair, _commandExecution, _provider);
 
-    public static CommandContext Create(IOCompletionPair completionPair, ICommandExecutionProvider provider)
+    public static CommandContext<TExecution> Create(IOCompletionPair completionPair, ICommandExecutionProvider<TExecution> provider)
         => new(completionPair, provider);
 
-    public static CommandContext Create(IOCompletionPair completionPair, CommandExecution commandExecution)
+    public static CommandContext<TExecution> Create(IOCompletionPair completionPair, TExecution commandExecution)
         => new(completionPair, commandExecution);
 }
 
-readonly struct CommandContextBatch: IEnumerable<CommandContext>
+readonly struct CommandContextBatch<TExecution>: IEnumerable<CommandContext<TExecution>>
 {
-    readonly CommandContext _context;
-    readonly CommandContext[]? _contexts;
+    readonly CommandContext<TExecution> _context;
+    readonly CommandContext<TExecution>[]? _contexts;
 
-    CommandContextBatch(CommandContext[] contexts)
+    CommandContextBatch(CommandContext<TExecution>[] contexts)
     {
         if (contexts.Length == 0)
+            // Throw inlined as constructors will never be inlined.
             throw new ArgumentException("Array cannot be empty.", nameof(contexts));
 
         _contexts = contexts;
     }
 
-    CommandContextBatch(CommandContext context)
+    CommandContextBatch(CommandContext<TExecution> context)
         => _context = context;
 
-    public static CommandContextBatch Create(params CommandContext[] contexts)
+    public static CommandContextBatch<TExecution> Create(params CommandContext<TExecution>[] contexts)
         => new(contexts);
 
-    public static CommandContextBatch Create(CommandContext context)
+    public static CommandContextBatch<TExecution> Create(CommandContext<TExecution> context)
     {
 #if !NETSTANDARD2_0
         return new(context);
@@ -91,29 +93,24 @@ readonly struct CommandContextBatch: IEnumerable<CommandContext>
 #endif
     }
 
-    public static implicit operator CommandContextBatch(CommandContext commandContext) => Create(commandContext);
+    public static implicit operator CommandContextBatch<TExecution>(CommandContext<TExecution> commandContext) => Create(commandContext);
 
     public int Length => _contexts?.Length ?? 1;
-
-    ReadOnlySpan<CommandContext> Contexts
-    {
-        get
-        {
-#if !NETSTANDARD2_0
-            return _contexts ?? MemoryMarshal.CreateReadOnlySpan(ref Unsafe.AsRef(_context), 1);
-#else
-            return _contexts!;
-#endif
-        }
-    }
 
     public bool AllCompleted
     {
         get
         {
-            foreach (var command in Contexts)
+#if !NETSTANDARD2_0
+            var contexts = _contexts ?? new ReadOnlySpan<CommandContext<TExecution>>(_context);
+#else
+            var contexts = _contexts!;
+#endif
+
+            foreach (var command in contexts)
             {
-                if (!command.GetOperation().IsCompleted)
+                var op = command.GetOperation();
+                if (!op.IsCompleted || !op.Result.IsCompleted)
                     return false;
             }
 
@@ -121,13 +118,13 @@ readonly struct CommandContextBatch: IEnumerable<CommandContext>
         }
     }
 
-    public struct Enumerator: IEnumerator<CommandContext>
+    public struct Enumerator: IEnumerator<CommandContext<TExecution>>
     {
-        readonly CommandContext[]? _contexts;
-        CommandContext _current;
+        readonly CommandContext<TExecution>[]? _contexts;
+        CommandContext<TExecution> _current;
         int _index;
 
-        internal Enumerator(CommandContextBatch instance)
+        internal Enumerator(CommandContextBatch<TExecution> instance)
         {
             if (_contexts is null)
             {
@@ -151,7 +148,7 @@ readonly struct CommandContextBatch: IEnumerable<CommandContext>
                     return false;
 
                 if (_index != -2)
-                    throw new InvalidOperationException("Invalid Enumerator, default value?");
+                    ThrowInvalidEnumerator();
 
                 _index++;
                 return true;
@@ -167,9 +164,11 @@ readonly struct CommandContextBatch: IEnumerable<CommandContext>
             _current = default;
             _index = contexts.Length + 1;
             return false;
+
+            static void ThrowInvalidEnumerator() => throw new InvalidOperationException("Invalid Enumerator, default value?");
         }
 
-        public readonly CommandContext Current => _current;
+        public readonly CommandContext<TExecution> Current => _current;
 
         public void Reset()
         {
@@ -189,6 +188,6 @@ readonly struct CommandContextBatch: IEnumerable<CommandContext>
     }
 
     public Enumerator GetEnumerator() => new(this);
-    IEnumerator<CommandContext> IEnumerable<CommandContext>.GetEnumerator() => GetEnumerator();
+    IEnumerator<CommandContext<TExecution>> IEnumerable<CommandContext<TExecution>>.GetEnumerator() => GetEnumerator();
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 }

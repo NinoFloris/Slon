@@ -2,15 +2,18 @@ using Npgsql.Pipelines.Pg.Descriptors;
 
 namespace Npgsql.Pipelines.Pg.Types;
 
+// TODO we want the case constructors to validate whether their passed in type kinds are what they expect (elementtype can't be another array etc).
+
 /// Enum of the kind of types supported by postgres.
 abstract record PgKind
 {
-    private protected PgKind(Cases Tag) {}
+    PgKind(Case tag) => Tag = tag;
+    public Case Tag { get; }
 
-    public enum Cases
+    public enum Case
     {
-        /// A built-in type.
-        Simple,
+        /// A base type.
+        Base,
         /// An enum carying its variants.
         Enum,
         /// A pseudo type like anyarray.
@@ -27,25 +30,25 @@ abstract record PgKind
         Composite
     }
 
-    public sealed record Simple : PgKind
+    public sealed record Base : PgKind
     {
-        Simple() : base(Cases.Simple) {}
-        public static Simple Instance => new();
+        Base() : base(Case.Base) {}
+        public static Base Instance => new();
     }
 
-    public sealed record Enum(StructuralArray<string> Variants) : PgKind(Cases.Enum);
+    public sealed record Enum(StructuralArray<string> Variants) : PgKind(Case.Enum);
     public sealed record Pseudo : PgKind
     {
-        Pseudo() : base(Cases.Pseudo) {}
+        Pseudo() : base(Case.Pseudo) {}
         public static Pseudo Instance => new();
     }
 
-    public sealed record Array(PgType ElementType) : PgKind(Cases.Array);
-    public sealed record Range(PgType ElementType) : PgKind(Cases.Range);
-    public sealed record MultiRange(PgType ElementType) : PgKind(Cases.MultiRange);
-    public sealed record Domain(PgType UnderlyingType) : PgKind(Cases.Domain);
-    public sealed record Composite(StructuralArray<Field> Fields) : PgKind(Cases.Composite);
+    public sealed record Array(PgType ElementType) : PgKind(Case.Array);
+    public sealed record Range(PgType ElementType) : PgKind(Case.Range);
+    public sealed record MultiRange(PgType RangeType) : PgKind(Case.MultiRange);
+    public sealed record Domain(PgType UnderlyingType) : PgKind(Case.Domain);
+    public sealed record Composite(StructuralArray<Field> Fields) : PgKind(Case.Composite);
 
-    public static Simple SimpleKind => Simple.Instance;
+    public static Base BaseKind => Base.Instance;
     public static Pseudo PseudoKind => Pseudo.Instance;
 }
