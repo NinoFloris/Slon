@@ -13,21 +13,20 @@ using Npgsql.Pipelines.Buffers;
 
 namespace Microsoft.AspNetCore.Internal;
 
-internal sealed class MemoryBufferWriter : Stream, IStreamingWriter<byte>, ICopyableBuffer<byte>
+sealed class MemoryBufferWriter : Stream, IStreamingWriter<byte>, ICopyableBuffer<byte>
 {
-    [ThreadStatic]
-    private static MemoryBufferWriter? _cachedInstance;
+    [ThreadStatic] static MemoryBufferWriter? _cachedInstance;
 
 #if DEBUG
-    private bool _inUse;
+    bool _inUse;
 #endif
 
-    private readonly int _minimumSegmentSize;
-    private int _bytesWritten;
+    readonly int _minimumSegmentSize;
+    int _bytesWritten;
 
-    private List<CompletedBuffer>? _completedSegments;
-    private byte[]? _currentSegment;
-    private int _position;
+    List<CompletedBuffer>? _completedSegments;
+    byte[]? _currentSegment;
+    int _position;
 
     public MemoryBufferWriter(int minimumSegmentSize = 4096)
     {
@@ -146,7 +145,7 @@ internal sealed class MemoryBufferWriter : Stream, IStreamingWriter<byte>, ICopy
     }
 
     [MemberNotNull(nameof(_currentSegment))]
-    private void EnsureCapacity(int sizeHint)
+    void EnsureCapacity(int sizeHint)
     {
         // This does the Right Thing. It only subtracts _position from the current segment length if it's non-null.
         // If _currentSegment is null, it returns 0.
@@ -166,7 +165,7 @@ internal sealed class MemoryBufferWriter : Stream, IStreamingWriter<byte>, ICopy
     }
 
     [MemberNotNull(nameof(_currentSegment))]
-    private void AddSegment(int sizeHint = 0)
+    void AddSegment(int sizeHint = 0)
     {
         if (_currentSegment != null)
         {
@@ -187,7 +186,7 @@ internal sealed class MemoryBufferWriter : Stream, IStreamingWriter<byte>, ICopy
         _position = 0;
     }
 
-    private async Task CopyToSlowAsync(Stream destination, CancellationToken cancellationToken)
+    async Task CopyToSlowAsync(Stream destination, CancellationToken cancellationToken)
     {
         if (_completedSegments != null)
         {
@@ -367,7 +366,7 @@ internal sealed class MemoryBufferWriter : Stream, IStreamingWriter<byte>, ICopy
     internal readonly struct WrittenBuffers
     {
         public readonly List<CompletedBuffer> Segments;
-        private readonly int _bytesWritten;
+        readonly int _bytesWritten;
 
         public WrittenBuffers(List<CompletedBuffer> segments, int bytesWritten)
         {

@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics.CodeAnalysis;
 using System.IO.Pipelines;
 using System.Threading;
 using System.Threading.Tasks;
@@ -65,8 +64,8 @@ class DuplexPipe : IDuplexPipe
 
 static class SyncCapablePipeReaderExtensions
 {
-    [DoesNotReturn]
     static void ThrowArgumentOutOfRangeException() => throw new ArgumentOutOfRangeException("minimumSize");
+    static void ThrowTimeoutException() => throw new TimeoutException("The operation timed out.");
 
     public static ReadResult ReadAtLeast(this ISyncCapablePipeReader reader, int minimumSize, TimeSpan timeout = default)
     {
@@ -97,7 +96,7 @@ static class SyncCapablePipeReaderExtensions
             {
                 var elapsed = TickCount64Shim.Get() - start;
                 if (elapsed >= timeoutMillis)
-                    throw new TimeoutException("The operation timed out.");
+                    ThrowTimeoutException();
                 timeout = TimeSpan.FromMilliseconds(timeoutMillis - elapsed);
             }
         }

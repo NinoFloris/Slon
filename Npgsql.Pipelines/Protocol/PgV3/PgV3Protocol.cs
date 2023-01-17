@@ -5,27 +5,28 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.IO.Pipelines;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Threading.Tasks.Sources;
 using Npgsql.Pipelines.Buffers;
-using FlushResult = Npgsql.Pipelines.Buffers.FlushResult;
+using Npgsql.Pipelines.Protocol.Pg;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
 record PgV3ProtocolOptions
 {
     public TimeSpan ReadTimeout { get; init; } = TimeSpan.FromSeconds(10);
-    public TimeSpan WriteTimeout { get; init;  } = TimeSpan.FromSeconds(10);
-    // public int ReaderSegmentSize { get; init; } = 8192;
-    // public int WriterSegmentSize { get; init; } = 8192;
+    public TimeSpan WriteTimeout { get; init; } = TimeSpan.FromSeconds(10);
     public int MaximumMessageChunkSize { get; init; } = 8192 / 2;
     public int FlushThreshold { get; init; } = 8192 / 2;
 }
 
-class PgV3Protocol : PgProtocol
+// TODO we need to throw/tear down on client_encoding change notices, it's is not a permitted change to do.
+
+class PgV3Protocol : Protocol
 {
-    static PgV3ProtocolOptions DefaultPipeOptions { get; } = new();
+    static PgV3ProtocolOptions DefaultProtocolOptions { get; } = new();
     readonly PgV3ProtocolOptions _protocolOptions;
     readonly SimplePipeReader _reader;
     readonly PipeWriter _pipeWriter;
@@ -39,15 +40,20 @@ class PgV3Protocol : PgProtocol
 
     readonly PgV3OperationSource _operationSourceSingleton;
     readonly PgV3OperationSource _exclusiveOperationSourceSingleton;
-    readonly CommandReader _commandReaderSingleton;
 
-    volatile PgProtocolState _state = PgProtocolState.Created;
+    // The pool exists as there is a timeframe between a reader completing (and its slot) and the owner resetting it.
+    // During this time the next operation in the queue might request a reader as well.
+    readonly ObjectPool<CommandReader> _commandReaderPool;
+    // Arbitrary but it should not be the case that it takes more than 5 ops all completing before a single reader is returned again.
+    const int maxReaderPoolSize = 5;
+
+    volatile ProtocolState _state = ProtocolState.Created;
     volatile Exception? _completingException;
     volatile int _pendingExclusiveUses;
 
-    PgV3Protocol(PipeWriter writer, PipeReader reader, PgV3ProtocolOptions? protocolOptions = null)
+    PgV3Protocol(PipeWriter writer, PipeReader reader, Encoding encoding, PgV3ProtocolOptions? protocolOptions = null)
     {
-        _protocolOptions = protocolOptions ?? DefaultPipeOptions;
+        _protocolOptions = protocolOptions ?? DefaultProtocolOptions;
         _pipeWriter = writer;
         _flushControl = new ResettableFlushControl(writer, _protocolOptions.WriteTimeout, Math.Max(MessageWriter.DefaultAdvisoryFlushThreshold , _protocolOptions.FlushThreshold));
         _defaultMessageWriter = new MessageWriter<PipeStreamingWriter>(new PipeStreamingWriter(_pipeWriter), _flushControl);
@@ -55,13 +61,18 @@ class PgV3Protocol : PgProtocol
         _operations = new Queue<PgV3OperationSource>();
         _operationSourceSingleton = new PgV3OperationSource(this, exclusiveUse: false, pooled: true);
         _exclusiveOperationSourceSingleton = new PgV3OperationSource(this, exclusiveUse: true, pooled: true);
-        _commandReaderSingleton = new CommandReader();
+        _commandReaderPool = new(pool =>
+        {
+            var returnAction = pool.Return;
+            return () => new CommandReader(encoding, returnAction);
+        }, maxReaderPoolSize);
+        Encoding = encoding;
     }
 
     object InstanceToken => this;
     object SyncObj => _operations;
 
-    bool IsCompleted => _state is PgProtocolState.Completed;
+    bool IsCompleted => _state is ProtocolState.Completed;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     PgV3OperationSource ThrowIfInvalidSlot(OperationSlot slot, bool allowUnbound = false, bool allowActivated = true)
@@ -94,6 +105,9 @@ class PgV3Protocol : PgProtocol
         }
     }
 
+    static bool IsTimeoutOrCallerOCE(Exception ex, CancellationToken cancellationToken)
+        => ex is TimeoutException || (ex is OperationCanceledException oce && oce.CancellationToken == cancellationToken);
+
     public override ValueTask FlushAsync(CancellationToken cancellationToken = default) => FlushAsyncCore(null, cancellationToken);
     public override ValueTask FlushAsync(OperationSlot op, CancellationToken cancellationToken = default) => FlushAsyncCore(op, cancellationToken);
     async ValueTask FlushAsyncCore(OperationSlot? op = null, CancellationToken cancellationToken = default)
@@ -111,7 +125,7 @@ class PgV3Protocol : PgProtocol
         {
             await _flushControl.FlushAsync(observeFlushThreshold: false, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not TimeoutException && (ex is not OperationCanceledException || ex is OperationCanceledException oce && oce.CancellationToken != cancellationToken))
+        catch (Exception ex) when (!IsTimeoutOrCallerOCE(ex, cancellationToken))
         {
             MoveToComplete(ex);
             throw;
@@ -123,15 +137,17 @@ class PgV3Protocol : PgProtocol
                 // We must reset the writer as it holds onto an output segment that is now flushed.
                 _defaultMessageWriter.Reset();
                 _flushControl.Reset();
-            }
 
-            if (op is null)
-                _messageWriteLock.Release();
+                if (op is null)
+                    _messageWriteLock.Release();
+            }
         }
     }
 
+    Encoding Encoding { get; }
+
     // TODO maybe add some ownership transfer logic here, allocating new instances if the singleton isn't back yet.
-    public override CommandReader GetCommandReader() => _commandReaderSingleton;
+    public override CommandReader GetCommandReader() => _commandReaderPool.Rent();
 
     public IOCompletionPair WriteMessageAsync<T>(OperationSlot slot, T message, bool flushHint = true, CancellationToken cancellationToken = default) where T : IFrontendMessage
         => WriteMessageBatchAsync(slot, (batchWriter, message, cancellationToken) => batchWriter.WriteMessageAsync(message, cancellationToken), message, flushHint, cancellationToken);
@@ -141,7 +157,7 @@ class PgV3Protocol : PgProtocol
         readonly PgV3Protocol _instance;
         internal BatchWriter(PgV3Protocol instance) => _instance = instance;
 
-        public ValueTask WriteMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IFrontendMessage 
+        public ValueTask WriteMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IFrontendMessage
             => WriteMessageUnsynchronized(_instance._defaultMessageWriter, message, cancellationToken);
     }
 
@@ -162,9 +178,7 @@ class PgV3Protocol : PgProtocol
             instance._flushControl.Initialize();
             try
             {
-                var writeTask = batchWriter.Invoke(new BatchWriter(instance), state, cancellationToken);
-                if (!writeTask.IsCompletedSuccessfully)
-                    await writeTask.ConfigureAwait(false);
+                await batchWriter.Invoke(new BatchWriter(instance), state, cancellationToken).ConfigureAwait(false);
                 if (instance._flushControl.WriterCompleted)
                     instance.MoveToComplete();
                 else if (flushHint && instance._flushControl.UnflushedBytes > 0)
@@ -173,7 +187,7 @@ class PgV3Protocol : PgProtocol
                 Debug.Assert(instance._defaultMessageWriter.BytesCommitted > 0);
                 return new WriteResult(instance._defaultMessageWriter.BytesCommitted);
             }
-            catch (Exception ex) when (ex is not TimeoutException && (ex is not OperationCanceledException || ex is OperationCanceledException oce && oce.CancellationToken != cancellationToken))
+            catch (Exception ex) when (!IsTimeoutOrCallerOCE(ex, cancellationToken))
             {
                 instance.MoveToComplete(ex);
                 throw;
@@ -184,13 +198,13 @@ class PgV3Protocol : PgProtocol
                 {
                     instance._defaultMessageWriter.Reset();
                     instance._flushControl.Reset();
-                }
 
-                // TODO not sure I'm happy with ending writes *automatically* after one write.
-                if (!source.IsExclusiveUse)
-                {
-                    var result = source.EndWrites(instance._messageWriteLock);
-                    Debug.Assert(result, "Could not end write slot.");
+                    // TODO we can always add a flag to control this for non exclusive use (e.g. something like WriteFlags.EndWrites)
+                    if (!source.IsExclusiveUse)
+                    {
+                        var result = source.EndWrites(instance._messageWriteLock);
+                        Debug.Assert(result, "Could not end write slot.");
+                    }
                 }
             }
         }
@@ -228,25 +242,28 @@ class PgV3Protocol : PgProtocol
         }
     }
 
-    // TODO Complete all with exception
-    void MoveToComplete(Exception? exception = null)
+    void MoveToComplete(Exception? exception = null, bool brokenRead = false)
     {
-        var shouldDrain = false;
         lock (SyncObj)
         {
-            if (_state is PgProtocolState.Completed)
+            if (_state is ProtocolState.Completed)
                 return;
-            _state = PgProtocolState.Completed;
+            _state = ProtocolState.Completed;
         }
 
         _completingException = exception;
-        shouldDrain = true;
-        _pipeWriter.Complete();
-        _reader.Complete();
+        if (brokenRead)
+        {
+            _pipeWriter.Complete(exception);
+            _reader.Complete(exception);
+        }
+        else
+        {
+            _reader.Complete(exception);
+            _pipeWriter.Complete(exception);
+        }
         _messageWriteLock.Dispose();
         _flushControl.Dispose();
-
-        //if (shouldDrain)
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -270,12 +287,7 @@ class PgV3Protocol : PgProtocol
         ThrowCannotWrite();
         return new ValueTask();
 
-        void ThrowCannotWrite() => throw new InvalidOperationException("Either CanWrite should return true or IStreamingFrontendMessage should be implemented to write this message.");
-    }
-
-    public async ValueTask WaitForDataAsync(int minimumSize, CancellationToken cancellationToken = default)
-    {
-        await _reader.ReadAtLeastAsync(minimumSize, cancellationToken).ConfigureAwait(false);
+        static void ThrowCannotWrite() => throw new InvalidOperationException("Either CanWrite should return true or IStreamingFrontendMessage should be implemented to write this message.");
     }
 
     public ValueTask<T> ReadMessageAsync<T>(T message, CancellationToken cancellationToken = default) where T : IBackendMessage<PgV3Header> => ProtocolReader.ReadAsync(this, message, cancellationToken);
@@ -311,7 +323,7 @@ class PgV3Protocol : PgProtocol
             // If we're in a message but it's consumed we assume the reader wants to read the next header.
             // Otherwise we'll return either remainingMessage or maximumMessageChunk, whichever is smaller.
             if (!resumptionData.IsDefault && (remainingMessage = resumptionData.Header.Length - resumptionData.MessageIndex) > 0)
-                minimumSize = remainingMessage < maximumMessageChunk ? remainingMessage : Unsafe.As<int, uint>(ref maximumMessageChunk);
+                minimumSize = remainingMessage < maximumMessageChunk ? remainingMessage : (uint)maximumMessageChunk;
 
             var result = consumed + minimumSize;
             if (result > int.MaxValue)
@@ -337,7 +349,7 @@ class PgV3Protocol : PgProtocol
                 if (errorResponseStatus != ReadStatus.Done)
                     exception = new Exception($"Unexpected error on message: {typeof(T).FullName}, could not read full error response, terminated connection.");
                 else
-                    exception = new Exception($"Unexpected error on message: {typeof(T).FullName}, error message: {errorResponse.ErrorOrNoticeMessage.Message}.");
+                    exception = new Exception($"Unexpected error on message: {typeof(T).FullName}, error message: {errorResponse.Message.Message}.");
             }
             else
             {
@@ -409,7 +421,7 @@ class PgV3Protocol : PgProtocol
                         break;
                     case ReadStatus.InvalidData:
                         var exception = CreateUnexpectedError<T>(buffer, resumptionData, consumed, readerExn);
-                        protocol.MoveToComplete(exception);
+                        protocol.MoveToComplete(exception, brokenRead: true);
                         throw exception;
                     case ReadStatus.AsyncResponse:
                         protocol._reader.Advance(consumed);
@@ -467,7 +479,7 @@ class PgV3Protocol : PgProtocol
                         break;
                     case ReadStatus.InvalidData:
                         var exception = CreateUnexpectedError<T>(buffer, resumptionData, consumed, readerExn);
-                        protocol.MoveToComplete(exception);
+                        protocol.MoveToComplete(exception, brokenRead: true);
                         throw exception;
                     case ReadStatus.AsyncResponse:
                         protocol._reader.Advance(consumed);
@@ -494,7 +506,7 @@ class PgV3Protocol : PgProtocol
             else
                 await _defaultMessageWriter.FlushAsync(observeFlushThreshold: false, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not TimeoutException && (ex is not OperationCanceledException || ex is OperationCanceledException oce && oce.CancellationToken != cancellationToken))
+        catch (Exception ex) when (!IsTimeoutOrCallerOCE(ex, cancellationToken))
         {
             MoveToComplete(ex);
             throw;
@@ -509,68 +521,72 @@ class PgV3Protocol : PgProtocol
         }
     }
 
-    static async ValueTask<PgV3Protocol> StartAsyncCore(PgV3Protocol conn, PgOptions options)
+    // Throws inlined as this won't be inlined and it's an uncommonly called method.
+    public static ValueTask<PgV3Protocol> StartAsync(PipeWriter writer, PipeReader reader, PgOptions options, PgV3ProtocolOptions? protocolOptions = null)
     {
-        try
-        {
-            await conn.WriteInternalAsync(new StartupRequest(options)).ConfigureAwait(false);
-            using var msg = await conn.ReadMessageAsync<AuthenticationRequest>().ConfigureAwait(false);
-            switch (msg.AuthenticationType)
-            {
-                case AuthenticationType.Ok:
-                    await conn.ReadMessageAsync<StartupResponse>().ConfigureAwait(false);
-                    break;
-                case AuthenticationType.MD5Password:
-                    if (options.Password is null)
-                        throw new InvalidOperationException("No password given, connection expects password.");
-                    await conn.WriteInternalAsync(new PasswordMessage(options.Username, options.Password, msg.MD5Salt)).ConfigureAwait(false);
-                    var expectOk = await conn.ReadMessageAsync(new AuthenticationRequest()).ConfigureAwait(false);
-                    if (expectOk.AuthenticationType != AuthenticationType.Ok)
-                        throw new Exception("Unexpected authentication response");
-                    await conn.ReadMessageAsync<StartupResponse>().ConfigureAwait(false);
-                    break;
-                case AuthenticationType.CleartextPassword:
-                default:
-                    throw new Exception();
-            }
-
-            conn._state = PgProtocolState.Ready;
-            return conn;
-        }
-        catch (Exception)
-        {
-            await conn.CompleteAsync();
-            throw;
-        }
-    }
-
-    public static ValueTask<PgV3Protocol> StartAsync(PipeWriter writer, PipeReader reader, PgOptions options, PgV3ProtocolOptions? pipeOptions = null)
-    {
-        var conn = new PgV3Protocol(writer, reader, pipeOptions);
+        var conn = new PgV3Protocol(writer, reader, options.Encoding, protocolOptions);
         return StartAsyncCore(conn, options);
+
+        static async ValueTask<PgV3Protocol> StartAsyncCore(PgV3Protocol conn, PgOptions options)
+        {
+            try
+            {
+                await conn.WriteInternalAsync(new Startup(options)).ConfigureAwait(false);
+                using var msg = await conn.ReadMessageAsync<AuthenticationRequest>().ConfigureAwait(false);
+                switch (msg.AuthenticationType)
+                {
+                    case AuthenticationType.Ok:
+                        await conn.ReadMessageAsync<StartupResponses>().ConfigureAwait(false);
+                        break;
+                    case AuthenticationType.MD5Password:
+                        if (options.Password is null)
+                            throw new InvalidOperationException("No password given, connection expects password.");
+                        await conn.WriteInternalAsync(new PasswordMessage(options.Username, options.Password, msg.MD5Salt, options.Encoding)).ConfigureAwait(false);
+                        var expectOk = await conn.ReadMessageAsync(new AuthenticationRequest()).ConfigureAwait(false);
+                        if (expectOk.AuthenticationType != AuthenticationType.Ok)
+                            throw new Exception("Unexpected authentication response");
+                        await conn.ReadMessageAsync<StartupResponses>().ConfigureAwait(false);
+                        break;
+                    case AuthenticationType.CleartextPassword:
+                    default:
+                        throw new Exception();
+                }
+
+                // Safe to change outside lock, we haven't exposed the instance yet.
+                conn._state = ProtocolState.Ready;
+                return conn;
+            }
+            catch (Exception)
+            {
+                await conn.CompleteAsync();
+                throw;
+            }
+        }
     }
 
+    // TODO update.
+    // Throws inlined as this won't be inlined and it's an uncommonly called method.
     public static PgV3Protocol Start<TWriter, TReader>(TWriter writer, TReader reader, PgOptions options, PgV3ProtocolOptions? pipeOptions = null)
         where TWriter: PipeWriter, ISyncCapablePipeWriter where TReader: PipeReader, ISyncCapablePipeReader
     {
         try
         {
-            var conn = new PgV3Protocol(writer, reader, pipeOptions);
-            conn.WriteMessage(new StartupRequest(options));
+            var conn = new PgV3Protocol(writer, reader, options.Encoding, pipeOptions);
+            conn.WriteMessage(new Startup(options));
             var msg = conn.ReadMessage(new AuthenticationRequest());
             switch (msg.AuthenticationType)
             {
                 case AuthenticationType.Ok:
-                    conn.ReadMessage<StartupResponse>();
+                    conn.ReadMessage<StartupResponses>();
                     break;
                 case AuthenticationType.MD5Password:
                     if (options.Password is null)
                         throw new InvalidOperationException("No password given, connection expects password.");
-                    conn.WriteMessage(new PasswordMessage(options.Username, options.Password, msg.MD5Salt));
+                    conn.WriteMessage(new PasswordMessage(options.Username, options.Password, msg.MD5Salt, options.Encoding));
                     var expectOk = conn.ReadMessage(new AuthenticationRequest());
                     if (expectOk.AuthenticationType != AuthenticationType.Ok)
                         throw new Exception("Unexpected authentication response");
-                    conn.ReadMessage<StartupResponse>();
+                    conn.ReadMessage<StartupResponses>();
                     break;
                 case AuthenticationType.CleartextPassword:
                 default:
@@ -578,7 +594,7 @@ class PgV3Protocol : PgProtocol
             }
 
             // Safe to change outside lock, we haven't exposed the instance yet.
-            conn._state = PgProtocolState.Ready;
+            conn._state = ProtocolState.Ready;
             return conn;
         }
         catch (Exception ex)
@@ -609,7 +625,7 @@ class PgV3Protocol : PgProtocol
         int count;
         lock (SyncObj)
         {
-            if (_state is not PgProtocolState.Ready || ((count = _operations.Count) > 0 && behavior.HasImmediateOnly()))
+            if (_state is not ProtocolState.Ready || ((count = _operations.Count) > 0 && behavior.HasImmediateOnly()))
                 return false;
 
             if (behavior.HasExclusiveUse())
@@ -631,7 +647,7 @@ class PgV3Protocol : PgProtocol
         lock (SyncObj)
         {
             int count;
-            if (_state is not PgProtocolState.Ready || ((count = _operations.Count) > 0 && behavior.HasImmediateOnly()))
+            if (_state is not ProtocolState.Ready || ((count = _operations.Count) > 0 && behavior.HasImmediateOnly()))
             {
                 slot = null;
                 return false;
@@ -663,8 +679,11 @@ class PgV3Protocol : PgProtocol
             if (_operations.TryPeek(out currentSource!) && ReferenceEquals(currentSource, operationSource))
             {
                 _operations.Dequeue();
-                var result = currentSource.EndWrites(_messageWriteLock);
-                Debug.Assert(result, "Could not end write slot.");
+                if (!IsCompleted)
+                {
+                    var result = currentSource.EndWrites(_messageWriteLock);
+                    Debug.Assert(result, "Could not end write slot.");
+                }
                 if (currentSource.IsExclusiveUse)
                     _pendingExclusiveUses--;
 
@@ -701,15 +720,15 @@ class PgV3Protocol : PgProtocol
         }
     }
 
-    public override async Task CompleteAsync(Exception? exception = null, CancellationToken cancellationToken = default)
+    public override async Task CompleteAsync(Exception? exception = null)
     {
         PgV3OperationSource? source;
         lock (SyncObj)
         {
-            if (_state is PgProtocolState.Draining or PgProtocolState.Completed)
+            if (_state is ProtocolState.Draining or ProtocolState.Completed)
                 return;
 
-            _state = PgProtocolState.Draining;
+            _state = ProtocolState.Draining;
             source = _operations.Count > 0 ? new PgV3OperationSource(this, exclusiveUse: true, pooled: false) : null;
             if (source is not null)
                 // Don't enqueue with cancellationtoken, we wait out of band later on.
@@ -721,7 +740,7 @@ class PgV3Protocol : PgProtocol
         try
         {
             if (source is not null)
-                await source.Task.AsTask().WaitAsync(cancellationToken).ConfigureAwait(false);
+                await source.Task.AsTask().ConfigureAwait(false);
         }
         catch(Exception ex)
         {
@@ -734,7 +753,7 @@ class PgV3Protocol : PgProtocol
         }
     }
 
-    public override PgProtocolState State => _state;
+    public override ProtocolState State => _state;
 
     // No locks as it doesn't have to be accurate.
     public override bool PendingExclusiveUse => _pendingExclusiveUses != 0;
@@ -743,7 +762,7 @@ class PgV3Protocol : PgProtocol
     public static OperationSource CreateUnboundOperationSource<TData>(TData data, CancellationToken cancellationToken = default)
         => new PgV3OperationSource<TData>(data, null, false, false).WithCancellationToken(cancellationToken);
 
-    public static ref TData GetData<TData>(OperationSlot source)
+    public static ref TData GetDataRef<TData>(OperationSlot source)
     {
         if (source is not PgV3OperationSource<TData> sourceWithData)
             throw new ArgumentException("This source does not have data, or no data of this type.", nameof(source));
@@ -764,11 +783,7 @@ class PgV3Protocol : PgProtocol
             _exclusiveUse = exclusiveUse;
         }
 
-        PgV3Protocol? GetProtocol()
-        {
-            var protocol = Protocol;
-            return protocol is null ? null : Unsafe.As<PgProtocol, PgV3Protocol>(ref protocol);
-        }
+        PgV3Protocol? GetProtocol() => Unsafe.As<Protocol?, PgV3Protocol?>(ref Unsafe.AsRef(Protocol));
 
         public object? InstanceToken => GetProtocol();
         public Task WriteSlot => _writeSlot!;
@@ -787,6 +802,8 @@ class PgV3Protocol : PgProtocol
         }
 
         public bool IsUnbound => !IsCompleted && Protocol is null && !IsPooled;
+        public new bool IsPooled => base.IsPooled;
+        public new bool IsActivated => base.IsActivated;
 
         public void Bind(PgV3Protocol protocol) => BindCore(protocol);
 
@@ -798,8 +815,8 @@ class PgV3Protocol : PgProtocol
 
         public void Activate() => ActivateCore();
 
-        protected override void CompleteCore(PgProtocol protocol, Exception? exception)
-            => Unsafe.As<PgProtocol, PgV3Protocol>(ref protocol).CompleteOperation(this, exception);
+        protected override void CompleteCore(Protocol protocol, Exception? exception)
+            => Unsafe.As<Protocol, PgV3Protocol>(ref protocol).CompleteOperation(this, exception);
 
         protected override void ResetCore()
         {
@@ -852,8 +869,8 @@ class PgV3Protocol : PgProtocol
         public ref TData Data => ref _data;
     }
 
-    long _statementCounter = 0;
-    Dictionary<Guid, string> _trackedStatements { get; } = new();
+    long _statementCounter;
+    readonly Dictionary<Guid, SizedString> _trackedStatements = new();
 
     /// <summary>
     /// 
@@ -862,7 +879,7 @@ class PgV3Protocol : PgProtocol
     /// <param name="name"></param>
     /// <returns>True if added, false if it was already added.</returns>
     /// <exception cref="NotImplementedException"></exception>
-    public bool GetOrAddStatementName(Statement statement, out string name)
+    public bool GetOrAddStatementName(Statement statement, out SizedString name)
     {
         lock (_trackedStatements)
         {
@@ -871,9 +888,9 @@ class PgV3Protocol : PgProtocol
 
             name = statement.Kind switch
             {
-                PreparationKind.Auto => $"A${_statementCounter++}",
-                PreparationKind.Command => $"C${_statementCounter++}",
-                PreparationKind.Global => $"G${_statementCounter++}",
+                PreparationKind.Auto => $"A{++_statementCounter}",
+                PreparationKind.Command => $"C{++_statementCounter}",
+                PreparationKind.Global => $"G{++_statementCounter}",
                 _ => throw new ArgumentOutOfRangeException()
             };
 

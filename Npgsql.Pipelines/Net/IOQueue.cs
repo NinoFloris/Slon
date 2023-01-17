@@ -1,3 +1,6 @@
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+
 using System;
 using System.Collections.Concurrent;
 using System.IO.Pipelines;
@@ -5,14 +8,10 @@ using System.Threading;
 
 namespace Npgsql.Pipelines;
 
-#if NETSTANDARD2_0
-public interface IThreadPoolWorkItem
-{
-    void Execute();
-}
+class IOQueue : PipeScheduler
+#if !NETSTANDARD2_0
+    , IThreadPoolWorkItem
 #endif
-
-internal class IOQueue : PipeScheduler, IThreadPoolWorkItem
 {
     readonly ConcurrentQueue<Work> _workItems = new();
     int _doingWork;
@@ -35,10 +34,14 @@ internal class IOQueue : PipeScheduler, IThreadPoolWorkItem
 
     static void WaitCallback(object state)
     {
-        ((IThreadPoolWorkItem)state).Execute();
+        ((IOQueue)state).ExecuteCore();
     }
 
-    void IThreadPoolWorkItem.Execute()
+#if !NETSTANDARD2_0
+    void IThreadPoolWorkItem.Execute() => ExecuteCore();
+#endif
+
+    void ExecuteCore()
     {
         while (true)
         {

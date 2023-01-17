@@ -1,7 +1,11 @@
+using System.Text;
+
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
 struct ErrorResponse: IPgV3BackendMessage
 {
+    readonly Encoding _encoding;
+
     /// <summary>
     /// Error and notice message field codes
     /// </summary>
@@ -28,7 +32,13 @@ struct ErrorResponse: IPgV3BackendMessage
         Routine = (byte) 'R'
     }
 
-    public ErrorOrNoticeMessage ErrorOrNoticeMessage { get; private set; }
+    public ErrorResponse(Encoding encoding)
+    {
+        _encoding = encoding;
+        Message = null;
+    }
+
+    public ErrorOrNoticeMessage? Message { get; private set; }
 
     public ReadStatus Read(ref MessageReader<PgV3Header> reader)
     {
@@ -39,7 +49,7 @@ struct ErrorResponse: IPgV3BackendMessage
             (null, null, null, null, null);
         (string? file, string? line, string? routine) = (null, null, null);
 
-        if (!reader.MoveNextAndIsExpected(PgV3Header.CreateType(BackendCode.ErrorResponse), out var status, ensureBuffered: true))
+        if (!reader.MoveNextAndIsExpected(BackendCode.ErrorResponse, out var status, ensureBuffered: true))
             return status;
 
         var fin = false;
@@ -55,25 +65,25 @@ struct ErrorResponse: IPgV3BackendMessage
                     fin = true;
                     break;
                 case ErrorFieldTypeCode.Severity:
-                    reader.TryReadCString(out severity);
+                    reader.TryReadCString(out severity, _encoding);
                     break;
                 case ErrorFieldTypeCode.InvariantSeverity:
-                    reader.TryReadCString(out invariantSeverity);
+                    reader.TryReadCString(out invariantSeverity, _encoding);
                     break;
                 case ErrorFieldTypeCode.Code:
-                    reader.TryReadCString(out code);
+                    reader.TryReadCString(out code, _encoding);
                     break;
                 case ErrorFieldTypeCode.Message:
-                    reader.TryReadCString(out message);
+                    reader.TryReadCString(out message, _encoding);
                     break;
                 case ErrorFieldTypeCode.Detail:
-                    reader.TryReadCString(out detail);
+                    reader.TryReadCString(out detail, _encoding);
                     break;
                 case ErrorFieldTypeCode.Hint:
-                    reader.TryReadCString(out hint);
+                    reader.TryReadCString(out hint, _encoding);
                     break;
                 case ErrorFieldTypeCode.Position:
-                    reader.TryReadCString(out var positionStr);
+                    reader.TryReadCString(out var positionStr, _encoding);
                     if (!int.TryParse(positionStr, out var tmpPosition))
                     {
                         continue;
@@ -81,7 +91,7 @@ struct ErrorResponse: IPgV3BackendMessage
                     position = tmpPosition;
                     break;
                 case ErrorFieldTypeCode.InternalPosition:
-                    reader.TryReadCString(out var internalPositionStr);
+                    reader.TryReadCString(out var internalPositionStr, _encoding);
                     if (!int.TryParse(internalPositionStr, out var internalPositionTmp))
                     {
                         continue;
@@ -89,38 +99,38 @@ struct ErrorResponse: IPgV3BackendMessage
                     internalPosition = internalPositionTmp;
                     break;
                 case ErrorFieldTypeCode.InternalQuery:
-                    reader.TryReadCString(out internalQuery);
+                    reader.TryReadCString(out internalQuery, _encoding);
                     break;
                 case ErrorFieldTypeCode.Where:
-                    reader.TryReadCString(out where);
+                    reader.TryReadCString(out where, _encoding);
                     break;
                 case ErrorFieldTypeCode.File:
-                    reader.TryReadCString(out file);
+                    reader.TryReadCString(out file, _encoding);
                     break;
                 case ErrorFieldTypeCode.Line:
-                    reader.TryReadCString(out line);
+                    reader.TryReadCString(out line, _encoding);
                     break;
                 case ErrorFieldTypeCode.Routine:
-                    reader.TryReadCString(out routine);
+                    reader.TryReadCString(out routine, _encoding);
                     break;
                 case ErrorFieldTypeCode.SchemaName:
-                    reader.TryReadCString(out schemaName);
+                    reader.TryReadCString(out schemaName, _encoding);
                     break;
                 case ErrorFieldTypeCode.TableName:
-                    reader.TryReadCString(out tableName);
+                    reader.TryReadCString(out tableName, _encoding);
                     break;
                 case ErrorFieldTypeCode.ColumnName:
-                    reader.TryReadCString(out columnName);
+                    reader.TryReadCString(out columnName, _encoding);
                     break;
                 case ErrorFieldTypeCode.DataTypeName:
-                    reader.TryReadCString(out dataTypeName);
+                    reader.TryReadCString(out dataTypeName, _encoding);
                     break;
                 case ErrorFieldTypeCode.ConstraintName:
-                    reader.TryReadCString(out constraintName);
+                    reader.TryReadCString(out constraintName, _encoding);
                     break;
                 default:
                     // Unknown error field; consume and discard.
-                    reader.TryReadCString(out _);
+                    reader.TryReadCString(out _, _encoding);
                     break;
             }
         }
@@ -128,7 +138,7 @@ struct ErrorResponse: IPgV3BackendMessage
         if (severity == null || code == null || message == null)
             return ReadStatus.InvalidData;
 
-        ErrorOrNoticeMessage = new ErrorOrNoticeMessage(
+        Message = new ErrorOrNoticeMessage(
             severity, invariantSeverity ?? severity, code, message,
             detail, hint, position, internalPosition, internalQuery, where,
             schemaName, tableName, columnName, dataTypeName, constraintName,

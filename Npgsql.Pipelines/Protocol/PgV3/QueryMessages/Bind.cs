@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Buffers;
@@ -31,10 +32,11 @@ readonly struct Bind: IFrontendMessage
     readonly ReadOnlyMemory<KeyValuePair<CommandParameter, ParameterWriter>> _parameters;
     readonly FormatCode? _parametersOverallCode;
     readonly ResultColumnCodes _resultColumnCodes;
+    readonly Encoding _encoding;
     readonly string _preparedStatementName;
     readonly int _precomputedMessageLength;
 
-    public Bind(string portalName, ReadOnlyMemory<KeyValuePair<CommandParameter, ParameterWriter>> parameters, ResultColumnCodes resultColumnCodes, string? preparedStatementName)
+    public Bind(string portalName, ReadOnlyMemory<KeyValuePair<CommandParameter, ParameterWriter>> parameters, ResultColumnCodes resultColumnCodes, string? preparedStatementName, Encoding encoding)
     {
         if (FrontendMessage.DebugEnabled && _parameters.Length > Parameter.MaxAmount)
             throw new InvalidOperationException($"Cannot accept more than ushort.MaxValue ({Parameter.MaxAmount} parameters.");
@@ -60,6 +62,7 @@ readonly struct Bind: IFrontendMessage
         _portalName = portalName;
         _parameters = parameters;
         _resultColumnCodes = resultColumnCodes;
+        _encoding = encoding;
         _preparedStatementName = preparedStatementName ?? string.Empty;
         _precomputedMessageLength = PrecomputeMessageLength();
     }
@@ -70,8 +73,8 @@ readonly struct Bind: IFrontendMessage
     public void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>
     {
         PgV3FrontendHeader.WriteHeader(ref buffer, FrontendCode.Bind, _precomputedMessageLength);
-        buffer.WriteCString(_portalName);
-        buffer.WriteCString(_preparedStatementName);
+        buffer.WriteCString(_portalName, _encoding);
+        buffer.WriteCString(_preparedStatementName, _encoding);
 
         WriteParameterCodes(ref buffer);
 
@@ -102,8 +105,8 @@ readonly struct Bind: IFrontendMessage
         writer.WriteByte((byte)FrontendCode.Bind);
         writer.WriteInt(_precomputedMessageLength + MessageWriter.IntByteCount);
 
-        writer.WriteCString(_portalName);
-        writer.WriteCString(_preparedStatementName);
+        writer.WriteCString(_portalName, _encoding);
+        writer.WriteCString(_preparedStatementName, _encoding);
 
         WriteParameterCodes(ref writer.Writer);
 
@@ -143,8 +146,8 @@ readonly struct Bind: IFrontendMessage
     {
         var parameters = _parameters;
         var length =
-            MessageWriter.GetCStringByteCount(_portalName) +
-            MessageWriter.GetCStringByteCount(_preparedStatementName) +
+            MessageWriter.GetCStringByteCount(_portalName, _encoding) +
+            MessageWriter.GetCStringByteCount(_preparedStatementName, _encoding) +
             MessageWriter.ShortByteCount + // Number of parameter codes
             (_parametersOverallCode is not null ? MessageWriter.ShortByteCount : parameters.Length * MessageWriter.ShortByteCount) +
             MessageWriter.ShortByteCount + // Number of parameter values

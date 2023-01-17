@@ -196,65 +196,88 @@ struct StreamingWriter<TWriter> : IStreamingWriter<byte> where TWriter : IStream
     public static implicit operator BufferWriter<TWriter>(StreamingWriter<TWriter> writer) => BufferWriter<TWriter>.CreateFrom(writer);
 }
 
-// Cannot share the extensions between this and BufferWriter because ref structs (BufferWriter) can't implement interfaces, not even for the purpose of constrainted calls.
+// Cannot share the extensions between this and BufferWriter because ref structs (BufferWriter) can't implement interfaces, not even for the purpose of constrained calls.
 static class StreamingWriterExtensions
 {
     // Copies whatever is committed to the given writer.
-    public static void CopyTo<TWriter, TOutputWriter>(ref this StreamingWriter<TWriter> writer, ref StreamingWriter<TOutputWriter> output)
-        where TWriter : ICopyableBuffer<byte>, IStreamingWriter<byte> where TOutputWriter : IStreamingWriter<byte>
+    public static void CopyTo<T, TOutput>(ref this StreamingWriter<T> writer, ref StreamingWriter<TOutput> output)
+        where T : ICopyableBuffer<byte>, IStreamingWriter<byte> where TOutput : IStreamingWriter<byte>
     {
         writer.Output.CopyTo(output);
         output.Advance((int)writer.BytesCommitted);
     }
 
-    public static void WriteRaw<TWriter>(ref this StreamingWriter<TWriter> writer, ReadOnlySpan<byte> value) where TWriter : IStreamingWriter<byte>
+    public static void WriteRaw<T>(ref this StreamingWriter<T> writer, ReadOnlySpan<byte> value) where T : IStreamingWriter<byte>
     {
         writer.Write(value);
     }
 
-    public static void WriteUShort<TWriter>(ref this StreamingWriter<TWriter> writer, ushort value)  where TWriter : IStreamingWriter<byte>
+    public static void WriteUShort<T>(ref this StreamingWriter<T> writer, ushort value)  where T : IStreamingWriter<byte>
     {
         writer.Ensure(sizeof(short));
         BinaryPrimitives.WriteUInt16BigEndian(writer.Span, value);
         writer.Advance(sizeof(short));
     }
 
-    public static void WriteShort<TWriter>(ref this StreamingWriter<TWriter> writer, short value) where TWriter : IStreamingWriter<byte>
+    public static void WriteShort<T>(ref this StreamingWriter<T> writer, short value) where T : IStreamingWriter<byte>
     {
         writer.Ensure(sizeof(short));
         BinaryPrimitives.WriteInt16BigEndian(writer.Span, value);
         writer.Advance(sizeof(short));
     }
 
-    public static void WriteInt<TWriter>(ref this StreamingWriter<TWriter> writer, int value) where TWriter : IStreamingWriter<byte>
+    public static void WriteInt<T>(ref this StreamingWriter<T> writer, int value) where T : IStreamingWriter<byte>
     {
         writer.Ensure(sizeof(int));
         BinaryPrimitives.WriteInt32BigEndian(writer.Span, value);
         writer.Advance(sizeof(int));
     }
 
-    public static void WriteUInt<TWriter>(ref this StreamingWriter<TWriter> writer, uint value) where TWriter : IStreamingWriter<byte>
+    public static void WriteUInt<T>(ref this StreamingWriter<T> writer, uint value) where T : IStreamingWriter<byte>
     {
         writer.Ensure(sizeof(uint));
         BinaryPrimitives.WriteUInt32BigEndian(writer.Span, value);
         writer.Advance(sizeof(uint));
     }
 
-    public static void WriteCString<TWriter>(ref this StreamingWriter<TWriter> writer, string value) where TWriter : IStreamingWriter<byte>
+    public static void WriteCString<T>(ref this StreamingWriter<T> writer, string value, Encoding encoding, int? encodedLength = null) where T : IStreamingWriter<byte>
+        => writer.WriteCString(value.AsSpan(), encoding, encodedLength);
+
+    public static void WriteCString<T>(ref this StreamingWriter<T> writer, ReadOnlySpan<char> value, Encoding encoding, int? encodedLength = null) where T : IStreamingWriter<byte>
     {
-        writer.WriteEncoded(value.AsSpan(), Encoding.UTF8);
+        writer.WriteEncoded(value, encoding, encodedLength);
         writer.WriteByte(0);
     }
 
-    public static void WriteByte<TWriter>(ref this StreamingWriter<TWriter> writer, byte b) where TWriter : IStreamingWriter<byte>
+    public static void WriteByte<T>(ref this StreamingWriter<T> writer, byte b) where T : IStreamingWriter<byte>
     {
         writer.Ensure(sizeof(byte));
         writer.Span[0] = b;
         writer.Advance(1);
     }
 
-    public static Encoder? WriteEncoded<TWriter>(ref this StreamingWriter<TWriter> writer, ReadOnlySpan<char> data, Encoding encoding, Encoder? encoder = null)
-        where TWriter : IStreamingWriter<byte>
+    public static void WriteEncoded<T>(ref this StreamingWriter<T> writer, ReadOnlySpan<char> data, Encoding encoding, int? encodedLength = null)
+        where T : IStreamingWriter<byte>
+    {
+        if (data.IsEmpty)
+            return;
+
+        var dest = writer.Span;
+        var sourceLength = encodedLength ?? encoding.GetByteCount(data);
+        // Fast path, try encoding to the available memory directly
+        if (sourceLength <= dest.Length)
+        {
+            encoding.GetBytes(data, dest);
+            writer.Advance(sourceLength);
+        }
+        else
+        {
+            WriteEncodedMultiWrite(ref writer, data, sourceLength, encoding);
+        }
+    }
+
+    public static Encoder? WriteEncodedResumable<T>(ref this StreamingWriter<T> writer, ReadOnlySpan<char> data, Encoding encoding, Encoder? encoder = null)
+        where T : IStreamingWriter<byte>
     {
         if (data.IsEmpty)
             return null;
@@ -262,21 +285,22 @@ static class StreamingWriterExtensions
         var dest = writer.Span;
         var sourceLength = encoding.GetByteCount(data);
         // Fast path, try encoding to the available memory directly
-        if (encoder is null && sourceLength <= dest.Length)
+        if (sourceLength <= dest.Length)
         {
             encoding.GetBytes(data, dest);
             writer.Advance(sourceLength);
-            return null;
         }
         else
         {
-            return WriteEncodedMultiWrite(ref writer, data, sourceLength, encoding);
+            return WriteEncodedMultiWrite(ref writer, data, sourceLength, encoding, encoder);
         }
+
+        return null;
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    static Encoder? WriteEncodedMultiWrite<TWriter>(ref this StreamingWriter<TWriter> writer, ReadOnlySpan<char> data, int encodedLength, Encoding encoding, Encoder? enc = null)
-        where TWriter : IStreamingWriter<byte>
+    static Encoder? WriteEncodedMultiWrite<T>(ref this StreamingWriter<T> writer, ReadOnlySpan<char> data, int encodedLength, Encoding encoding, Encoder? enc = null)
+        where T : IStreamingWriter<byte>
     {
         var source = data;
         var totalBytesUsed = 0;
@@ -310,6 +334,6 @@ static class StreamingWriterExtensions
             bytes = writer.Span;
         }
 
-        return encoder;
+        return enc;
     }
 }

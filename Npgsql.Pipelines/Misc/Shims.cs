@@ -10,18 +10,18 @@ namespace Npgsql.Pipelines;
 static class InterlockedShim
 {
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static T Exchange<T>(ref T location, T value) where T: unmanaged
-        => Unsafe.SizeOf<T>() switch
+    public static unsafe T Exchange<T>(ref T location, T value) where T: unmanaged
+        => sizeof(T) switch
         {
-            sizeof(int) => Unsafe.As<int, T>(ref Unsafe.AsRef(Interlocked.Exchange(ref Unsafe.As<T, int>(ref location), Unsafe.As<T, int>(ref value)))),
+            sizeof(int) => (T)(object)Interlocked.Exchange(ref Unsafe.As<T, int>(ref location), Unsafe.As<T, int>(ref value)),
             _ => throw new NotSupportedException("This type cannot be handled atomically")
         };
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static T CompareExchange<T>(ref T location, T value, T comparand) where T: unmanaged
-        => Unsafe.SizeOf<T>() switch
+    public static unsafe T CompareExchange<T>(ref T location, T value, T comparand) where T: unmanaged
+        => sizeof(T) switch
         {
-            sizeof(int) => Unsafe.As<int, T>(ref Unsafe.AsRef(Interlocked.CompareExchange(ref Unsafe.As<T, int>(ref location), Unsafe.As<T, int>(ref value), Unsafe.As<T, int>(ref comparand)))),
+            sizeof(int) => (T)(object)Interlocked.CompareExchange(ref Unsafe.As<T, int>(ref location), Unsafe.As<T, int>(ref value), Unsafe.As<T, int>(ref comparand)),
             _ => throw new NotSupportedException("This type cannot be handled atomically")
         };
 }
@@ -30,8 +30,13 @@ static class DebugShim
 {
     // Debug.Assert that is annotated for ns2.0 to take nullability into account.
     [Conditional("DEBUG")]
-    public static void Assert([DoesNotReturnIf(false)] bool condition) =>
-        Debug.Assert(condition, string.Empty, string.Empty);
+    public static void Assert([DoesNotReturnIf(false)] bool condition)
+        => Debug.Assert(condition);
+
+    // Debug.Assert that is annotated for ns2.0 to take nullability into account.
+    [Conditional("DEBUG")]
+    public static void Assert([DoesNotReturnIf(false)] bool condition, string message)
+        => Debug.Assert(condition, message);
 }
 
 static class ConvertShim

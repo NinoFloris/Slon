@@ -11,12 +11,12 @@ using Npgsql.Pipelines;
 
 namespace System.IO.Pipelines
 {
-    internal sealed class BufferSegment : ReadOnlySequenceSegment<byte>
+    sealed class BufferSegment : ReadOnlySequenceSegment<byte>
     {
-        private IMemoryOwner<byte>? _memoryOwner;
-        private byte[]? _array;
-        private BufferSegment? _next;
-        private int _end;
+        IMemoryOwner<byte>? _memoryOwner;
+        byte[]? _array;
+        BufferSegment? _next;
+        int _end;
 
         /// <summary>
         /// The End represents the offset into AvailableMemory where the range of "active" bytes ends. At the point when the block is leased
@@ -138,10 +138,10 @@ namespace System.IO.Pipelines
         }
     }
 
-    internal struct BufferSegmentStack
+    struct BufferSegmentStack
     {
-        private SegmentAsValueType[] _array;
-        private int _size;
+        SegmentAsValueType[] _array;
+        int _size;
 
         public BufferSegmentStack(int size)
         {
@@ -187,7 +187,7 @@ namespace System.IO.Pipelines
 
         // Non-inline from Stack.Push to improve its code quality as uncommon path
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private void PushWithResize(BufferSegment item)
+        void PushWithResize(BufferSegment item)
         {
             Array.Resize(ref _array, 2 * _array.Length);
             _array[_size] = item;
@@ -206,26 +206,26 @@ namespace System.IO.Pipelines
         ///   clr!ArrayStoreCheck
         ///     clr!ObjIsInstanceOf
         /// </remarks>
-        private readonly struct SegmentAsValueType
+        readonly struct SegmentAsValueType
         {
-            private readonly BufferSegment _value;
-            private SegmentAsValueType(BufferSegment value) => _value = value;
+            readonly BufferSegment _value;
+            SegmentAsValueType(BufferSegment value) => _value = value;
             public static implicit operator SegmentAsValueType(BufferSegment s) => new SegmentAsValueType(s);
             public static implicit operator BufferSegment(SegmentAsValueType s) => s._value;
         }
     }
 
-    internal static class ThrowHelper
+    static class ThrowHelper
     {
         [DoesNotReturn]
         internal static void ThrowArgumentOutOfRangeException(ExceptionArgument argument) => throw CreateArgumentOutOfRangeException(argument);
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private static Exception CreateArgumentOutOfRangeException(ExceptionArgument argument) => new ArgumentOutOfRangeException(argument.ToString());
+        static Exception CreateArgumentOutOfRangeException(ExceptionArgument argument) => new ArgumentOutOfRangeException(argument.ToString());
 
         [DoesNotReturn]
         internal static void ThrowArgumentNullException(ExceptionArgument argument) => throw CreateArgumentNullException(argument);
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private static Exception CreateArgumentNullException(ExceptionArgument argument) => new ArgumentNullException(argument.ToString());
+        static Exception CreateArgumentNullException(ExceptionArgument argument) => new ArgumentNullException(argument.ToString());
 
         [DoesNotReturn]
         public static void ThrowInvalidOperationException_NoWritingAllowed() => throw CreateInvalidOperationException_NoWritingAllowed();
@@ -249,7 +249,7 @@ namespace System.IO.Pipelines
 
     }
 
-    internal enum ExceptionArgument
+    enum ExceptionArgument
     {
         minimumSize,
         bytes,
@@ -265,32 +265,32 @@ namespace System.IO.Pipelines
         writingStream,
     }
 
-    internal sealed class StreamSyncCapablePipeWriter : PipeWriter, ISyncCapablePipeWriter
+    sealed class StreamSyncCapablePipeWriter : PipeWriter, ISyncCapablePipeWriter
     {
         internal const int InitialSegmentPoolSize = 4; // 16K
         internal const int MaxSegmentPoolSize = 256; // 1MB
 
-        private readonly int _minimumBufferSize;
+        readonly int _minimumBufferSize;
 
-        private BufferSegment? _head;
-        private BufferSegment? _tail;
-        private Memory<byte> _tailMemory;
-        private int _tailBytesBuffered;
-        private int _bytesBuffered;
+        BufferSegment? _head;
+        BufferSegment? _tail;
+        Memory<byte> _tailMemory;
+        int _tailBytesBuffered;
+        int _bytesBuffered;
 
-        private readonly MemoryPool<byte>? _pool;
-        private readonly int _maxPooledBufferSize;
+        readonly MemoryPool<byte>? _pool;
+        readonly int _maxPooledBufferSize;
 
-        private CancellationTokenSource? _internalTokenSource;
-        private bool _isCompleted;
-        private readonly object _lockObject = new object();
+        CancellationTokenSource? _internalTokenSource;
+        bool _isCompleted;
+        readonly object _lockObject = new object();
 
-        private BufferSegmentStack _bufferSegmentPool;
-        private readonly bool _leaveOpen;
-        private readonly bool _canTimeout;
-        private readonly int? _writeTimeout;
+        BufferSegmentStack _bufferSegmentPool;
+        readonly bool _leaveOpen;
+        readonly bool _canTimeout;
+        readonly int? _writeTimeout;
 
-        private CancellationTokenSource InternalTokenSource
+        CancellationTokenSource InternalTokenSource
         {
             get
             {
@@ -377,7 +377,7 @@ namespace System.IO.Pipelines
             return _tailMemory.Span;
         }
 
-        private void AllocateMemory(int sizeHint)
+        void AllocateMemory(int sizeHint)
         {
             if (_head == null)
             {
@@ -410,7 +410,7 @@ namespace System.IO.Pipelines
             }
         }
 
-        private BufferSegment AllocateSegment(int sizeHint)
+        BufferSegment AllocateSegment(int sizeHint)
         {
             Debug.Assert(sizeHint >= 0);
             BufferSegment newSegment = CreateSegmentUnsynchronized();
@@ -433,7 +433,7 @@ namespace System.IO.Pipelines
             return newSegment;
         }
 
-        private int GetSegmentSize(int sizeHint, int maxBufferSize = int.MaxValue)
+        int GetSegmentSize(int sizeHint, int maxBufferSize = int.MaxValue)
         {
             // First we need to handle case where hint is smaller than minimum segment size
             sizeHint = Math.Max(_minimumBufferSize, sizeHint);
@@ -442,7 +442,7 @@ namespace System.IO.Pipelines
             return adjustedToMaximumSize;
         }
 
-        private BufferSegment CreateSegmentUnsynchronized()
+        BufferSegment CreateSegmentUnsynchronized()
         {
             if (_bufferSegmentPool.TryPop(out BufferSegment? segment))
             {
@@ -452,7 +452,7 @@ namespace System.IO.Pipelines
             return new BufferSegment();
         }
 
-        private void ReturnSegmentUnsynchronized(BufferSegment segment)
+        void ReturnSegmentUnsynchronized(BufferSegment segment)
         {
             segment.Reset();
             if (_bufferSegmentPool.Count < MaxSegmentPoolSize)
@@ -556,7 +556,7 @@ namespace System.IO.Pipelines
             return FlushAsyncInternal(writeToStream: true, data: source, cancellationToken);
         }
 
-        private void Cancel()
+        void Cancel()
         {
             InternalTokenSource.Cancel();
         }
@@ -566,7 +566,7 @@ namespace System.IO.Pipelines
 #if NETCOREAPP
         [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
 #endif
-        private async ValueTask<FlushResult> FlushAsyncInternal(bool writeToStream, ReadOnlyMemory<byte> data, CancellationToken cancellationToken = default)
+        async ValueTask<FlushResult> FlushAsyncInternal(bool writeToStream, ReadOnlyMemory<byte> data, CancellationToken cancellationToken = default)
         {
             // Write all completed segments and whatever remains in the current segment
             // and flush the result.
@@ -662,7 +662,7 @@ namespace System.IO.Pipelines
             }
         }
 
-        private FlushResult FlushInternal(bool writeToStream, TimeSpan timeout)
+        FlushResult FlushInternal(bool writeToStream, TimeSpan timeout)
         {
             // Write all completed segments and whatever remains in the current segment
             // and flush the result.

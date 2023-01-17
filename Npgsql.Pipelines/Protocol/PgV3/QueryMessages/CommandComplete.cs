@@ -25,6 +25,7 @@ struct CommandComplete: IPgV3BackendMessage
         var bytes = reader.CurrentRemaining <= stackallocByteThreshold ? stackalloc byte[64] : new byte[reader.CurrentRemaining];
         buffer.CopyTo(bytes);
 
+        // PostgreSQL always writes these strings as ASCII, see https://github.com/postgres/postgres/blob/c8e1ba736b2b9e8c98d37a5b77c4ed31baf94147/src/backend/tcop/cmdtag.c#L130-L133
         (StatementType, var argumentsStart) = Convert.ToChar(bytes[0]) switch
         {
             'S' when bytes.StartsWith("SELECT "u8) => (StatementType.Select, "SELECT ".Length),

@@ -13,18 +13,18 @@ namespace System.Buffers;
 /// A fast access struct that wraps <see cref="IBufferWriter{T}"/>.
 /// </summary>
 /// <typeparam name="T">The type of element to be written.</typeparam>
-internal ref struct BufferWriter<T> where T : IBufferWriter<byte>
+ref struct BufferWriter<T> where T : IBufferWriter<byte>
 {
     /// <summary>
     /// The underlying <see cref="IBufferWriter{T}"/>.
     /// </summary>
-    private readonly T _output;
+    readonly T _output;
 
     /// <summary>
     /// The result of the last call to <see cref="IBufferWriter{T}.GetMemory(int)"/>, less any bytes already "consumed" with <see cref="Advance(int)"/>.
     /// Backing field for the <see cref="Span"/> property.
     /// </summary>
-    private Span<byte> _span;
+    Span<byte> _span;
 
     /// <summary>
     /// The number of uncommitted bytes (all the calls to <see cref="Advance(int)"/> since the last call to <see cref="Commit"/>).
@@ -35,7 +35,7 @@ internal ref struct BufferWriter<T> where T : IBufferWriter<byte>
     /// The total number of bytes written with this writer.
     /// Backing field for the <see cref="BytesCommitted"/> property.
     /// </summary>
-    private long _bytesCommitted;
+    long _bytesCommitted;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="StreamingWriter{TWriter}"/> struct.
@@ -61,8 +61,8 @@ internal ref struct BufferWriter<T> where T : IBufferWriter<byte>
     /// </summary>
     /// <param name="writer">The existing BufferWriter to be used.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static BufferWriter<T> CreateFrom<TWriter>(StreamingWriter<TWriter> writer) where TWriter : IStreamingWriter<byte>
-        => new((T)(IBufferWriter<byte>)writer.Output, writer.Span)
+    public static BufferWriter<T> CreateFrom<TWriter>(StreamingWriter<TWriter> writer) where TWriter : IStreamingWriter<byte>, T
+        => new(writer.Output, writer.Span)
         {
             BufferedBytes = writer.BufferedBytes,
             _bytesCommitted = writer.BytesCommitted
@@ -144,7 +144,7 @@ internal ref struct BufferWriter<T> where T : IBufferWriter<byte>
     /// </summary>
     /// <param name="count">The minimum size for the next requested buffer.</param>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private void EnsureMore(int count = 0)
+    void EnsureMore(int count = 0)
     {
         if (BufferedBytes > 0)
         {
@@ -158,7 +158,7 @@ internal ref struct BufferWriter<T> where T : IBufferWriter<byte>
     /// Copies the caller's buffer into this writer, potentially across multiple buffers from the underlying writer.
     /// </summary>
     /// <param name="source">The buffer to copy into this writer.</param>
-    private void WriteMultiBuffer(scoped ReadOnlySpan<byte> source)
+    void WriteMultiBuffer(scoped ReadOnlySpan<byte> source)
     {
         while (source.Length > 0)
         {
@@ -260,20 +260,14 @@ static class BufferWriterExtensions
         buffer.Advance(sizeof(uint));
     }
 
-    public static void WriteCString<T>(ref this BufferWriter<T> buffer, Encoding encoding, ReadOnlySpan<char> value) where T : IBufferWriter<byte>
+    public static void WriteCString<T>(ref this BufferWriter<T> buffer, string value, Encoding encoding, int? encodedLength = null) where T : IBufferWriter<byte>
+        => buffer.WriteCString(value.AsSpan(), encoding, encodedLength);
+
+    public static void WriteCString<T>(ref this BufferWriter<T> buffer, ReadOnlySpan<char> value, Encoding encoding, int? encodedLength = null) where T : IBufferWriter<byte>
     {
-        buffer.WriteEncoded(value, Encoding.UTF8);
+        buffer.WriteEncoded(value, encoding, encodedLength);
         buffer.WriteByte(0);
     }
-
-    public static void WriteCString<T>(ref this BufferWriter<T> buffer, Encoding encoding, string value) where T : IBufferWriter<byte>
-    {
-        buffer.WriteEncoded(value.AsSpan(), Encoding.UTF8);
-        buffer.WriteByte(0);
-    }
-
-    public static void WriteCString<T>(ref this BufferWriter<T> buffer, string value) where T : IBufferWriter<byte>
-        => WriteCString(ref buffer, Encoding.UTF8, value);
 
     public static void WriteByte<T>(ref this BufferWriter<T> buffer, byte b)
         where T : IBufferWriter<byte>
@@ -291,34 +285,33 @@ static class BufferWriterExtensions
         buffer.Advance(1);
     }
 
-    public static Encoder? WriteEncoded<T>(ref this BufferWriter<T> buffer, scoped ReadOnlySpan<char> data, Encoding encoding, Encoder? encoder = null)
+    public static void WriteEncoded<T>(ref this BufferWriter<T> buffer, scoped ReadOnlySpan<char> data, Encoding encoding, int? encodedLength = null)
         where T : IBufferWriter<byte>
     {
         if (data.IsEmpty)
-            return null;
+            return;
 
         var dest = buffer.Span;
-        var sourceLength = encoding.GetByteCount(data);
+        var sourceLength = encodedLength ?? encoding.GetByteCount(data);
         // Fast path, try encoding to the available memory directly
-        if (encoder is null && sourceLength <= dest.Length)
+        if (sourceLength <= dest.Length)
         {
             encoding.GetBytes(data, dest);
             buffer.Advance(sourceLength);
-            return null;
         }
         else
         {
-            return WriteEncodedMultiWrite(ref buffer, data, sourceLength, encoding);
+            WriteEncodedMultiWrite(ref buffer, data, sourceLength, encoding);
         }
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    static Encoder? WriteEncodedMultiWrite<T>(ref this BufferWriter<T> buffer, scoped ReadOnlySpan<char> data, int encodedLength, Encoding encoding, Encoder? enc = null)
+    static void WriteEncodedMultiWrite<T>(ref this BufferWriter<T> buffer, scoped ReadOnlySpan<char> data, int encodedLength, Encoding encoding)
         where T : IBufferWriter<byte>
     {
         var source = data;
         var totalBytesUsed = 0;
-        var encoder = enc ?? encoding.GetEncoder();
+        var encoder = encoding.GetEncoder();
         var minBufferSize = encoding.GetMaxByteCount(1);
         buffer.Ensure(minBufferSize);
         var bytes = buffer.Span;
@@ -347,7 +340,5 @@ static class BufferWriterExtensions
             buffer.Ensure(minBufferSize);
             bytes = buffer.Span;
         }
-
-        return encoder;
     }
 }

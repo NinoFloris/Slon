@@ -21,6 +21,7 @@ sealed class SimplePipeReader
     long _consumed;
     long _largestMinimumSize;
     bool _completed;
+    Exception? _completingException;
 
     public SimplePipeReader(PipeReader reader, TimeSpan readTimeout)
     {
@@ -132,7 +133,7 @@ sealed class SimplePipeReader
             if (result.IsCompleted)
             {
                 _completed = true;
-                throw new InvalidOperationException("Pipe was completed while waiting for more data.");
+                throw new InvalidOperationException("Pipe was completed while waiting for more data.", _completingException);
             }
 
             if (result.IsCanceled)
@@ -150,23 +151,29 @@ sealed class SimplePipeReader
         _consumed = 0;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     ISyncCapablePipeReader ThrowIfNotSyncCapable()
     {
-        if (_reader is not ISyncCapablePipeReader reader)
-            throw new NotSupportedException("The underlying reader does not support sync operations.");
+        if (_reader is ISyncCapablePipeReader reader)
+            return reader;
 
-        return reader;
+        ThrowNotSupported();
+        return null!;
+
+        void ThrowNotSupported() => throw new NotSupportedException("The underlying reader does not support sync operations.");
     }
 
     public ValueTask CompleteAsync(Exception? exception = null)
     {
         _completed = true;
+        _completingException = exception;
         return _reader.CompleteAsync(exception);
     }
 
     public void Complete(Exception? exception = null)
     {
         _completed = true;
+        _completingException = exception;
         _reader.Complete(exception);
     }
 }

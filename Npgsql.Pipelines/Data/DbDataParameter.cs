@@ -16,7 +16,7 @@ public abstract partial class DbDataParameter
     // Either a parameter name (string) or a reference to additional (less commonly used) properties, see Props below.
     object _nameOrProps = "";
 
-    // Combined Uses (first 3 bytes) and in the last byte ParameterDirection (least significant 3 bits), IsNullable (bit 7) and FrozenName (bit 8) to save space.
+    // Combines 'Uses' (first 3 bytes), the last byte contains 'ParameterDirection' (least significant 3 bits), 'IsNullable' (bit 7) and 'IsFrozenName' (bit 8).
     volatile uint _combinedEnums;
 
     // Internal for now.
@@ -25,7 +25,7 @@ public abstract partial class DbDataParameter
         :this()
         => _nameOrProps = parameterName ?? string.Empty; // Just to be sure, it's relied upon in the implementation.
 
-    bool FrozenName
+    bool IsFrozenName
     {
         get => (_combinedEnums & 0x80) == 0x80; // get the most significant bit.
         set
@@ -51,16 +51,15 @@ public abstract partial class DbDataParameter
         return (Props)nameOrProps;
     }
 
-    protected abstract DbType DbTypeCore { get; set; }
-    protected abstract DbDataParameter CloneCore();
+    protected abstract DbType? DbTypeCore { get; set; }
     protected abstract object? ValueCore { get; set; }
 
-    protected virtual Type? ParameterType => ValueCore?.GetType();
+    protected virtual Type? ValueTypeCore => ValueCore?.GetType();
 
     protected int InUseCount => (int)_combinedEnums >> 8;
     protected bool IsInUse => InUseCount != 0;
 
-    // Here for testing.
+    // private protected for testing.
     private protected int IncrementInUse(int count = 1)
     {
         if (count < 0)
@@ -78,7 +77,7 @@ public abstract partial class DbDataParameter
             var incremented = (uint)((current >> 8) + count) << 8;
             newValue = incremented | (current & 0x000000ff);
 #pragma warning disable CS0420
-        } while (Interlocked.CompareExchange(ref Unsafe.As<uint,int>(ref _combinedEnums), (int)newValue, (int)current) != (int)current);
+        } while (InterlockedShim.CompareExchange(ref Unsafe.As<uint,int>(ref _combinedEnums), (int)newValue, (int)current) != (int)current);
 #pragma warning restore CS0420
         return (int)(newValue >> 8);
     }
@@ -86,7 +85,7 @@ public abstract partial class DbDataParameter
     /// <returns>The new value that was stored by this operation.</returns>
     protected int IncrementInUse() => IncrementInUse(count: 1);
 
-    // Here for testing.
+    // private protected for testing.
     private protected int DecrementInUse(int count = 1)
     {
         if (count < 0)
@@ -112,16 +111,13 @@ public abstract partial class DbDataParameter
     /// <returns>The new value that was stored by this operation.</returns>
     protected int DecrementInUse() => DecrementInUse(count: 1);
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     protected void ThrowIfInUse()
     {
         if (IsInUse)
-            throw new InvalidOperationException("This parameter is currently in use for a command execution, clone the parameter to change its values or wait for execution to end.");
-    }
+            ThrowInUse();
 
-    protected void ValueUpdated(Type? previousType)
-    {
-        if (previousType is not null && previousType != ParameterType)
-            ResetInference();
+        static void ThrowInUse() => throw new InvalidOperationException("This parameter is currently in use for a command execution, clone the parameter to change its values or wait for execution to end."); 
     }
 
     protected virtual ParameterDirection DirectionCore
@@ -144,7 +140,7 @@ public abstract partial class DbDataParameter
             if (_nameOrProps is Props { Precision: { } } p)
                 return p.Precision;
 
-            if (ParameterType is not null && WellKnownClrFacets.TryGetPrecision(ParameterType, out _, out var effectiveMax))
+            if (ValueTypeCore is not null && WellKnownClrFacets.TryGetPrecision(ValueTypeCore, out _, out var effectiveMax))
                 return effectiveMax;
 
             return default;
@@ -187,7 +183,7 @@ public abstract partial class DbDataParameter
                 return p.Size;
 
             // "For fixed length data types, the value of Size is ignored. It can be retrieved for informational purposes"
-            if (ParameterType is not null && WellKnownClrFacets.TryGetSize(ParameterType, out var size))
+            if (ValueTypeCore is not null && WellKnownClrFacets.TryGetSize(ValueTypeCore, out var size))
                 return size;
 
             return default;
@@ -201,33 +197,32 @@ public abstract partial class DbDataParameter
                 return;
 
             // "For fixed length data types, the value of Size is ignored. It can be retrieved for informational purposes"
-            if (ParameterType is not null && WellKnownClrFacets.TryGetSize(ParameterType, out _))
+            if (ValueTypeCore is not null && WellKnownClrFacets.TryGetSize(ValueTypeCore, out _))
                 return;
 
             GetOrCreateProps().Size = value;
         }
     }
 
-    protected void ResetInference()
+    protected virtual void ResetInference()
     {
-        DbTypeCore = DbType.String;
+        DbTypeCore = null;
         if (_nameOrProps is Props p)
             p.ResetFacets();
     }
 
-    DbDataParameter CloneInstance()
+    protected abstract DbDataParameter CloneCore();
+    protected DbDataParameter Clone(DbDataParameter instance)
     {
-        var instance = CloneCore();
         if (_nameOrProps is Props p)
             instance._nameOrProps = p.Clone();
         else
             instance._nameOrProps = _nameOrProps;
         instance._combinedEnums = _combinedEnums;
-        instance.FrozenName = false;
         return instance;
     }
 
-    protected internal void NotifyCollectionAdd() => FrozenName = true;
+    protected internal void NotifyCollectionAdd() => IsFrozenName = true;
 
     sealed class Props
     {
@@ -254,7 +249,7 @@ public abstract partial class DbDataParameter
 }
 
 // Public surface & ADO.NET
-public abstract partial class DbDataParameter: DbParameter, ICloneable
+public abstract partial class DbDataParameter: DbParameter
 {
     [AllowNull]
     public sealed override string ParameterName
@@ -268,7 +263,7 @@ public abstract partial class DbDataParameter: DbParameter, ICloneable
         }
         set
         {
-            if (FrozenName)
+            if (IsFrozenName)
                 throw new InvalidOperationException("Parameter has been added to a collection at least once, clone the parameter to change the name.");
 
             ThrowIfInUse();
@@ -287,14 +282,12 @@ public abstract partial class DbDataParameter: DbParameter, ICloneable
         set
         {
             ThrowIfInUse();
-            var previousType = ParameterType;
             ValueCore = value;
-            ValueUpdated(previousType);
         }
     }
     public sealed override DbType DbType
     {
-        get => DbTypeCore;
+        get => DbTypeCore ?? DbType.String;
         set
         {
             ThrowIfInUse();
@@ -428,6 +421,5 @@ public abstract partial class DbDataParameter: DbParameter, ICloneable
         }
     }
 
-    object ICloneable.Clone() => CloneInstance();
-    public DbDataParameter Clone() => CloneInstance();
+    public DbDataParameter Clone() => CloneCore();
 }

@@ -12,7 +12,6 @@ using Npgsql.Pipelines.Pg.Types;
 using Npgsql.Pipelines.Protocol.PgV3;
 using Npgsql.Pipelines.Protocol.PgV3.Descriptors;
 using NUnit.Framework;
-using FlushResult = System.IO.Pipelines.FlushResult;
 
 namespace Npgsql.Pipelines.Tests;
 
@@ -206,7 +205,7 @@ class MockPgServer : IDisposable
 
         foreach (var field in fields)
         {
-            Writer.WriteCString(field.Field.Name);
+            Writer.WriteCString(field.Field.Name, Encoding);
             Writer.WriteUInt((uint)field.TableOid);
             Writer.WriteShort(field.ColumnAttributeNumber);
             Writer.WriteUInt((uint)field.Field.Oid);
@@ -249,7 +248,7 @@ class MockPgServer : IDisposable
 
         Writer.WriteByte((byte)BackendCode.CommandComplete);
         Writer.WriteInt(4 + Encoding.GetByteCount(tag) + 1);
-        Writer.WriteCString(tag);
+        Writer.WriteCString(tag, Encoding);
         return this;
     }
 
@@ -284,8 +283,8 @@ class MockPgServer : IDisposable
 
         Writer.WriteByte((byte)BackendCode.ParameterStatus);
         Writer.WriteInt(4 + Encoding.GetByteCount(name) + 1 + Encoding.GetByteCount(value) + 1);
-        Writer.WriteCString(name);
-        Writer.WriteCString(value);
+        Writer.WriteCString(name, Encoding);
+        Writer.WriteCString(value, Encoding);
 
         return this;
     }
@@ -317,11 +316,11 @@ class MockPgServer : IDisposable
             1 + Encoding.GetByteCount(message) +
             1);
         Writer.WriteByte((byte)ErrorResponse.ErrorFieldTypeCode.Code);
-        Writer.WriteCString(code);
+        Writer.WriteCString(code, Encoding);
         Writer.WriteByte((byte)ErrorResponse.ErrorFieldTypeCode.Severity);
-        Writer.WriteCString(severity);
+        Writer.WriteCString(severity, Encoding);
         Writer.WriteByte((byte)ErrorResponse.ErrorFieldTypeCode.Message);
-        Writer.WriteCString(message);
+        Writer.WriteCString(message, Encoding);
         Writer.WriteByte((byte)ErrorResponse.ErrorFieldTypeCode.Done);
         Writer.Commit();
         return this;

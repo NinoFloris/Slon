@@ -3,7 +3,7 @@ namespace Npgsql.Pipelines;
 // Shared exchange type to bridge ADO.NET and protocol layers.
 readonly record struct Facets
 {
-    // Is DBNull or null allowed.
+    // Is DBNull allowed.
     public bool IsNullable { get; init; }
 
     // Maximum length of the value.

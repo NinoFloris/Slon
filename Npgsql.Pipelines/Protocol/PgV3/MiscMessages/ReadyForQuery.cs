@@ -1,25 +1,8 @@
-using System.IO;
+using System;
 using System.Runtime.CompilerServices;
+using Npgsql.Pipelines.Protocol.PgV3.Descriptors;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
-
-enum TransactionStatus : byte
-{
-    /// <summary>
-    /// Currently not in a transaction block
-    /// </summary>
-    Idle = (byte)'I',
-
-    /// <summary>
-    /// Currently in a transaction block
-    /// </summary>
-    InTransactionBlock = (byte)'T',
-
-    /// <summary>
-    /// Currently in a failed transaction block (queries will be rejected until block is ended)
-    /// </summary>
-    InFailedTransactionBlock = (byte)'E',
-}
 
 struct ReadyForQuery: IPgV3BackendMessage
 {
@@ -33,7 +16,7 @@ struct ReadyForQuery: IPgV3BackendMessage
 
         reader.TryReadByte(out Unsafe.As<TransactionStatus, byte>(ref _transactionStatus));
         if (BackendMessage.DebugEnabled && !EnumShim.IsDefined(_transactionStatus))
-            throw new InvalidDataException("Unknown transaction status: " + _transactionStatus);
+            throw new ArgumentOutOfRangeException(nameof(_transactionStatus), _transactionStatus, "Unknown value.");
 
         reader.ConsumeCurrent();
         return ReadStatus.Done;

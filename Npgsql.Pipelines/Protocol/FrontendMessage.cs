@@ -7,7 +7,8 @@ using Npgsql.Pipelines.Buffers;
 
 namespace Npgsql.Pipelines.Protocol;
 
-static class FrontendMessage {
+static class FrontendMessage
+{
     public static readonly bool DebugEnabled = false;
 
     class BufferedMessage: IFrontendMessage
@@ -66,7 +67,7 @@ interface IFrontendHeader<THeader> where THeader: struct, IFrontendHeader<THeade
 
 interface IFrontendMessage
 {
-    // TODO bit of a weird api now
+    // TODO bit of a weird api name now
     bool CanWrite { get; }
     void Write<T>(ref BufferWriter<T> buffer) where T : IBufferWriter<byte>;
 }

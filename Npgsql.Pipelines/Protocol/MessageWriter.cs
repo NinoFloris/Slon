@@ -7,16 +7,19 @@ using Npgsql.Pipelines.Buffers;
 
 namespace Npgsql.Pipelines.Protocol;
 
-static class PgEncoding
-{
-    public static readonly UTF8Encoding UTF8 = new(false, true);
-    public static readonly UTF8Encoding RelaxedUTF8 = new(false, false);
-}
-
 static class MessageWriter
 {
-    public static int GetCStringByteCount(string value)
-        => value.Length != 0 ? PgEncoding.UTF8.GetByteCount(value) + 1 : 1;
+    public static int GetCStringByteCount(SizedString value, Encoding encoding)
+    {
+        if (value.ByteCount is null)
+            value = value.WithEncoding(encoding);
+
+        return value.ByteCount.GetValueOrDefault() + 1;
+    }
+
+    public static int GetCStringByteCount(string value, Encoding encoding)
+        => value.Length != 0 ? encoding.GetByteCount(value) + 1 : 1;
+
     public const int IntByteCount = sizeof(int);
     public const int ShortByteCount = sizeof(short);
     public const int ByteByteCount = sizeof(byte);
@@ -24,6 +27,7 @@ static class MessageWriter
     public const int DefaultAdvisoryFlushThreshold = 1450;
 }
 
+// This class exists purely to hold a StreamingWriter, as async methods can't have byrefs.
 class MessageWriter<TWriter> where TWriter : IStreamingWriter<byte>
 {
     StreamingWriter<TWriter> _writer;
@@ -33,7 +37,7 @@ class MessageWriter<TWriter> where TWriter : IStreamingWriter<byte>
     {
         _writer = new StreamingWriter<TWriter>(writer);
         _flushControl = flushControl;
-        AdvisoryFlushThreshold = _flushControl.FlushThreshold < AdvisoryFlushThreshold ? _flushControl.FlushThreshold : MessageWriter.DefaultAdvisoryFlushThreshold;
+        AdvisoryFlushThreshold = Math.Min(_flushControl.FlushThreshold, MessageWriter.DefaultAdvisoryFlushThreshold);
     }
 
     public int AdvisoryFlushThreshold { get; }
@@ -43,7 +47,8 @@ class MessageWriter<TWriter> where TWriter : IStreamingWriter<byte>
     public void WriteUShort(ushort value) => _writer.WriteUShort(value);
     public void WriteShort(short value) => _writer.WriteShort(value);
     public void WriteInt(int value) => _writer.WriteInt(value);
-    public void WriteCString(string value) => _writer.WriteCString(value);
+    public void WriteCString(string value, Encoding encoding) => _writer.WriteCString(value, encoding);
+    public void WriteCString(SizedString value, Encoding encoding) => _writer.WriteCString(value, encoding);
 
     public long BufferedBytes => Writer.BufferedBytes;
     public long BytesCommitted => Writer.BytesCommitted;
@@ -54,7 +59,7 @@ class MessageWriter<TWriter> where TWriter : IStreamingWriter<byte>
     public BufferWriter<TWriter> GetBufferWriter()
     {
         if (Writer.BufferedBytes > 0)
-            throw new InvalidOperationException("Buffer writer cannot be created if the streaming writer has buffered bytes.");
+            ThrowBufferedBytesRemain();
 
         return BufferWriter<TWriter>.CreateFrom(Writer);
     }
@@ -78,8 +83,10 @@ class MessageWriter<TWriter> where TWriter : IStreamingWriter<byte>
     internal void Reset()
     {
         if (Writer.BufferedBytes > 0)
-            throw new InvalidOperationException("Resetting writer while there are still buffered bytes.");
+            ThrowBufferedBytesRemain();
 
         _writer = new StreamingWriter<TWriter>(Writer.Output);
     }
+
+    static void ThrowBufferedBytesRemain() => throw new InvalidOperationException("The writer has buffered bytes remaining.");
 }

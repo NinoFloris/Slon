@@ -31,7 +31,7 @@ static class StructuralArray
 }
 
 /// <summary>
-/// An imutable, equatable array. This is equivalent to <see cref="ImmutableArray{T}"/> but with value equality support.
+/// An immutable, structurally equatable array. This is equivalent to <see cref="ImmutableArray{T}"/> but with value equality support.
 /// </summary>
 /// <typeparam name="T">The type of values in the array.</typeparam>
 readonly struct StructuralArray<T> : IEquatable<StructuralArray<T>>, IEnumerable<T>
@@ -40,7 +40,7 @@ readonly struct StructuralArray<T> : IEquatable<StructuralArray<T>>, IEnumerable
     /// <summary>
     /// The underlying <typeparamref name="T"/> array.
     /// </summary>
-    readonly T[]? array;
+    readonly T[]? _array;
 
     /// <summary>
     /// Creates a new <see cref="StructuralArray{T}"/> instance.
@@ -48,7 +48,7 @@ readonly struct StructuralArray<T> : IEquatable<StructuralArray<T>>, IEnumerable
     /// <param name="array">The input <see cref="ImmutableArray{T}"/> to wrap.</param>
     public StructuralArray(ImmutableArray<T> array)
     {
-        this.array = Unsafe.As<ImmutableArray<T>, T[]?>(ref array);
+        _array = Unsafe.As<ImmutableArray<T>, T[]?>(ref array);
     }
 
     /// <summary>
@@ -81,6 +81,15 @@ readonly struct StructuralArray<T> : IEquatable<StructuralArray<T>>, IEnumerable
     }
 
     /// <summary>
+    /// Gets a value indicating whether the current array is default.
+    /// </summary>
+    public bool IsDefault
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => AsImmutableArray().IsDefault;
+    }
+
+    /// <summary>
     /// Gets the length of the current array.
     /// </summary>
     public int Length
@@ -104,20 +113,16 @@ readonly struct StructuralArray<T> : IEquatable<StructuralArray<T>>, IEnumerable
     /// <sinheritdoc/>
     public override unsafe int GetHashCode()
     {
-        if (this.array is not T[] array)
-        {
+        if (_array is not { } array)
             return 0;
-        }
 
         HashCode hashCode = default;
 
         if (typeof(T) == typeof(byte))
         {
             ReadOnlySpan<T> span = array;
-            ref T r0 = ref MemoryMarshal.GetReference(span);
-            ref byte r1 = ref Unsafe.As<T, byte>(ref r0);
-
-            fixed (byte* p = &r1)
+            ref T r = ref MemoryMarshal.GetReference(span);
+            fixed (byte* p = &Unsafe.As<T, byte>(ref r))
             {
                 ReadOnlySpan<byte> bytes = new(p, span.Length);
 #if !NETSTANDARD2_0
@@ -148,7 +153,7 @@ readonly struct StructuralArray<T> : IEquatable<StructuralArray<T>>, IEnumerable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ImmutableArray<T> AsImmutableArray()
     {
-        return Unsafe.As<T[]?, ImmutableArray<T>>(ref Unsafe.AsRef(in this.array));
+        return Unsafe.As<T[]?, ImmutableArray<T>>(ref Unsafe.AsRef(in _array));
     }
 
     /// <summary>
@@ -248,4 +253,6 @@ readonly struct StructuralArray<T> : IEquatable<StructuralArray<T>>, IEnumerable
     {
         return !left.Equals(right);
     }
+
+    public static StructuralArray<T> Empty => ImmutableArray<T>.Empty;
 }

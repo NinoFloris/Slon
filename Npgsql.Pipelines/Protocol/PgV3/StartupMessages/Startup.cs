@@ -1,25 +1,29 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Internal;
 using Npgsql.Pipelines.Buffers;
+using Npgsql.Pipelines.Protocol.Pg;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
-readonly struct StartupRequest: IStreamingFrontendMessage
+readonly struct Startup: IStreamingFrontendMessage
 {
     readonly List<KeyValuePair<string, string>> _parameters;
+    readonly Encoding _encoding;
 
-    public StartupRequest(PgOptions options)
+    public Startup(PgOptions options)
     {
         _parameters = new(){
             new KeyValuePair<string, string>("user", options.Username),
-            new KeyValuePair<string, string>("client_encoding", "UTF8")
+            new KeyValuePair<string, string>("client_encoding", options.Encoding.WebName)
         };
         if (options.Database is not null)
             _parameters.Add(new KeyValuePair<string, string>("database", options.Database));
+        _encoding = options.Encoding;
     }
 
     public bool CanWrite => false;
@@ -36,8 +40,8 @@ readonly struct StartupRequest: IStreamingFrontendMessage
 
             foreach (var kv in _parameters)
             {
-                memWriter.WriteCString(kv.Key);
-                memWriter.WriteCString(kv.Value);
+                memWriter.WriteCString(kv.Key, _encoding);
+                memWriter.WriteCString(kv.Value, _encoding);
             }
 
             memWriter.WriteByte(0);

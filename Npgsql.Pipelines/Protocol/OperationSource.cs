@@ -14,9 +14,10 @@ abstract class OperationSlot
     /// <summary>
     /// The connection the slot belongs to, can be null once completed or when not yet bound.
     /// </summary>
-    public abstract PgProtocol? Protocol { get; }
+    public abstract Protocol? Protocol { get; }
 
     public abstract bool IsCompleted { get; }
+    public abstract bool IsCompletedSuccessfully { get; }
 
     /// <summary>
     /// The task will be activated once the operation can read from the connection.
@@ -29,18 +30,24 @@ readonly struct Operation: IDisposable
 {
     readonly OperationSource _source;
 
-    internal Operation(OperationSource source, PgProtocol protocol)
+    internal Operation(OperationSource source, Protocol protocol)
     {
         _source = source;
         Protocol = protocol;
     }
 
-    public PgProtocol Protocol { get; }
+    public Protocol Protocol { get; }
 
     public bool IsCompleted => _source.IsCompleted;
-    // TODO if we couldn't complete with an exception we probably want to have the completing code kill the protocol instead.
-    // Verify in which cases it is possible that not being able to complete while having been activated would happen.
-    public void Complete(Exception? exception = null) => _source?.TryComplete(exception);
+
+    // TODO Verify in which cases it is possible that not being able to complete while having been activated would happen.
+    public void Complete(Exception? exception = null)
+    {
+        if(_source?.TryComplete(exception) == false && exception is not null && _source.IsCompletedSuccessfully)
+            ThrowInvalidOperation();
+
+        static void ThrowInvalidOperation() => throw new InvalidOperationException("Could not complete the operation with an exception as it was already completed successfully.");
+    }
     public void Dispose() => Complete();
 }
 
@@ -59,12 +66,12 @@ abstract class OperationSource: OperationSlot
 
     OperationSourceFlags _state;
     CancellationTokenRegistration _cancellationRegistration;
-    PgProtocol? _protocol;
+    Protocol? _protocol;
 
     ManualResetValueTaskSourceCore<Operation> _tcs;
     protected ref ManualResetValueTaskSourceCore<Operation> ValueTaskSource => ref _tcs;
 
-    protected OperationSource(PgProtocol? protocol, bool pooled = false)
+    protected OperationSource(Protocol? protocol, bool pooled = false)
     {
         _protocol = protocol;
         if (pooled)
@@ -81,17 +88,15 @@ abstract class OperationSource: OperationSlot
         }
     }
 
-    public abstract override ValueTask<Operation> Task { get; }
-
     [MemberNotNullWhen(true, nameof(_protocol))]
     public sealed override bool IsCompleted => (_state & OperationSourceFlags.Completed) != 0;
-    public sealed override PgProtocol? Protocol => IsCompleted ? null : _protocol;
+    public sealed override Protocol? Protocol => IsCompleted ? null : _protocol;
     [MemberNotNullWhen(true, nameof(_protocol))]
-    public bool IsPooled => (_state & OperationSourceFlags.Pooled) != 0;
-    public bool IsActivated => (_state & OperationSourceFlags.Activated) != 0;
+    protected bool IsPooled => (_state & OperationSourceFlags.Pooled) != 0;
+    protected bool IsActivated => (_state & OperationSourceFlags.Activated) != 0;
     [MemberNotNullWhen(true, nameof(_cancellationRegistration))]
-    public bool IsCanceled => (_state & OperationSourceFlags.Canceled) != 0;
-    public bool IsCompletedSuccessfully => IsCompleted && (_state & OperationSourceFlags.Faulted) != 0;
+    protected bool IsCanceled => (_state & OperationSourceFlags.Canceled) != 0;
+    public sealed override bool IsCompletedSuccessfully => IsCompleted && (_state & OperationSourceFlags.Faulted) == 0;
 
 #if !NETSTANDARD2_0
     public CancellationToken CancellationToken => _cancellationRegistration.Token;
@@ -102,7 +107,7 @@ abstract class OperationSource: OperationSlot
     // Slot can already be completed due to cancellation.
     public bool TryComplete(Exception? exception = null)
     {
-        PgProtocol? protocol;
+        Protocol? protocol;
         if ((protocol = TransitionToCompletion(CancellationToken.None, exception)) is not null)
         {
             CompleteCore(protocol, exception);
@@ -112,7 +117,7 @@ abstract class OperationSource: OperationSlot
         return false;
     }
 
-    PgProtocol? TransitionToCompletion(CancellationToken token, Exception? exception = null)
+    Protocol? TransitionToCompletion(CancellationToken token, Exception? exception = null)
     {
         var state = (OperationSourceFlags)Volatile.Read(ref Unsafe.As<OperationSourceFlags, int>(ref _state));
         // If we were already completed this is likely another completion from the activated code.
@@ -150,10 +155,10 @@ abstract class OperationSource: OperationSlot
         ResetCore();
     }
 
-    protected abstract void CompleteCore(PgProtocol protocol, Exception? exception);
+    protected abstract void CompleteCore(Protocol protocol, Exception? exception);
 
     protected virtual void ResetCore() {}
-    protected void BindCore(PgProtocol protocol)
+    protected void BindCore(Protocol protocol)
     {
         if (Interlocked.CompareExchange(ref _protocol, protocol, null) != null)
             ThrowAlreadyBound();
@@ -202,9 +207,8 @@ abstract class OperationSource: OperationSlot
                 break;
         }
 
-        [DoesNotReturn]
         [MemberNotNull(nameof(_protocol))]
-        void ThrowProtocolNull() => throw new InvalidOperationException("Cannot activate an unbound source.");
-        void ThrowAlreadyActivated() => throw new InvalidOperationException("Already activated.");
+        static void ThrowProtocolNull() => throw new InvalidOperationException("Cannot activate an unbound source.");
+        static void ThrowAlreadyActivated() => throw new InvalidOperationException("Already activated.");
     }
 }

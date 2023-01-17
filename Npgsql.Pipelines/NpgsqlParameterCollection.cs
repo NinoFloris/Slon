@@ -6,10 +6,6 @@ using Npgsql.Pipelines.Data;
 
 namespace Npgsql.Pipelines;
 
-// TODO we may want to have a few versions internally (maybe auto generated) with say 1, 2, 3, 4, many parameters where NpgsqlParameterCollection is just the wrapping class.
-// Alternatively we could have overloads on NpgsqlCommand that take 1 to 5 parameters that we map immediately to CommandParameters.
-// Could eliminate all parameter/boxing allocations for small queries, and would basically make the lookup path always enabled in the 'many' case, reducing complexity there.
-
 /// <summary>
 /// Represents a collection of parameters relevant to an <see cref="NpgsqlCommand"/> as well as their respective mappings to columns in
 /// a <see cref="DataSet"/>.
@@ -21,6 +17,8 @@ public sealed class NpgsqlParameterCollection: DbDataParameterCollection<NpgsqlD
     public NpgsqlParameterCollection(int initialCapacity)
         :base(initialCapacity)
     {}
+
+    internal new Enumerator GetValueEnumerator() => base.GetValueEnumerator();
 
     public void Add<T>(T? value) => AddCore(PositionalName, value);
 

@@ -1,7 +1,6 @@
 using System;
 using System.Buffers;
 using System.Buffers.Binary;
-using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Npgsql.Pipelines.Buffers;
@@ -31,7 +30,6 @@ enum BackendCode: byte
     ParameterDescription    = (byte)'t',
     ParameterStatus         = (byte)'S',
     ParseComplete           = (byte)'1',
-    PasswordPacket          = (byte)' ',
     PortalSuspended         = (byte)'s',
     ReadyForQuery           = (byte)'Z',
     RowDescription          = (byte)'T',
@@ -71,8 +69,8 @@ readonly record struct PgV3Header: IHeader<PgV3Header>
         ref var first = ref MemoryMarshal.GetReference(span);
         var code = (BackendCode)first;
 
-        if (BackendMessage.DebugEnabled)
-            ThrowIfNotDefined(code);
+        if (BackendMessage.DebugEnabled && !EnumShim.IsDefined(code))
+            ThrowNotDefined(code);
 
         var length = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref first, 1));
         if (BitConverter.IsLittleEndian)
@@ -82,11 +80,7 @@ readonly record struct PgV3Header: IHeader<PgV3Header>
         header = new PgV3Header(code, length);
         return true;
 
-        static void ThrowIfNotDefined(BackendCode code)
-        {
-            if (!EnumShim.IsDefined(code))
-                throw new InvalidDataException("Unknown backend code: " + code);
-        }
+        static void ThrowNotDefined(BackendCode code) => throw new ArgumentOutOfRangeException(nameof(code), code, "Unknown backend code");
     }
 
     public static bool TryParse(in ReadOnlySequence<byte> buffer, out PgV3Header header)

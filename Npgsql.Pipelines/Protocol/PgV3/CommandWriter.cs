@@ -2,7 +2,9 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using System.Text;
 using System.Threading;
+using Npgsql.Pipelines.Protocol.Pg;
 
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
@@ -30,10 +32,14 @@ static class CommandWriter
             if (values.Statement is not null)
             {
                 // If we have a statement *and* our connection still has to prepare, do so.
-                if (protocol.GetOrAddStatementName(values.Statement, out statementName))
+                if (protocol.GetOrAddStatementName(values.Statement, out var name))
+                {
+                    statementName = name.Value;
                     return (values.ExecutionFlags & ~ExecutionFlags.Unprepared) | ExecutionFlags.Preparing;
+                }
 
                 // If our connection has it prepared we run it directly with the statementName
+                statementName = null;
                 return (values.ExecutionFlags & ~ExecutionFlags.Unprepared) | ExecutionFlags.Prepared;
             }
 
@@ -50,11 +56,13 @@ static class CommandWriter
     {
         readonly ICommand.Values _values;
         readonly string? _statementName;
+        readonly Encoding _encoding;
 
         public Command(ICommand.Values values, string? statementName)
         {
             _values = values;
             _statementName = statementName;
+            _encoding = PgOptions.DefaultEncoding;
         }
 
         // TODO bring back async writing for large binds (needs a sum and a treshold of precomputed parameter lengths).
@@ -65,15 +73,15 @@ static class CommandWriter
             {
                 var portal = string.Empty;
                 if (!_values.ExecutionFlags.HasPrepared())
-                    Parse.WriteMessage(ref buffer, _values.StatementText, _values.CommandParameters.Collection, _statementName);
+                    Parse.WriteMessage(ref buffer, _values.StatementText, _values.CommandParameters.Collection, _statementName, _encoding);
 
                 // Bind is rather big, duplicating the static writing and IFrontendMessage paths becomes rather bloaty, just new the struct.
-                new Bind(portal, _values.CommandParameters.Collection, ResultColumnCodes.CreateOverall(Descriptors.FormatCode.Binary), _statementName).Write(ref buffer);
+                new Bind(portal, _values.CommandParameters.Collection, ResultColumnCodes.CreateOverall(Descriptors.FormatCode.Binary), _statementName, _encoding).Write(ref buffer);
 
                 if (!_values.ExecutionFlags.HasPrepared())
-                    Describe.WriteForPortal(ref buffer, portal);
+                    Describe.WriteForPortal(ref buffer, portal, _encoding);
 
-                Execute.WriteMessage(ref buffer, portal);
+                Execute.WriteMessage(ref buffer, portal, _encoding);
 
                 if (_values.ExecutionFlags.HasErrorBarrier())
                     Sync.WriteMessage(ref buffer);

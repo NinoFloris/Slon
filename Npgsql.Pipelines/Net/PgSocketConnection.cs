@@ -138,6 +138,8 @@ sealed class PgStreamConnection : PgSocketConnection, IDisposable, IAsyncDisposa
     public override PipeWriter Writer { get; }
     public override bool CanBlock => true;
 
+    public static int WriterSegmentSize => DefaultWriterSegmentSize;
+
     public static async ValueTask<PgStreamConnection> ConnectAsync(EndPoint endPoint, CancellationToken cancellationToken = default)
     {
         var socket = CreateUnconnectedSocket(endPoint);

@@ -304,11 +304,11 @@ ref struct MessageReader<THeader> where THeader : struct, IHeader<THeader>, IEqu
         return _current.TypeEquals(other);
     }
 
-    public bool TryReadCString([NotNullWhen(true)]out string? value)
+    public bool TryReadCString([NotNullWhen(true)]out string? value, Encoding encoding)
     {
         if (_reader.TryReadTo(out ReadOnlySequence<byte> strBytes, 0))
         {
-            value = PgEncoding.RelaxedUTF8.GetString(strBytes);
+            value = encoding.GetString(strBytes);
             return true;
         }
 
@@ -341,7 +341,6 @@ ref struct MessageReader<THeader> where THeader : struct, IHeader<THeader>, IEqu
         public bool IsDefault => Header.IsDefault;
     }
 
-    [DoesNotReturn]
     static void ThrowEnumOpCantHappen() => throw new InvalidOperationException("Enumeration has either not started or has already finished.");
 }
 
@@ -402,7 +401,7 @@ static class MessageReaderExtensions
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool IsExpected<THeader>(this ref MessageReader<THeader> reader, scoped in THeader matchingHeader, out ReadStatus status, bool ensureBuffered = false) 
+    public static bool IsExpected<THeader>(this ref MessageReader<THeader> reader, scoped in THeader matchingHeader, out ReadStatus status, bool ensureBuffered = false)
         where THeader : struct, IHeader<THeader>
     {
         if (!reader.CurrentTypeEquals(matchingHeader))
@@ -422,7 +421,7 @@ static class MessageReaderExtensions
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool MoveNextAndIsExpected<THeader>(this ref MessageReader<THeader> reader, scoped in THeader matchingHeader, out ReadStatus status, bool ensureBuffered = false) 
+    public static bool MoveNextAndIsExpected<THeader>(this ref MessageReader<THeader> reader, scoped in THeader matchingHeader, out ReadStatus status, bool ensureBuffered = false)
         where THeader : struct, IHeader<THeader>
     {
         if (!reader.MoveNext())

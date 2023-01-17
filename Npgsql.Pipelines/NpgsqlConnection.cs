@@ -1,5 +1,4 @@
 using System;
-using System.ComponentModel;
 using System.Data;
 using System.Data.Common;
 using System.Diagnostics;
@@ -20,25 +19,23 @@ public sealed partial class NpgsqlConnection
     ConnectionState _state;
     Exception? _breakException;
     bool _disposed;
-    string? _connectionString;
+    string _connectionString;
 
     // Slots are thread safe up to the granularity of the slot, anything more is the responsibility of the caller.
     volatile SemaphoreSlim? _pipeliningWriteLock;
+    volatile ConnectionOperationSource? _pipelineHead;
     volatile ConnectionOperationSource? _pipelineTail;
     ConnectionOperationSource? _operationSingleton;
-    TaskCompletionSource<bool>? _waitForIdleTcs;
 
     internal NpgsqlDataSource DbDataSource
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
         {
-            return _dataSource ?? LookupDataSource();
+            if (_dataSource is null && _connectionString is "")
+                throw new InvalidOperationException($"{nameof(DbDataSource)} cannot be resolved, {nameof(ConnectionString)} is not set.");
 
-            NpgsqlDataSource LookupDataSource()
-            {
-                throw new NotImplementedException();
-            }
+            return _dataSource ??= ChangeDataSource(_connectionString);
         }
     }
 
@@ -83,7 +80,6 @@ public sealed partial class NpgsqlConnection
 
     void MoveToConnecting()
     {
-        ThrowIfDisposed();
         if (_state is not (ConnectionState.Closed or ConnectionState.Broken))
             throw new InvalidOperationException("Connection is already open or being opened.");
 
@@ -94,7 +90,7 @@ public sealed partial class NpgsqlConnection
     {
         Debug.Assert(_state is not (ConnectionState.Closed or ConnectionState.Broken), "Already Closed or Broken.");
         Debug.Assert(_state is ConnectionState.Open or ConnectionState.Executing or ConnectionState.Fetching, "Called on an unopened/not fetching/not executing connection.");
-        // We allow pipelining so we can be fetching and executing, leave fetching in place.
+        // We allow pipelining so we can be both fetching and executing, in such case leave fetching in place.
         if (_state != ConnectionState.Fetching)
             _state = ConnectionState.Executing;
     }
@@ -138,7 +134,7 @@ public sealed partial class NpgsqlConnection
         EndSlot(slot);
     }
 
-    async ValueTask CloseCore(bool async)
+    async ValueTask CloseCore(bool async, Exception? exception = null)
     {
         // The only time SyncObj (_operationSlot) is null, before the first successful open.
         if (!HasSlot)
@@ -148,23 +144,27 @@ public sealed partial class NpgsqlConnection
         Task drainingTask;
         lock (SyncObj)
         {
+            // We don't use GetSlotUnsynchronized as it checks for _disposed.
             slot = _operationSlot;
-            // Only throw if we're already closed
+            // Only throw if we're already closed and disposed.
             if (_state is ConnectionState.Closed)
             {
                 ThrowIfDisposed();
                 return;
             }
 
-            if (_pipelineTail is null || _pipelineTail.IsCompleted)
+            if (_operationSlot.IsCompleted && _pipelineTail is { IsCompleted: false })
+            {
+                // If we still have pending operations while the connection slot is completed we need to forcibly complete the first which should complete the rest.
+                _pipelineHead?.TryComplete(exception);
+                drainingTask = Task.CompletedTask;
+            }
+            else if (_pipelineTail is null || _pipelineTail.IsCompleted)
                 drainingTask = Task.CompletedTask;
             else
             {
-                _waitForIdleTcs = new TaskCompletionSource<bool>();
-                drainingTask = _waitForIdleTcs.Task;
+                drainingTask = CreateSlotUnsynchronized(slot, true).Task.AsTask();
             }
-
-            _state = ConnectionState.Closed;
         }
 
         // TODO, if somebody pipelines without reading and then Closes we'll wait forever for the commands to finish as their readers won't get disposed.
@@ -195,14 +195,15 @@ public sealed partial class NpgsqlConnection
             if (_state is not (ConnectionState.Closed or ConnectionState.Broken))
                 _state = ConnectionState.Open;
 
+            _pipelineHead = null;
             _pipelineTail = null;
-            _waitForIdleTcs?.SetResult(true);
         }
     }
 
     void Reset()
     {
         _operationSingleton = null;
+        _pipelineHead = null;
         _pipelineTail = null;
         _state = default;
         _breakException = null;
@@ -215,7 +216,7 @@ public sealed partial class NpgsqlConnection
         ThrowIfNoSlot();
 
         var start = TickCount64Shim.Get();
-        PgProtocol? protocol;
+        Protocol.Protocol? protocol;
         SemaphoreSlim? writeLock;
         lock (SyncObj)
         {
@@ -270,7 +271,7 @@ public sealed partial class NpgsqlConnection
             lock (_instance.SyncObj)
             {
                 slot = _instance.GetSlotUnsynchronized();
-                // Assumption is that we can already begin reading, otherwise we'd need to tie the tasks together.
+                // Connection open invariant is that we can already begin reading on our slot, otherwise we'd need to tie the tasks together.
                 Debug.Assert(slot.Task.IsCompletedSuccessfully);
                 // First enqueue, only then call WriteCommandCore.
                 subSlot = EnqueueReadUnsynchronized(slot, allowPipelining, closeConnection);
@@ -302,6 +303,8 @@ public sealed partial class NpgsqlConnection
                 ThrowConnectionWillClose();
 
             var source = _instance._pipelineTail = _instance.CreateSlotUnsynchronized(connectionSlot, closeConnection);
+            if (_instance._pipelineHead is null)
+                _instance._pipelineHead = source;
             // An immediately active read means head == tail, move to fetching immediately.
             if (source.Task.IsCompletedSuccessfully)
                 _instance.MoveToFetching();
@@ -343,6 +346,7 @@ public sealed partial class NpgsqlConnection
             catch
             {
                 // TODO kill the connection.
+                throw;
             }
             var writeLock = _instance._pipeliningWriteLock;
             if (writeLock?.CurrentCount == 0)
@@ -358,6 +362,7 @@ public sealed partial class NpgsqlConnection
 
     ConnectionOperationSource CreateSlotUnsynchronized(OperationSlot connectionSlot, bool closeConnection)
     {
+        DebugShim.Assert(!connectionSlot.IsCompleted);
         ConnectionOperationSource source;
         var current = _pipelineTail;
         if (current is null || current.IsCompleted)
@@ -389,8 +394,13 @@ public sealed partial class NpgsqlConnection
     void CompleteOperation(ConnectionOperationSource? next, Exception? exception, bool closeConnection)
     {
         // There should never be a next after closeConnection is true.
-        DebugShim.Assert(!closeConnection && next is not null || closeConnection);
+        DebugShim.Assert(!closeConnection || closeConnection && next is null);
+        DebugShim.Assert(HasSlot);
 
+        lock (SyncObj)
+        {
+            _pipelineHead = next;
+        }
         if (exception is not null)
             MoveToBroken(exception, next);
         else if (closeConnection)
@@ -409,9 +419,10 @@ public sealed partial class NpgsqlConnection
         Task<Operation>? _task;
 
         // Pipelining on the same connection is expected to be done on the same thread.
-        public ConnectionOperationSource(NpgsqlConnection connection, PgProtocol protocol, bool closeConnection, bool pooled = false) :
+        public ConnectionOperationSource(NpgsqlConnection connection, Protocol.Protocol protocol, bool closeConnection, bool pooled = false) :
             base(protocol, pooled)
         {
+            ValueTaskSource.RunContinuationsAsynchronously = false;
             CloseConnection = closeConnection;
             _connection = connection;
         }
@@ -433,7 +444,7 @@ public sealed partial class NpgsqlConnection
 
         public override ValueTask<Operation> Task => new(_task ??= new ValueTask<Operation>(this, ValueTaskSource.Version).AsTask());
 
-        protected override void CompleteCore(PgProtocol protocol, Exception? exception)
+        protected override void CompleteCore(Protocol.Protocol protocol, Exception? exception)
             => _connection.CompleteOperation(_next, exception, CloseConnection);
 
         protected override void ResetCore()
@@ -454,6 +465,7 @@ public sealed partial class NpgsqlConnection
             return;
         _disposed = true;
         await CloseCore(async).ConfigureAwait(false);
+        base.Dispose(true);
     }
 
     NpgsqlTransaction BeginTransactionCore(IsolationLevel isolationLevel)
@@ -462,36 +474,23 @@ public sealed partial class NpgsqlConnection
         throw new NotImplementedException();
     }
 
-    void OpenCore()
+    async Task OpenCore(bool async, CancellationToken cancellationToken)
     {
-        MoveToConnecting();
-        try
-        {
-            _operationSlot = DbDataSource.Open(exclusiveUse: true, DbDataSource.DefaultConnectionTimeout);
-            Debug.Assert(_operationSlot.Task.IsCompleted);
-            _operationSlot.Task.GetAwaiter().GetResult();
-            MoveToIdle();
-        }
-        catch
-        {
-            CloseCore(async: false).GetAwaiter().GetResult();
-            throw;
-        }
-    }
-
-    async Task OpenAsyncCore(CancellationToken cancellationToken)
-    {
+        ThrowIfDisposed();
         MoveToConnecting();
         try
         {
             // First we get a slot (could be a connection open but usually this is synchronous)
-            var slot = await DbDataSource.OpenAsync(exclusiveUse: true, DbDataSource.DefaultConnectionTimeout, cancellationToken).ConfigureAwait(false);
-            _operationSlot = slot;
+            _operationSlot = async
+                ? await DbDataSource.OpenAsync(exclusiveUse: true, DbDataSource.DefaultConnectionTimeout, cancellationToken).ConfigureAwait(false)
+                : DbDataSource.Open(exclusiveUse: true, DbDataSource.DefaultConnectionTimeout);
+            if (!async)
+                Debug.Assert(_operationSlot.Task.IsCompleted);
             // Then we await until the connection is fully ready for us (both tasks are covered by the same cancellationToken).
             // In non exclusive cases we already start writing our message as well but we choose not to do so here.
             // One of the reasons would be to be sure the connection is healthy once we transition to Open.
             // If we're still stuck in a pipeline we won't know for sure.
-            await slot.Task.ConfigureAwait(false);
+            await _operationSlot.Task.ConfigureAwait(false);
             MoveToIdle();
         }
         catch
@@ -501,40 +500,54 @@ public sealed partial class NpgsqlConnection
         }
     }
 
-    public ValueTask ChangeDatabaseCore(bool async, string? connectionString, bool open = false)
+    NpgsqlDataSource ChangeDataSource(string connectionString)
     {
-        if (connectionString is null)
-            throw new ArgumentNullException(nameof(connectionString));
+        ThrowIfDisposed();
+        if (_state is not ConnectionState.Closed or ConnectionState.Broken)
+            throw new InvalidOperationException("Cannot change connection string while the connection is open.");
 
+        _dataSource = null;
         // TODO change the datasource etc.
-        _connectionString = _dataSource?.ConnectionString;
+        _connectionString = _dataSource!.ConnectionString;
+
         throw new NotImplementedException();
+    }
+
+    NpgsqlConnection CloneCore()
+    {
+        if (_dataSource is not null)
+            return _dataSource.CreateConnection();
+
+        return new NpgsqlConnection(_connectionString);
     }
 }
 
 // Public surface & ADO.NET
-public sealed partial class NpgsqlConnection : DbConnection, ICloneable, IComponent
+public sealed partial class NpgsqlConnection : DbConnection, ICloneable
 {
-    /// <summary>
-    /// Initializes a new instance of the <see cref="NpgsqlConnection"/> class.
-    /// </summary>
-    public NpgsqlConnection()
-        => GC.SuppressFinalize(this);
-
     /// <summary>
     /// Initializes a new instance of <see cref="NpgsqlConnection"/> with the given connection string.
     /// </summary>
     /// <param name="connectionString">The connection used to open the PostgreSQL database.</param>
-    public NpgsqlConnection(string? connectionString) : this()
-        => ConnectionString = connectionString;
+    public NpgsqlConnection(string? connectionString)
+    {
+        GC.SuppressFinalize(this);
+        _connectionString = connectionString ?? string.Empty;
+    }
 
-    internal NpgsqlConnection(NpgsqlDataSource dataSource) => _dataSource = dataSource;
+    /// <summary>
+    /// Initializes a new instance of the <see cref="NpgsqlConnection"/> class.
+    /// </summary>
+    public NpgsqlConnection() : this(connectionString: null) { }
+
+    internal NpgsqlConnection(NpgsqlDataSource dataSource) : this(dataSource.ConnectionString)
+        => _dataSource = dataSource;
 
     [AllowNull]
     public override string ConnectionString
     {
-        get => _connectionString ?? DbDataSource.ConnectionString;
-        set => ChangeDatabaseCore(async: false, value).GetAwaiter().GetResult();
+        get => _connectionString;
+        set => ChangeDataSource(value ?? string.Empty);
     }
     public override string Database => DbDataSource.Database;
     public override string DataSource => DbDataSource.EndPointRepresentation;
@@ -542,23 +555,29 @@ public sealed partial class NpgsqlConnection : DbConnection, ICloneable, ICompon
     public override string ServerVersion => DbDataSource.ServerVersion;
     public override ConnectionState State => _state;
 
-    public override void Open() => OpenCore();
-    public override Task OpenAsync(CancellationToken cancellationToken) => OpenAsyncCore(cancellationToken);
+    public override void Open() => OpenCore(async: false, CancellationToken.None).GetAwaiter().GetResult();
+    public override Task OpenAsync(CancellationToken cancellationToken) => OpenCore(async: true, cancellationToken);
 
     public override void ChangeDatabase(string databaseName)
     {
-        // Such a shitty concept to put in an api...
-        throw new NotImplementedException();
+        // TODO actually update the databasename.
+        var updatedConnectionString = DbDataSource.ConnectionString;
+        CloseCore(async: false).GetAwaiter().GetResult();
+        ChangeDataSource(updatedConnectionString);
+        OpenCore(async: false, CancellationToken.None).GetAwaiter().GetResult();
     }
 
 #if !NETSTANDARD2_0
-    public override Task ChangeDatabaseAsync(string databaseName, CancellationToken cancellationToken = default)
+    public override async Task ChangeDatabaseAsync(string databaseName, CancellationToken cancellationToken = default)
 #else
-    public Task ChangeDatabaseAsync(string databaseName, CancellationToken cancellationToken = default)
+    public async Task ChangeDatabaseAsync(string databaseName, CancellationToken cancellationToken = default)
 #endif
     {
-        // Such a shitty concept to put in an api...
-        throw new NotImplementedException();
+        // TODO actually update the databasename.
+        var updatedConnectionString = DbDataSource.ConnectionString;
+        await CloseCore(async: true);
+        ChangeDataSource(updatedConnectionString);
+        await OpenCore(async: true, cancellationToken);
     }
 
     /// <summary>
@@ -634,26 +653,8 @@ public sealed partial class NpgsqlConnection : DbConnection, ICloneable, ICompon
     protected override void Dispose(bool disposing)
         => DisposeCore(async: false).GetAwaiter().GetResult();
 
-    object ICloneable.Clone()
-    {
-        throw new NotImplementedException();
-    }
-
-    /// <summary>
-    /// This event is unsupported by Npgsql. Use <see cref="DbConnection.StateChange"/> instead.
-    /// </summary>
-    [EditorBrowsable(EditorBrowsableState.Never)]
-    public new event EventHandler? Disposed
-    {
-        add => throw new NotSupportedException("The Disposed event isn't supported by Npgsql. Use DbConnection.StateChange instead.");
-        remove => throw new NotSupportedException("The Disposed event isn't supported by Npgsql. Use DbConnection.StateChange instead.");
-    }
-
-    event EventHandler? IComponent.Disposed
-    {
-        add => Disposed += value;
-        remove => Disposed -= value;
-    }
+    public NpgsqlConnection Clone() => CloneCore();
+    object ICloneable.Clone() => CloneCore();
 
     /// <summary>
     /// Returns the schema collection specified by the collection name.

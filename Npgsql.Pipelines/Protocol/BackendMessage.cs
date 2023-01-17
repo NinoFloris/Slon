@@ -3,7 +3,8 @@ using System.Buffers;
 
 namespace Npgsql.Pipelines.Protocol;
 
-static class BackendMessage {
+static class BackendMessage
+{
     public static readonly bool DebugEnabled = false;
 }
 
@@ -16,15 +17,17 @@ enum ReadStatus
     AsyncResponse
 }
 
-static class ReadStatusExtensions
+static class OperationStatusExtensions
 {
+    static ReadStatus ThrowArgumentOutOfRange(OperationStatus status) => throw new ArgumentOutOfRangeException(nameof(status), status, null);
+
     public static ReadStatus ToReadStatus(this OperationStatus status)
         => status switch
         {
             OperationStatus.Done => ReadStatus.Done,
             OperationStatus.NeedMoreData => ReadStatus.NeedMoreData,
             OperationStatus.InvalidData => ReadStatus.InvalidData,
-            _ => throw new ArgumentOutOfRangeException(nameof(status), status, null)
+            _ => ThrowArgumentOutOfRange(status)
         };
 }
 

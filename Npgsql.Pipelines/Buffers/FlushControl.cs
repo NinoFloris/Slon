@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace Npgsql.Pipelines.Buffers;
 
-// TODO revisit FlushControl now we have IStreamingWriter.
+// TODO revisit FlushControl now we have IStreamingWriter, should probably be pushed into it as a wrapper.
 
 readonly struct FlushResult
 {

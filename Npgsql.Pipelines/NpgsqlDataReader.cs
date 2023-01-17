@@ -41,7 +41,7 @@ public sealed partial class NpgsqlDataReader
     ulong? _recordsAffected;
 
     CommandContext GetCurrent() => _commandEnumerator.Current;
-    PgProtocol GetProtocol() => GetCurrent().GetOperation().Result.Protocol;
+    Protocol.Protocol GetProtocol() => GetCurrent().GetOperation().Result.Protocol;
 
     internal static async ValueTask<NpgsqlDataReader> Create(bool async, ValueTask<CommandContextBatch> batch)
     {

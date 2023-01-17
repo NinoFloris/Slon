@@ -26,7 +26,7 @@ public class PgV3ProtocolTests
     };
 
     [Test]
-    public async Task PipeSimpleQueryAsync()
+    public async Task SimpleQueryAsync()
     {
         var dataSource = new NpgsqlDataSource(Options, ProtocolOptions);
         await using var conn = new NpgsqlConnection(dataSource);
@@ -37,34 +37,6 @@ public class PgV3ProtocolTests
         {
         }
     }
-
-    [Test]
-    public async Task StreamSimpleQueryAsync()
-    {
-        var dataSource = new NpgsqlDataSource(Options, ProtocolOptions);
-        var connection = new NpgsqlConnection(dataSource);
-        await connection.OpenAsync();
-        var command = new NpgsqlCommand("SELECT pg_sleep(2)", connection);
-        await using var dataReader = await command.ExecuteReaderAsync();
-        while (await dataReader.ReadAsync().ConfigureAwait(false))
-        {
-        }
-    }
-
-    // [Test]
-    // public void StreamSimpleQuery()
-    // {
-    //     try
-    //     {
-    //         var socket = PgStreamConnection.Connect(IPEndPoint.Parse(EndPoint));
-    //         var conn = PgV3Protocol.Start(socket.Writer, socket.Reader, PgOptions, Options);
-    //         conn.ExecuteQuery("SELECT pg_sleep(2)", ArraySegment<KeyValuePair<CommandParameter, IParameterWriter>>.Empty);
-    //     }
-    //     catch(Exception ex)
-    //     {
-    //         throw;
-    //     }
-    // }
 
     string _commandText = string.Empty;
     PgV3Protocol _protocol;

@@ -2,10 +2,11 @@ using System;
 using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using System.Threading.Tasks;
+using Npgsql.Pipelines.Protocol.PgV3;
 
 namespace Npgsql.Pipelines.Protocol;
 
-enum PgProtocolState
+enum ProtocolState
 {
     Created,
     Ready,
@@ -13,21 +14,21 @@ enum PgProtocolState
     Completed
 }
 
-abstract class PgProtocol
+abstract class Protocol
 {
-    public abstract PgProtocolState State { get; }
+    public abstract ProtocolState State { get; }
     public abstract bool PendingExclusiveUse { get; }
     public abstract int Pending { get; }
 
     public abstract bool TryStartOperation([NotNullWhen(true)]out OperationSlot? slot, OperationBehavior behavior = OperationBehavior.None, CancellationToken cancellationToken = default);
     public abstract bool TryStartOperation(OperationSlot slot, OperationBehavior behavior = OperationBehavior.None, CancellationToken cancellationToken = default);
-    // TODO deliberate whether cancellation makes sense.
-    public abstract Task CompleteAsync(Exception? exception = null, CancellationToken cancellationToken = default);
+    public abstract Task CompleteAsync(Exception? exception = null);
     public abstract ValueTask FlushAsync(CancellationToken cancellationToken = default);
     public abstract ValueTask FlushAsync(OperationSlot op, CancellationToken cancellationToken = default);
 
-    // TODO CommandReader is part of PgV3 atm.
-    public abstract PgV3.CommandReader GetCommandReader();
+    // TODO maybe this doesn't belong here, we'd need some other place that pools these though.
+    // TODO this is part of PgV3 though there is a fairly abstract api ready inside of it.
+    public abstract CommandReader GetCommandReader();
 }
 
 [Flags]

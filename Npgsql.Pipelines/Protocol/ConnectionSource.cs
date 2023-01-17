@@ -7,13 +7,13 @@ using System.Threading.Tasks;
 
 namespace Npgsql.Pipelines.Protocol;
 
-interface IConnectionFactory<T> where T : PgProtocol
+interface IConnectionFactory<T> where T : Protocol
 {
     T Create(TimeSpan timeout);
     ValueTask<T> CreateAsync(CancellationToken cancellationToken);
 }
 
-class ConnectionSource<T>: IDisposable where T : PgProtocol
+class ConnectionSource<T>: IDisposable where T : Protocol
 {
     readonly object?[] _connections;
     readonly IConnectionFactory<T> _factory;
@@ -23,6 +23,7 @@ class ConnectionSource<T>: IDisposable where T : PgProtocol
     public ConnectionSource(IConnectionFactory<T> factory, int maxPoolSize)
     {
         if (maxPoolSize <= 0)
+            // Throw inlined as constructors will never be inlined.
             throw new ArgumentOutOfRangeException(nameof(maxPoolSize), "Cannot be zero or negative.");
         _connections = new object[maxPoolSize];
         _factory = factory;
@@ -38,12 +39,12 @@ class ConnectionSource<T>: IDisposable where T : PgProtocol
         static void ThrowObjectDisposed() => throw new ObjectDisposedException(nameof(ConnectionSource<T>));
     }
 
-    bool IsReadyConnection([NotNullWhen(true)] object? item, [MaybeNullWhen(false)]out T instance)
+    bool IsConnection([NotNullWhen(true)] object? item, [MaybeNullWhen(false)]out T instance)
     {
         if (item is not null && !ReferenceEquals(TakenSentinel, item))
         {
             instance = Unsafe.As<object, T>(ref item);
-            return instance.State == PgProtocolState.Ready;
+            return true;
         }
 
         instance = default;
@@ -75,8 +76,21 @@ class ConnectionSource<T>: IDisposable where T : PgProtocol
             for (var i = 0; i < connections.Length; i++)
             {
                 var item = connections[i];
-                if (IsReadyConnection(item, out var conn))
+                if (IsConnection(item, out var conn))
                 {
+                    var state = conn.State;
+                    // We should not do anything when we run into a draining connection.
+                    if (state is ProtocolState.Draining)
+                        continue;
+
+                    if (state is ProtocolState.Completed && ReferenceEquals(Interlocked.CompareExchange(ref _connections[i], TakenSentinel, item), item))
+                    {
+                        // This is a completed connection which we can replace with a new one.
+                        slotIndex = i;
+                        connectionSlot = null;
+                        return true;
+                    }
+
                     // If it's idle then that's the best scenario, return immediately.
                     if (slot is not null)
                     {
@@ -104,7 +118,7 @@ class ConnectionSource<T>: IDisposable where T : PgProtocol
                 }
                 else if (!ReferenceEquals(TakenSentinel, item) && ReferenceEquals(Interlocked.CompareExchange(ref _connections[i], TakenSentinel, item), item))
                 {
-                    // This is an empty/draining/completed slot which we can fill.
+                    // This is an empty slot which we can fill.
                     slotIndex = i;
                     connectionSlot = null;
                     return true;
@@ -112,8 +126,8 @@ class ConnectionSource<T>: IDisposable where T : PgProtocol
             }
 
             // Note: not 'ImmediateOnly' in the candidate flow as we're apparently exhausted.
-            // TODO if we want full fairness we can put a channel in between all this
-            // (an earlier caller can get stuck behind very slow ops, getting overtaken by 'luckier' callers).
+            // If we want full fairness we can put a channel in between all this.
+            // (an earlier caller can get stuck behind slow ops, getting overtaken by 'luckier' callers).
             if (allowPipelining && candidateConn is not null)
             {
                 if (slot is not null)
@@ -146,6 +160,7 @@ class ConnectionSource<T>: IDisposable where T : PgProtocol
 #if !NETSTANDARD2_0
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
 #endif
+    // Throws inlined as it will not be inlined and it's not commonly called.
     async ValueTask<OperationSlot> OpenConnection(int index, bool exclusiveUse, bool async, OperationSlot? slot = null, TimeSpan timeout = default, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -184,11 +199,7 @@ class ConnectionSource<T>: IDisposable where T : PgProtocol
                 Interlocked.Exchange(ref _connectionTimeoutSource, timeoutSource);
         }
 
-        if (_disposed)
-        {
-            ThrowIfDisposed();
-        }
-
+        ThrowIfDisposed();
         OperationSlot? connectionSlot;
         if (slot is not null)
         {
@@ -254,7 +265,7 @@ class ConnectionSource<T>: IDisposable where T : PgProtocol
         _disposed = true;
         foreach (var connection in _connections)
         {
-            if (IsReadyConnection(connection, out var conn))
+            if (IsConnection(connection, out var conn))
             {
                 // We're just letting it run, draining can take a while and we're not going to wait.
                 var _ = Task.Run(async () =>

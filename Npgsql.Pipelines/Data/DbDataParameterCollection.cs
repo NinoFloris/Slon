@@ -1,16 +1,17 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Collections.Immutable;
 using System.Data;
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Npgsql.Pipelines.Data;
 
 public abstract partial class DbDataParameterCollection<TParameter> where TParameter : DbDataParameter
 {
+    // Internal for tests
     internal const int LookupThreshold = 5;
     protected internal const string PositionalName = "";
 
@@ -27,12 +28,12 @@ public abstract partial class DbDataParameterCollection<TParameter> where TParam
                     throw new InvalidCastException(
                         $"The DbParameter \"{value}\" is not of type \"{typeof(TParameter).Name}\" and cannot be used in this parameter collection, it can be added as a value to an {typeof(TParameter).Name} if this was intended.");
 
+                // Prevent any changes from now on as the name may end up being used in the lookup.
+                // We don't want the lookup to get out of sync but we also don't want any backreferences from parameter to collection so we freeze the name instead.
+                p.NotifyCollectionAdd();
+
                 if (!name.AsSpan().Equals(CreateNameSpan(p.ParameterName), StringComparison.OrdinalIgnoreCase))
                     throw new ArgumentException($"Parameter name must be a case-insensitive match with the property '{nameof(DbDataParameter.ParameterName)}' on the given {typeof(TParameter).Name}.", nameof(name));
-
-                // Prevent any changes from now on as the name may end up being used in the lookup.
-                // We don't want the lookup to get out of sync and we also don't want any backreferences from parameter to collection.
-                p.NotifyCollectionAdd();
             }
 
             _name = name;
@@ -79,8 +80,7 @@ public abstract partial class DbDataParameterCollection<TParameter> where TParam
         }
     }
 
-    // TODO probably want to replace with a manually doubled/grown array instead.
-    readonly ImmutableArray<ParameterItem>.Builder _parameters;
+    readonly List<ParameterItem> _parameters;
 
     // Dictionary lookups for GetValue to improve performance.
     Dictionary<string, int>? _caseInsensitiveLookup;
@@ -90,7 +90,7 @@ public abstract partial class DbDataParameterCollection<TParameter> where TParam
     /// </summary>
     protected DbDataParameterCollection(int initialCapacity = 5)
     {
-        _parameters = ImmutableArray.CreateBuilder<ParameterItem>(initialCapacity);
+        _parameters = new(initialCapacity);
     }
 
     bool LookupEnabled => _parameters.Count >= LookupThreshold;
@@ -169,10 +169,24 @@ public abstract partial class DbDataParameterCollection<TParameter> where TParam
 
     protected object? GetValue(int index) => _parameters[index].Value;
 
+#if NETSTANDARD
+    ParameterItem _refLocation;
+#endif
+
+    ref ParameterItem GetItemRef(int index)
+    {
+#if NETSTANDARD
+        _refLocation = _parameters[index];
+        return ref _refLocation;
+#else
+        return ref CollectionsMarshal.AsSpan(_parameters)[index];
+#endif
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     protected TParameter GetOrAddParameterInstance(int index)
     {
-        ref var p = ref Unsafe.AsRef(_parameters.ItemRef(index));
+        ref var p = ref GetItemRef(index);
         if (p.TryGetAsParameter(out var parameter))
             return parameter;
 
@@ -197,7 +211,7 @@ public abstract partial class DbDataParameterCollection<TParameter> where TParam
 
     protected void ReplaceCore(int index, string? parameterName, object? value)
     {
-        ref var current = ref Unsafe.AsRef(_parameters.ItemRef(index));
+        ref var current = ref GetItemRef(index);
         var item = ParameterItem.Create(parameterName, value);
         LookupChangeName(item, current.Name, index);
         current = item;
@@ -309,8 +323,8 @@ public abstract partial class DbDataParameterCollection<TParameter> where TParam
         return true;
     }
 
-    // Beautiful antique ADO.NET design to hog the public GetEnumerator method slot for a non generic IEnumerable method...
-    protected internal Enumerator GetValueEnumerator() => new(this);
+    // Beautiful antique ADO.NET design to fill the public GetEnumerator method slot with a non generic IEnumerable method...
+    protected Enumerator GetValueEnumerator() => new(this);
 
     protected abstract bool CanParameterBePositional { get; }
     protected abstract TParameter CreateParameter(string parameterName, object? value);
@@ -342,16 +356,16 @@ public abstract partial class DbDataParameterCollection<TParameter>: DbParameter
     /// Adds a parameter value with the given name and DbType.
     /// </summary>
     /// <param name="parameterName">The name of the parameter.</param>
-    /// <param name="type">The DbType for the parameter.</param>
+    /// <param name="dbType">The DbType for the parameter.</param>
     /// <param name="value">The value for the parameter.</param>
     /// <typeparam name="T">The type of value.</typeparam>
-    public void Add<T>(string parameterName, DbType type, T? value)
+    public void Add<T>(string parameterName, DbType dbType, T? value)
     {
         if (parameterName is null)
             throw new ArgumentNullException(nameof(parameterName));
 
         var parameter = CreateParameter(parameterName, value);
-        parameter.DbType = type;
+        parameter.DbType = dbType;
         AddCore(parameterName, parameter);
     }
 
@@ -393,11 +407,11 @@ public abstract partial class DbDataParameterCollection<TParameter>: DbParameter
 
     public struct Enumerator : IEnumerator<KeyValuePair<string, object?>>
     {
-        readonly ImmutableArray<ParameterItem>.Builder _parameters;
+        readonly List<ParameterItem> _parameters;
         int _index;
         KeyValuePair<string, object?> _current;
 
-        Enumerator(ImmutableArray<ParameterItem>.Builder parameters)
+        Enumerator(List<ParameterItem> parameters)
         {
             _parameters = parameters;
         }

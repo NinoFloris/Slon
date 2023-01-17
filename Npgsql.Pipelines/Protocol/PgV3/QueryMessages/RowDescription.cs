@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using Npgsql.Pipelines.Pg.Descriptors;
 using Npgsql.Pipelines.Pg.Types;
 using Npgsql.Pipelines.Protocol.PgV3.Descriptors;
@@ -8,14 +9,17 @@ namespace Npgsql.Pipelines.Protocol.PgV3;
 
 struct RowDescription: IPgV3BackendMessage
 {
-    public const int MaxColumns = ushort.MaxValue;
     static int ColumnCountLookupThreshold => 10;
 
     ArraySegment<StatementField> _fields;
     Dictionary<string, int>? _nameIndex;
+    public Encoding Encoding { get; }
 
-    public RowDescription(int initialCapacity)
-        => _fields = new ArraySegment<StatementField>(new StatementField[initialCapacity], 0, 0);
+    public RowDescription(int initialCapacity, Encoding encoding)
+    {
+        _fields = new ArraySegment<StatementField>(new StatementField[initialCapacity], 0, 0);
+        Encoding = encoding;
+    }
 
     public ReadOnlyMemory<StatementField> Fields => new(_fields.Array, _fields.Offset, _fields.Count);
 
@@ -37,7 +41,7 @@ struct RowDescription: IPgV3BackendMessage
         for (var i = 0; i < fields.Length && i < columnCount; i++)
         {
             // TODO pool these chars, only converting them to strings when it'll be used for a prepared statement.
-            reader.TryReadCString(out var name);
+            reader.TryReadCString(out var name, Encoding);
             reader.TryReadUInt(out var tableOid);
             reader.TryReadShort(out var columnAttributeNumber);
             reader.TryReadUInt(out var oid);
@@ -47,7 +51,7 @@ struct RowDescription: IPgV3BackendMessage
             fields[i] = new(
                 new Field(
                     Name:              name!,
-                    Oid:               new Oid(oid),
+                    Oid:        new Oid(oid),
                     TypeModifier:      typeModifier
                 ),
                 FieldTypeSize:          typeSize,

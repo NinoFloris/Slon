@@ -24,7 +24,7 @@ enum FrontendCode: byte
 
 struct PgV3FrontendHeader: IFrontendHeader<PgV3FrontendHeader>
 {
-    const int ByteCount = PgV3Header.ByteCount;
+    public const int ByteCount = PgV3Header.ByteCount;
     readonly FrontendCode _code;
     int _length;
 
@@ -40,9 +40,11 @@ struct PgV3FrontendHeader: IFrontendHeader<PgV3FrontendHeader>
         set
         {
             if (value < 0)
-                throw new ArgumentOutOfRangeException(nameof(value), "Value cannot be negative.");
+                ThrowArgumentOutOfRange();
 
             _length = value;
+
+            static void ThrowArgumentOutOfRange() => throw new ArgumentOutOfRangeException(nameof(value), "Value cannot be negative.");
         }
     }
 
@@ -67,9 +69,11 @@ struct PgV3FrontendHeader: IFrontendHeader<PgV3FrontendHeader>
         if (length < 0)
             ThrowArgumentOutOfRange();
 
-        var buffer = writer.GetBufferWriter();
-        WriteHeader(ref buffer, code, length);
-        writer.CommitBufferWriter(buffer);
+        writer.Ensure(ByteCount);
+        var header = writer.Span;
+        header[0] = (byte)code;
+        BinaryPrimitives.WriteInt32BigEndian(header.Slice(1), length + sizeof(int));
+        writer.Advance(ByteCount);
     }
 
     public static PgV3FrontendHeader Create(FrontendCode code, int length)

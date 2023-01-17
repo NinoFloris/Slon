@@ -35,6 +35,7 @@ struct AuthenticationRequest : IPgV3BackendMessage, IDisposable
         var _ = reader.TryReadInt(out var rq);
         AuthenticationType = (AuthenticationType)rq;
         if (BackendMessage.DebugEnabled && !EnumShim.IsDefined(AuthenticationType))
+            // Throw inlined as DebugEnabled is not expected to be on in perf critical envs.
             throw new Exception("Unknown authentication request type code: " + AuthenticationType);
 
         switch (AuthenticationType)

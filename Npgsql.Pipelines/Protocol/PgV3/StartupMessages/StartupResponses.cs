@@ -1,6 +1,6 @@
 namespace Npgsql.Pipelines.Protocol.PgV3;
 
-struct StartupResponse : IPgV3BackendMessage
+struct StartupResponses : IPgV3BackendMessage
 {
     bool atRfq;
 

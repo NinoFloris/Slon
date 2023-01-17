@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 
@@ -37,8 +38,8 @@ readonly struct IOCompletionPair
         // Internal note, all exceptions should only exist wrapped in a task.
 
         // Return read when it is completed but only when write is completed successfully or still running.
-        if (Write.IsCompletedSuccessfully || (!Write.IsCompleted && ReadSlot.Task.IsCompleted))
-            return ReadSlot.Task;
+        if (Write.IsCompletedSuccessfully || (!Write.IsCompleted && Read.IsCompleted))
+            return Read;
 
         if (Write.IsFaulted || Write.IsCanceled)
         {
@@ -71,7 +72,10 @@ readonly struct IOCompletionPair
                 return default;
             }
 
-            throw new InvalidOperationException("Should not get here");
+            ThrowUnreachable();
+            return default;
+
+            static void ThrowUnreachable() => throw new UnreachableException();
         }
     }
 }

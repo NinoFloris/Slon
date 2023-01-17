@@ -7,16 +7,10 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Protocol;
+using Npgsql.Pipelines.Protocol.Pg;
 using Npgsql.Pipelines.Protocol.PgV3;
 
 namespace Npgsql.Pipelines;
-
-record PgOptions
-{
-    public required string Username { get; init; }
-    public string? Password { get; init; }
-    public string? Database { get; init; }
-}
 
 record NpgsqlDataSourceOptions
 {
@@ -47,6 +41,7 @@ record NpgsqlDataSourceOptions
 
     internal PgOptions ToPgOptions() => new()
     {
+        EndPoint = EndPoint,
         Username = Username,
         Database = Database,
         Password = Password
@@ -94,7 +89,7 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>, I
     // TODO should be populated by Start and returned as a a result, cache only once on the datasource, not per connection.
     internal string ServerVersion => throw new NotImplementedException();
 
-    internal void PerformUserCancellation(PgProtocol protocol, TimeSpan timeout)
+    internal void PerformUserCancellation(Protocol.Protocol protocol, TimeSpan timeout)
     {
         // TODO
         // spin up a connection and write out cancel
@@ -284,7 +279,7 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>, I
 
         static ValueTask<WriteResult> WriteCommand(OperationSource source, bool flushHint)
         {
-            ref var command = ref PgV3Protocol.GetData<MultiplexingItem>(source);
+            ref var command = ref PgV3Protocol.GetDataRef<MultiplexingItem>(source);
             var commandContext = CommandWriter.WriteExtendedAsync(source, ref command, flushHint, source.CancellationToken);
             // We can drop the commandContext as it was written into the source data to be retrieved via the ICommandExecutionProvider.
             return commandContext.WriteTask;
@@ -292,5 +287,5 @@ public class NpgsqlDataSource: DbDataSource, IConnectionFactory<PgV3Protocol>, I
     }
 
     CommandExecution ICommandExecutionProvider.Get(in CommandContext context)
-        => PgV3Protocol.GetData<MultiplexingItem>(context.ReadSlot).CommandExecution;
+        => PgV3Protocol.GetDataRef<MultiplexingItem>(context.ReadSlot).CommandExecution;
 }

@@ -10,9 +10,6 @@ namespace Npgsql.Pipelines.Buffers;
 // A streaming alternative to a System.IO.Stream, instead based on the preferable IBufferWriter.
 interface IStreamingWriter<T>: IBufferWriter<T>
 {
-    // TODO maybe support unflushed bytes getter? Let's wait, might not be necessary.
-
-    // TODO we may want to have Flush overloads/default params that take an advanceCount to reduce interface calls.
     void Flush(TimeSpan timeout = default);
     ValueTask FlushAsync(CancellationToken cancellationToken = default);
 }

@@ -5,6 +5,7 @@ using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Npgsql.Pipelines.Buffers;
@@ -45,6 +46,7 @@ enum StatementType
 
 class CommandReader
 {
+    readonly Action<CommandReader>? _returnAction;
     CommandReaderState _state;
 
     // Set during InitializeAsync.
@@ -55,10 +57,11 @@ class CommandReader
     DataRowReader _rowReader; // Mutable struct, don't make readonly.
     CommandComplete _commandComplete; // Mutable struct, don't make readonly.
 
-    public CommandReader()
+    public CommandReader(Encoding encoding, Action<CommandReader>? returnAction)
     {
-        _commandStart = new(new RowDescription(initialCapacity: 10));
+        _commandStart = new(new RowDescription(initialCapacity: 10, encoding));
         _commandComplete = new();
+        _returnAction = returnAction;
     }
 
     public CommandReaderState State => _state;
@@ -332,6 +335,7 @@ class CommandReader
         _state = CommandReaderState.None;
         _commandStart.Reset();
         _rowReader = default;
+        _returnAction?.Invoke(this);
     }
 
     struct ExpandBuffer : IPgV3BackendMessage

@@ -4,7 +4,7 @@ namespace Npgsql.Pipelines.Data.Tests;
 
 class TestParameter : DbDataParameter
 {
-    protected override DbType DbTypeCore { get; set; }
+    protected override DbType? DbTypeCore { get; set; }
     protected override DbDataParameter CloneCore() => new TestParameter();
     protected override object? ValueCore { get; set; }
     public new void NotifyCollectionAdd() => base.NotifyCollectionAdd();
