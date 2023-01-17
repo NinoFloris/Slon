@@ -1,0 +1,37 @@
+using System;
+using System.Buffers;
+
+namespace Slon.Protocol;
+
+static class BackendMessage
+{
+    public static readonly bool DebugEnabled = false;
+}
+
+enum ReadStatus
+{
+    Done,
+    ConsumeData,
+    NeedMoreData,
+    InvalidData, // Desync
+    AsyncResponse
+}
+
+static class OperationStatusExtensions
+{
+    static ReadStatus ThrowArgumentOutOfRange(OperationStatus status) => throw new ArgumentOutOfRangeException(nameof(status), status, null);
+
+    public static ReadStatus ToReadStatus(this OperationStatus status)
+        => status switch
+        {
+            OperationStatus.Done => ReadStatus.Done,
+            OperationStatus.NeedMoreData => ReadStatus.NeedMoreData,
+            OperationStatus.InvalidData => ReadStatus.InvalidData,
+            _ => ThrowArgumentOutOfRange(status)
+        };
+}
+
+interface IBackendMessage<THeader> where THeader : struct, IHeader<THeader>
+{
+    ReadStatus Read(ref MessageReader<THeader> reader);
+}
