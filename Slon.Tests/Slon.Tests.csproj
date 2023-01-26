@@ -15,7 +15,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Slon\Slon.csproj"  />
+    <ProjectReference Include="..\Slon\Slon.csproj" />
 
     <Reference Update="System.Private.CoreLib">
       <Aliases>Runtime</Aliases>

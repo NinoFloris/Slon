@@ -555,7 +555,7 @@ class PgV3Protocol : Protocol
                     case AuthenticationType.MD5Password:
                         if (options.Password is null)
                             throw new InvalidOperationException("No password given, connection expects password.");
-                        await conn.WriteInternalAsync(new PasswordMessage(options.Username, options.Password, msg.MD5Salt, options.Encoding)).ConfigureAwait(false);
+                        await conn.WriteInternalAsync(new PasswordMessage(options.Username, options.Password, msg.MD5Salt)).ConfigureAwait(false);
                         var expectOk = await conn.ReadMessageAsync(new AuthenticationRequest()).ConfigureAwait(false);
                         if (expectOk.AuthenticationType != AuthenticationType.Ok)
                             throw new Exception("Unexpected authentication response");
@@ -596,7 +596,7 @@ class PgV3Protocol : Protocol
                 case AuthenticationType.MD5Password:
                     if (options.Password is null)
                         throw new InvalidOperationException("No password given, connection expects password.");
-                    conn.WriteMessage(new PasswordMessage(options.Username, options.Password, msg.MD5Salt, options.Encoding));
+                    conn.WriteMessage(new PasswordMessage(options.Username, options.Password, msg.MD5Salt));
                     var expectOk = conn.ReadMessage(new AuthenticationRequest());
                     if (expectOk.AuthenticationType != AuthenticationType.Ok)
                         throw new Exception("Unexpected authentication response");
