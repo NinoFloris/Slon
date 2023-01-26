@@ -42,4 +42,3 @@ class PipeStreamingWriter: IStreamingWriter<byte>
         var _ = await _pipeWriter.FlushAsync(cancellationToken);
     }
 }
-

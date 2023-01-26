@@ -192,6 +192,9 @@ public partial class SlonDataSource : ICommandExecutionProvider<CommandExecution
     CommandExecution ICommandExecutionProvider<CommandExecution>.Get(in CommandContext<CommandExecution> context)
         => PgV3Protocol.GetDataRef<MultiplexingItem>(context.ReadSlot).CommandExecution;
 
+#if !NETSTANDARD2_0
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+#endif
     internal async ValueTask<CommandContextBatch<CommandExecution>> WriteMultiplexingCommand<TCommand>(TCommand command, CancellationToken cancellationToken = default)
         where TCommand: IPgCommand
     {
@@ -200,19 +203,7 @@ public partial class SlonDataSource : ICommandExecutionProvider<CommandExecution
         var item = new MultiplexingItem(command.BeginExecutionMethod, command.GetValues());
         var source = PgV3Protocol.CreateUnboundOperationSource(item, cancellationToken);
 
-        if (ChannelWriter.TryWrite(source))
-            return (CommandContext<CommandExecution>.Create(new IOCompletionPair(new (WriteResult.Unknown), source), this));
-
-        return await WriteAsync(this, source, cancellationToken);
-
-#if !NETSTANDARD2_0
-        [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
-#endif
-        static async ValueTask<CommandContextBatch<CommandExecution>> WriteAsync(SlonDataSource instance, OperationSource source, CancellationToken cancellationToken)
-        {
-            await instance.ChannelWriter.WriteAsync(source, cancellationToken).ConfigureAwait(false);
-            return CommandContext<CommandExecution>.Create(new IOCompletionPair(new (WriteResult.Unknown), source), instance);
-        }
+        return CommandContext<CommandExecution>.Create(new IOCompletionPair(new (WriteResult.Unknown), source), this);
     }
 }
 
