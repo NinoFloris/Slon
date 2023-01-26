@@ -1,9 +1,10 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net7.0</TargetFramework>
+    <TargetFrameworks>net7.0;net6.0</TargetFrameworks>
     <IsPackable>false</IsPackable>
     <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -14,7 +15,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Slon\Slon.csproj" />
-  </ItemGroup>
+    <ProjectReference Include="..\Slon\Slon.csproj"  />
 
+    <Reference Update="System.Private.CoreLib">
+      <Aliases>Runtime</Aliases>
+    </Reference>
+
+  </ItemGroup>
 </Project>

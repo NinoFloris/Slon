@@ -12,6 +12,8 @@
     <InternalsVisibleTo Include="Slon.Benchmark" />
     <PackageReference Include="Pipelines.Sockets.Unofficial" Version="2.2.2" />
     <PackageReference Include="System.IO.Pipelines" Version="7.0.0" />
+    <ProjectReference Include="../Slon.Polyfills/Slon.Polyfills.csproj" />
+
   </ItemGroup>
 
   <ItemGroup Condition=" '$(TargetFramework)' == 'netstandard2.0' ">
