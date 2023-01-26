@@ -348,13 +348,13 @@ class PgV3Protocol : Protocol
             static void ThrowOverflowException() => throw new OverflowException("Buffers cannot be larger than int.MaxValue, return ReadStatus.ConsumeData to free data while processing.");
         }
 
-        static Exception CreateUnexpectedError<T>(ReadOnlySequence<byte> buffer, scoped in MessageReader<PgV3Header>.ResumptionData resumptionData, long consumed, Exception? readerException = null)
+        static Exception CreateUnexpectedError<T>(Encoding encoding, ReadOnlySequence<byte> buffer, scoped in MessageReader<PgV3Header>.ResumptionData resumptionData, long consumed, Exception? readerException = null)
         {
             // Try to read error response.
             Exception exception;
             if (readerException is null && !resumptionData.IsDefault && resumptionData.Header.Code == BackendCode.ErrorResponse)
             {
-                var errorResponse = new ErrorResponse();
+                var errorResponse = new ErrorResponse(encoding);
                 Debug.Assert(resumptionData.MessageIndex <= int.MaxValue);
                 consumed -= resumptionData.MessageIndex;
                 // Let it start clean, as if it has to MoveNext for the first time.
@@ -434,7 +434,7 @@ class PgV3Protocol : Protocol
                     case ReadStatus.NeedMoreData:
                         break;
                     case ReadStatus.InvalidData:
-                        var exception = CreateUnexpectedError<T>(buffer, resumptionData, consumed, readerExn);
+                        var exception = CreateUnexpectedError<T>(protocol.Encoding, buffer, resumptionData, consumed, readerExn);
                         protocol.MoveToComplete(exception, brokenRead: true);
                         throw exception;
                     case ReadStatus.AsyncResponse:
@@ -492,7 +492,7 @@ class PgV3Protocol : Protocol
                     case ReadStatus.NeedMoreData:
                         break;
                     case ReadStatus.InvalidData:
-                        var exception = CreateUnexpectedError<T>(buffer, resumptionData, consumed, readerExn);
+                        var exception = CreateUnexpectedError<T>(protocol.Encoding, buffer, resumptionData, consumed, readerExn);
                         protocol.MoveToComplete(exception, brokenRead: true);
                         throw exception;
                     case ReadStatus.AsyncResponse:

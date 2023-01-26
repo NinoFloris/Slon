@@ -126,7 +126,7 @@ readonly struct CommandContextBatch<TExecution>: IEnumerable<CommandContext<TExe
 
         internal Enumerator(CommandContextBatch<TExecution> instance)
         {
-            if (_contexts is null)
+            if (instance._contexts is null)
             {
                 _current = instance._context;
                 _index = -2;

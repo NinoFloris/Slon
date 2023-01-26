@@ -41,8 +41,8 @@ struct AuthenticationRequest : IPgV3BackendMessage, IDisposable
         switch (AuthenticationType)
         {
             case AuthenticationType.MD5Password:
-                var salt = ArrayPool<byte>.Shared.Rent(4);
-                if(!reader.TryCopyTo(salt.AsSpan(0, 4)))
+                var salt = new Memory<byte>(ArrayPool<byte>.Shared.Rent(4), 0, 4);
+                if(!reader.TryCopyTo(salt.Span))
                     return ReadStatus.InvalidData;
                 reader.Advance(4);
                 MD5Salt = salt;

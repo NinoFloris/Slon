@@ -34,13 +34,13 @@ readonly struct PasswordMessage : IFrontendMessage
 
         var plaintext = ArrayPool<byte>.Shared.Rent(Encoding.GetByteCount(plainPassword) + Encoding.GetByteCount(username));
         var passwordEncodedCount = Encoding.GetBytes(plainPassword.AsSpan(), plaintext);
-        Encoding.GetBytes(username.AsSpan(), plaintext.AsSpan(passwordEncodedCount));
+        var usernameEncodedCount = Encoding.GetBytes(username.AsSpan(), plaintext.AsSpan(passwordEncodedCount));
 
         using var md5 = MD5.Create();
         var hashSize = md5.HashSize / 8;
 
         var pgHash = ArrayPool<byte>.Shared.Rent(hashSize);
-        if (!md5.TryComputeHash(plaintext, pgHash, out _))
+        if (!md5.TryComputeHash(plaintext.AsSpan(0, passwordEncodedCount + usernameEncodedCount), pgHash, out _))
             ThrowInvalidLength();
         ArrayPool<byte>.Shared.Return(plaintext, clearArray: true);
         var pgHexHash = ConvertShim.ToHexString(pgHash).ToLowerInvariant();
@@ -50,7 +50,7 @@ readonly struct PasswordMessage : IFrontendMessage
         salt.CopyTo(plainChallenge.AsSpan(hexHashEncodedCount));
         // We reuse pghash as the final output given md5 is always the same size.
         var challengeHash = pgHash;
-        if (!md5.TryComputeHash(plainChallenge, challengeHash, out _))
+        if (!md5.TryComputeHash(plainChallenge.AsSpan(0, hexHashEncodedCount + salt.Length), challengeHash, out _))
             ThrowInvalidLength();
         ArrayPool<byte>.Shared.Return(plainChallenge, clearArray: true);
 
