@@ -9,9 +9,8 @@ using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
-using Slon.Buffers;
 
-namespace Microsoft.AspNetCore.Internal;
+namespace Slon.Buffers;
 
 sealed class MemoryBufferWriter : Stream, IStreamingWriter<byte>, ICopyableBuffer<byte>
 {

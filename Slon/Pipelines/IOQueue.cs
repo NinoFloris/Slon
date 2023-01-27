@@ -6,7 +6,7 @@ using System.Collections.Concurrent;
 using System.IO.Pipelines;
 using System.Threading;
 
-namespace Slon;
+namespace Slon.Pipelines;
 
 class IOQueue : PipeScheduler
 #if !NETSTANDARD2_0

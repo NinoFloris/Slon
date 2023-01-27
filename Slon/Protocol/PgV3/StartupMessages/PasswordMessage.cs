@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Security.Cryptography;
 using System.Text;
+using Slon.Buffers;
 using Slon.Protocol.Pg;
 
 namespace Slon.Protocol.PgV3;

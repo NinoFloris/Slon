@@ -5,7 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Slon;
+namespace Slon.Pipelines;
 
 /// <summary>
 /// PipeReader wrapper that minimizes the cost of advance increments and simplifies forward movement and rereading the same buffer.

@@ -6,6 +6,7 @@ using Slon.Pg.Types;
 
 namespace Slon.Protocol.Pg;
 
+// TODO subtract 4 per parameter from parameterBufferSize to account for length as well
 struct ParameterContextBuilder
 {
     readonly int _length;

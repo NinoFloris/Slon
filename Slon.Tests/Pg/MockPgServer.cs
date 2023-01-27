@@ -13,6 +13,7 @@ using Slon.Pg.Types;
 using Slon.Protocol.PgV3;
 using Slon.Protocol.PgV3.Descriptors;
 using NUnit.Framework;
+using Slon.Pipelines;
 
 namespace Slon.Tests;
 

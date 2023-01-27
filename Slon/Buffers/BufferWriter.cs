@@ -1,13 +1,14 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System;
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
-using Slon.Buffers;
 using System.Text;
 
-namespace System.Buffers;
+namespace Slon.Buffers;
 
 /// <summary>
 /// A fast access struct that wraps <see cref="IBufferWriter{T}"/>.

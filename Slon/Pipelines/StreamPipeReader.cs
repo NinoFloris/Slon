@@ -1,8 +1,10 @@
+using System;
+using System.IO;
+using System.IO.Pipelines;
 using System.Threading;
 using System.Threading.Tasks;
-using Slon;
 
-namespace System.IO.Pipelines;
+namespace Slon.Pipelines;
 
 sealed class StreamSyncCapablePipeReader: PipeReader, ISyncCapablePipeReader
 {

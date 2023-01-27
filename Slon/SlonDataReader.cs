@@ -20,6 +20,8 @@ enum ReaderState
     Closed,
 }
 
+// TODO should close the WritableParameters if any (this will also dispose the underlying pooledmemory).
+
 // Implementation
 public sealed partial class SlonDataReader
 {

@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using System.Threading.Tasks.Sources;
 using Slon.Buffers;
 using Slon.Pg;
+using Slon.Pipelines;
 using Slon.Protocol.Pg;
 
 namespace Slon.Protocol.PgV3;

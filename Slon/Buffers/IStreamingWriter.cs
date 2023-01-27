@@ -4,6 +4,7 @@ using System.IO.Pipelines;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Slon.Pipelines;
 
 namespace Slon.Buffers;
 

@@ -8,8 +8,9 @@ using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using Pipelines.Sockets.Unofficial;
+using Slon.Pipelines;
 
-namespace Slon;
+namespace Slon.Protocol.Pg;
 
 abstract class PgSocketConnection
 {
