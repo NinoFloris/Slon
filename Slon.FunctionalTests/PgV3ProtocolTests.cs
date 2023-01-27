@@ -2,12 +2,13 @@ using System;
 using System.Net;
 using System.Threading.Channels;
 using System.Threading.Tasks;
-using NUnit.Framework;
+using Xunit;
 using Slon.Protocol;
 using Slon.Protocol.PgV3;
 
-namespace Slon.Tests;
+namespace Slon.FunctionalTests;
 
+[Collection("Database")]
 public class PgV3ProtocolTests
 {
     const string EndPoint = "127.0.0.1:5432";
@@ -25,7 +26,7 @@ public class PgV3ProtocolTests
         PoolSize = 10
     };
 
-    [Test]
+    [Fact]
     public async Task SimpleQueryAsync()
     {
         var dataSource = new SlonDataSource(Options, ProtocolOptions);
@@ -85,7 +86,7 @@ public class PgV3ProtocolTests
     //     }
     // }
 
-    [Test]
+    [Fact]
     public async ValueTask PipeliningTest()
     {
         const int NumRows = 1000;

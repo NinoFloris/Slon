@@ -62,9 +62,12 @@ readonly struct ParametersWriter: IDisposable
             else
                 totalByteCount += p.Size?.Value ?? 0;
 
-        _pgWriter.UpdateState(unknownOutputs, unknownOutputs.Length == 0 ? SizeResult.Zero : SizeResult.Unknown);
+        byteCount = totalByteCount + (Items.Length * 4);
+        if (unknownOutputs is null)
+            _pgWriter.UpdateState(unknownOutputs, SizeResult.Create(byteCount));
+        else
+            _pgWriter.UpdateState(unknownOutputs, unknownOutputs.Length == 0 ? SizeResult.Zero : SizeResult.Unknown);
 
-        byteCount = totalByteCount;
         return true;
     }
 
@@ -100,6 +103,8 @@ readonly struct ParametersWriter: IDisposable
     public void Write<TWriter>(ref BufferWriter<TWriter> buffer) where TWriter : IBufferWriter<byte>
     {
         var pgWriter = _pgWriter;
+        buffer.Commit();
+        pgWriter.RestartWriter();
         var unknownI = -1;
         var unknownOutputs = (BufferedOutput[])_pgWriter.State!;
         for (var i = 0; i < Items.Span.Length; i++)
@@ -114,6 +119,8 @@ readonly struct ParametersWriter: IDisposable
             if (size is { Kind: not SizeResultKind.Unknown, Value: { } byteCount } && buffer.BufferedBytes - bytesBuffered > sizeof(int) + byteCount)
                 throw new InvalidOperationException($"The '{p.GetConverterType().FullName}' converter wrote more than the previously reported size of the value.");
         }
+        pgWriter.Writer.Commit();
+        buffer = new BufferWriter<TWriter>(buffer.Output);
     }
 
     static void WriteParameter<TWriter>(ref BufferWriter<TWriter> buffer, PgWriter pgWriter, Parameter p, SizeResult? sizeResult, BufferedOutput? bufferedOutput, bool onePass) where TWriter : IBufferWriter<byte>
@@ -145,7 +152,7 @@ readonly struct ParametersWriter: IDisposable
         }
         else if (sizeResult is {} size)
         {
-            buffer.WriteInt(size.Value.GetValueOrDefault());
+            pgWriter.WriteInteger(size.Value.GetValueOrDefault());
             p.Write(pgWriter);
         }
     }

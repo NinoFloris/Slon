@@ -8,13 +8,12 @@ using System.Threading.Tasks;
 using Slon.Buffers;
 using Slon.Protocol.Pg;
 using Slon.Protocol.PgV3.Descriptors;
-using Parameter = Slon.Protocol.Pg.Parameter;
 
 namespace Slon.Protocol.PgV3;
 
 static class FormatCodeExtensions
 {
-    public static FormatCode GetFormatCode(this Pg.Parameter p) => p.HasTextWrite() ? FormatCode.Text : FormatCode.Binary;
+    public static FormatCode GetFormatCode(this Parameter p) => p.HasTextWrite() ? FormatCode.Text : FormatCode.Binary;
 }
 
 readonly struct Bind: IFrontendMessage
@@ -83,7 +82,7 @@ readonly struct Bind: IFrontendMessage
         var enumerator = _parametersWriter;
         var parameters = enumerator.Items;
         // Parameter format codes.
-        if (parameters.Length == 0)
+        if (parameters.Length == 0 || _parametersForAllCode == FormatCode.Text)
         {
             buffer.WriteShort(0);
         }
@@ -103,14 +102,12 @@ readonly struct Bind: IFrontendMessage
         buffer.WriteUShort((ushort)parameters.Length);
         if (!parameters.IsEmpty)
         {
-            if (_precomputedMessageLength == -1)
+            if (_precomputedMessageLength != -1)
+                _parametersWriter.Write(ref buffer);
+            else
             {
                 var parametersByteCount = _parametersWriter.WriteOnePass(ref buffer);
                 PgV3FrontendHeader.WriteHeader(ref bufferStart, FrontendCode.Bind, ComputeMessageLength(parametersByteCount));
-            }
-            else
-            {
-                _parametersWriter.Write(ref buffer);
             }
         }
 

@@ -23,6 +23,8 @@ class PgWriter
     bool _flushSuppressed;
     FlushMode _flushMode;
 
+    internal StreamingWriter<IStreamingWriter<byte>> Writer => _writer;
+
     internal PgWriter(IStreamingWriter<byte> output)
     {
         _writer = new StreamingWriter<IStreamingWriter<byte>>(output);
@@ -90,27 +92,27 @@ class PgWriter
 
         return _writer.FlushAsync(cancellationToken);
     }
-    
     // public abstract void Advance(int count);
     // public abstract Memory<byte> GetMemory(int sizeHint = 0);
     // public abstract Span<byte> GetSpan(int sizeHint = 0);
 
     public void WriteByte(byte value)
     {
-
+        _writer.WriteByte(value);
     }
 
 //
 //     public void WriteInteger(short value);
     public void WriteInteger(int value)
     {
-        
+        _writer.WriteInt(value);
     }
 
     public void WriteInteger(long value)
     {
-        
+        throw new NotImplementedException();
     }
+
 // #if !NETSTANDARD2_0
 //     public void WriteInteger(Int128 value);
 // #endif
@@ -118,7 +120,7 @@ class PgWriter
 //     public void WriteUnsignedInteger(ushort value);
     public void WriteUnsignedInteger(uint value)
     {
-        
+        _writer.WriteUInt(value);
     }
 //     public void WriteUnsignedInteger(ulong value);
 // #if !NETSTANDARD2_0
@@ -138,13 +140,19 @@ class PgWriter
     // Make sure to loop and flush
     public void WriteRaw(ReadOnlySequence<byte> sequence)
     {
-        
+
     }
 
     public ValueTask WriteRawAsync(ReadOnlySequence<byte> sequence, CancellationToken cancellationToken)
     {
         return new ValueTask();
     }
+
+    internal void RestartWriter()
+    {
+        _writer = new StreamingWriter<IStreamingWriter<byte>>(_writer.Output);
+    }
+
 }
 //
 // // Here to be able to specialize on TWriter (not sure this makes sense compared to the virtual overhead we add vs what we remove).

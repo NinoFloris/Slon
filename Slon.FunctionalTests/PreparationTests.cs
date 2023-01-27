@@ -2,10 +2,11 @@ using System;
 using System.Net;
 using System.Threading.Tasks;
 using Slon.Protocol.PgV3;
-using NUnit.Framework;
+using Xunit;
 
-namespace Slon.Tests;
+namespace Slon.FunctionalTests;
 
+[Collection("Database")]
 public class PreparationTests
 {
     const string EndPoint = "127.0.0.1:5432";
@@ -23,7 +24,7 @@ public class PreparationTests
         PoolSize = 10
     };
 
-    [Test]
+    [Fact]
     public async Task PipeSimpleQueryAsync()
     {
         var dataSource = new SlonDataSource(Options, ProtocolOptions);
