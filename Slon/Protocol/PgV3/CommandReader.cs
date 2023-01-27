@@ -524,6 +524,8 @@ class PgV3CommandReader
                 if (_state is not ReadState.Error)
                     CreateErrorMessage();
 
+                // Make sure the error response can MoveNext once again.
+                reader = MessageReader<PgV3Header>.Recreate(reader.Sequence, reader.GetResumptionData(), reader.Consumed);
                 if (!reader.ReadMessage(ref _errorResponse, out status))
                 {
                     _state = ReadState.Error;

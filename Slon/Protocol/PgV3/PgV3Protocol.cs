@@ -903,9 +903,9 @@ class PgV3Protocol : Protocol
 
             name = statement.Kind switch
             {
-                PreparationKind.Auto => $"A{++_statementCounter}",
-                PreparationKind.Command => $"C{++_statementCounter}",
-                PreparationKind.Global => $"G{++_statementCounter}",
+                PreparationKind.Auto => new SizedString($"A{++_statementCounter}", Encoding),
+                PreparationKind.Command => new SizedString($"C{++_statementCounter}", Encoding),
+                PreparationKind.Global => new SizedString($"G{++_statementCounter}", Encoding),
                 _ => throw new ArgumentOutOfRangeException()
             };
 

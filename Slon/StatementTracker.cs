@@ -29,12 +29,12 @@ sealed class StatementTracker
         return result;
     }
 
-    public PgV3Statement? Lookup(string statementText, PgTypeIdView parameterTypeNames)
+    /// Increments any auto preparation uses.
+    public PgV3Statement? LookupForUse(string statementText, PgTypeIdView parameterTypeNames)
     {
         if (!_statementsBySql.TryGetValue(statementText, out var statement))
             return null;
 
-        // TODO allow for multiple statements with differing parameter types to be cached.
         var i = 0;
         foreach (var dataTypeName in parameterTypeNames)
             if (!statement.ParameterTypes[i++].Equals(dataTypeName))

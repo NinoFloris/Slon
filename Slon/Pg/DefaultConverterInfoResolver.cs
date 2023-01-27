@@ -18,7 +18,7 @@ class DefaultConverterInfoResolver: IPgConverterInfoResolver
         var (defaultType, defaultName) = (type, dataTypeName) switch
         {
             // The typed default is important to get all the DataTypeName values lifted into a nullable. Don't simplify to default.
-            // Moving the types to the destructure also doesn't work as a default value is allowed to assign to a nullable of that type.
+            // Moving the types to the destructure also won't work because a default value is allowed to assign to a nullable of that type.
             (null, null) => default((Type?, DataTypeName?)),
             _ when type == typeof(int) || dataTypeName == DataTypeNames.Int4 => (typeof(int), DataTypeNames.Int4),
             _ when type == typeof(long) || dataTypeName == DataTypeNames.Int8 => (typeof(long), DataTypeNames.Int8),

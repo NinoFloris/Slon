@@ -5,11 +5,11 @@ namespace Slon.Protocol.PgV3;
 
 readonly struct Describe: IFrontendMessage
 {
-    readonly string _name;
+    readonly SizedString _name;
     readonly bool _isPortalName;
     readonly Encoding _encoding;
 
-    Describe(string name, bool isPortalName, Encoding encoding)
+    Describe(SizedString name, bool isPortalName, Encoding encoding)
     {
         _name = name;
         _isPortalName = isPortalName;
@@ -45,6 +45,6 @@ readonly struct Describe: IFrontendMessage
         buffer.WriteCString(portalName, encoding);
     }
 
-    public static Describe CreateForPreparedStatement(string preparedStatementName, Encoding encoding) => new(preparedStatementName, false, encoding);
-    public static Describe CreateForPortal(string portalName, Encoding encoding) => new(portalName, true, encoding);
+    public static Describe CreateForPreparedStatement(SizedString preparedStatementName, Encoding encoding) => new(preparedStatementName, false, encoding);
+    public static Describe CreateForPortal(string portalName, Encoding encoding) => new((SizedString)portalName, true, encoding);
 }

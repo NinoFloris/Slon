@@ -202,7 +202,7 @@ public partial class SlonDataSource : ICommandExecutionProvider<CommandExecution
 
         var item = new MultiplexingItem(command.BeginExecutionMethod, command.GetValues());
         var source = PgV3Protocol.CreateUnboundOperationSource(item, cancellationToken);
-
+        await ChannelWriter.WriteAsync(source, cancellationToken).ConfigureAwait(false);
         return CommandContext<CommandExecution>.Create(new IOCompletionPair(new (WriteResult.Unknown), source), this);
     }
 }
@@ -419,7 +419,7 @@ public partial class SlonDataSource: DbDataSource, IConnectionFactory<PgV3Protoc
         _channelWriter?.Complete();
     }
 
-    internal ParameterContextFactory GetSlonParameterContextFactory(string? statementText = null)
+    internal ParameterContextFactory GetParameterContextFactory(string? statementText = null)
     {
         var dbDeps = GetDbDependencies();
         return new(dbDeps, _facetsTransformer, dbDeps.ParameterContextBuilderFactory,
@@ -458,7 +458,7 @@ public partial class SlonDataSource: DbDataSource, IConnectionFactory<PgV3Protoc
     internal Statement? GetStatement(string statementText, PgTypeIdView parameterTypes)
     {
         var dbDeps = GetDbDependencies();
-        if (dbDeps.StatementsTracker.Lookup(statementText, parameterTypes) is { } statement)
+        if (dbDeps.StatementsTracker.LookupForUse(statementText, parameterTypes) is { } statement)
             return statement;
 
         if (parameterTypes.IsEmpty)

@@ -33,4 +33,7 @@ public class DatabaseService : ICollectionFixture<DatabaseService>
 
     internal ValueTask<SlonConnection> OpenConnectionAsync(SlonDataSourceOptions? options = null, CancellationToken cancellationToken = default)
         => GetOrAddDataSource(options).OpenConnectionAsync(cancellationToken);
+
+    internal SlonCommand CreateCommand(string? commandText = null, SlonDataSourceOptions? options = null)
+        => GetOrAddDataSource(options).CreateCommand(commandText);
 }

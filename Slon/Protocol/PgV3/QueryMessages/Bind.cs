@@ -61,7 +61,7 @@ readonly struct Bind: IFrontendMessage
         _parametersWriter = parametersWriter;
         _rowRepresentation = rowRepresentation;
         _encoding = encoding;
-        _preparedStatementName = preparedStatementName ?? string.Empty;
+        _preparedStatementName = preparedStatementName ?? SizedString.Empty;
         _precomputedMessageLength = ComputeMessageLength();
         Debug.Assert(_precomputedMessageLength == -1 && !_parametersWriter.Items.IsEmpty || _precomputedMessageLength > 0);
     }

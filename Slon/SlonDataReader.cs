@@ -46,7 +46,8 @@ public sealed partial class SlonDataReader
     {
         // If the enumerator task fails there is not much we can cleanup (or should have to).
         CommandContextBatch<CommandExecution>.Enumerator enumerator = (await batch.ConfigureAwait(false)).GetEnumerator();
-        enumerator.MoveNext();
+        var result = enumerator.MoveNext();
+        DebugShim.Assert(result); // We should always get one.
 
         PgV3CommandReader? commandReader = null;
         Operation? operation = null;

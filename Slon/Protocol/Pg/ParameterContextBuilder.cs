@@ -122,13 +122,14 @@ struct ParameterContextBuilder
         }
 
         var parameters = Parameters!;
+        var length = _index;
         var remainingBufferSize = _remainingBufferSize;
         Parameters = null;
         _remainingBufferSize = _parameterBufferSize;
         _index = 0;
         return new ParameterContext
         {
-            Parameters = new(parameters, _index + 1, pooledArray: true),
+            Parameters = new(parameters, length, pooledArray: true),
             Flags = _flags,
             MinimalBufferSegmentSize = _parameterBufferSize - remainingBufferSize
         };

@@ -18,6 +18,12 @@ readonly struct SizedString
         _byteCount = value.Length is 0 ? 0 : -1;
     }
 
+    public SizedString(string value, Encoding encoding)
+    {
+        _value = value;
+        _byteCount = encoding.GetByteCount(value);
+    }
+
     public int? ByteCount
     {
         get => _byteCount == -1 ? null : _byteCount;
@@ -42,7 +48,8 @@ readonly struct SizedString
         => ByteCount is null ? WithEncoding(encoding) : this;
 
     public static SizedString Empty => new(string.Empty);
-    public static implicit operator SizedString(string value) => new(value);
+    public static explicit operator SizedString(string value) => new(value);
+    public static implicit operator string(SizedString value) => value.Value;
 }
 
 static class BufferWriterExtensions

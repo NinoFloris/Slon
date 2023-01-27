@@ -154,7 +154,7 @@ public sealed partial class SlonCommand
                 // We return null (no change) for the cache here as we rely on command text changes to clear any caches.
                 return (ParameterContext.Empty, null);
 
-            return dataSource.GetSlonParameterContextFactory(statementText).Create(parameters, cache, createCache: true);
+            return dataSource.GetParameterContextFactory(statementText).Create(parameters, cache, createCache: true);
         }
 
         public IPgCommand.Values GetValues()
@@ -175,7 +175,7 @@ public sealed partial class SlonCommand
 
             return new()
             {
-                StatementText = statementText,
+                StatementText = (SizedString)statementText,
                 ExecutionFlags = executionFlags | _additionalFlags,
                 Statement = statement,
                 ExecutionTimeout = _instance._commandTimeout,

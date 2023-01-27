@@ -86,13 +86,13 @@ public class Resolver
 //         PgConverterOptions options = null!;
 //         for (int i = 0; i < innerLoop; i++)
 //         {
-//             var _ = Lookup(options);
+//             var _ = LookupForUse(options);
 //             // if (i % 10 == 0)
 //             //     ThreadStaticCache<string>.Info = null;
 //         }
 //
 //         [MethodImpl(MethodImplOptions.NoInlining)]
-//         static PgConverter<string>? Lookup(PgConverterOptions converterOptions)
+//         static PgConverter<string>? LookupForUse(PgConverterOptions converterOptions)
 //         {
 //             // Converter is PgConverter<string> converter
 //

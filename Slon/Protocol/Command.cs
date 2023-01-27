@@ -38,7 +38,7 @@ interface ICommand<TAdditionalValues, TExecutionState>
     TExecutionState BeginExecution(in Values values);
 
     // Also exposed as a delegate to help struct composition where carrying an interface constraint or boxing is not desired
-    // CreateExecution should not depend on instance state anyway, if it needs any then Values.State is the vehicle of choice.
+    // CreateExecution should not depend on instance state anyway, if it needs any then Values.Additional is the vehicle of choice.
     BeginExecutionDelegate BeginExecutionMethod { get; }
 
     readonly struct Values
