@@ -4,9 +4,16 @@ namespace Slon.Protocol.PgV3;
 
 struct ErrorResponse: IPgV3BackendMessage
 {
-    bool _atRfq;
+    enum ReadState
+    {
+        ErrorResponse,
+        Rfq,
+        RfqComplete
+    }
+
     readonly Encoding _encoding;
     readonly bool _expectRfq;
+    ReadState _state;
 
     /// <summary>
     /// Error and notice message field codes
@@ -41,11 +48,13 @@ struct ErrorResponse: IPgV3BackendMessage
         Message = null;
     }
 
+    public bool IsDefault => _encoding is null;
+    public bool IsRfqConsumed => _state is ReadState.RfqComplete;
     public ErrorOrNoticeMessage? Message { get; private set; }
 
     public ReadStatus Read(ref MessageReader<PgV3Header> reader)
     {
-        if (_atRfq)
+        if (_state is ReadState.Rfq)
             goto rfq;
 
         (string? severity, string? invariantSeverity, string? code, string? message, string? detail, string? hint) = (null, null, null, null, null, null);
@@ -153,10 +162,12 @@ struct ErrorResponse: IPgV3BackendMessage
         rfq:
         if (_expectRfq && !reader.MoveNextAndIsExpected(BackendCode.ReadyForQuery, out status, ensureBuffered: true))
         {
-            _atRfq = true;
+            _state = ReadState.Rfq;
+            return status;
         }
 
         reader.ConsumeCurrent();
+        _state = ReadState.RfqComplete;
         return ReadStatus.Done;
     }
 }

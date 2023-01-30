@@ -416,7 +416,7 @@ class PgV3CommandReader
             session.CloseWritableParameters();
 
         _state = CommandReaderState.UnrecoverablyCompleted;
-        // We sometimes don't have to abort if we were able to advance the protocol to a safe point (RFQ).
+        // We don't have to abort if we were able to advance the protocol to a safe point (RFQ).
         operation.Complete(abortProtocol ? ex : null);
     }
 
@@ -486,8 +486,6 @@ class PgV3CommandReader
             RowDescription,
             RowOrCompletion,
             CommandComplete,
-            Error,
-            ErrorComplete
         }
 
         RowDescription _rowDescription;
@@ -505,10 +503,9 @@ class PgV3CommandReader
         public ReadOnlySequence<byte> Buffer { get; private set; }
         public MessageReader<PgV3Header>.ResumptionData ResumptionData => _resumptionData;
         public bool IsParseCompleted => _state is not ReadState.Unstarted or ReadState.Parse;
-        public bool IsDescribeCompleted => _state is ReadState.RowOrCompletion or ReadState.CommandComplete or ReadState.Error;
-        public bool IsReadyForNext => _state is ReadState.CommandComplete or ReadState.ErrorComplete;
+        public bool IsDescribeCompleted => _state is ReadState.RowOrCompletion or ReadState.CommandComplete;
+        public bool IsReadyForNext => _state is ReadState.CommandComplete || _errorResponse.IsRfqConsumed;
 
-        public bool HasError => _state is not ReadState.RowOrCompletion or ReadState.CommandComplete;
         public ErrorOrNoticeMessage? Error => _errorResponse.Message;
         public ErrorOrNoticeMessage? PlanError => _errorResponse.Message is { SqlState: "0A000", Message: "cached plan must not change result type" } ? _errorResponse.Message : null;
 
@@ -517,14 +514,9 @@ class PgV3CommandReader
             _commandContext = commandContext;
         }
 
-        void CreateErrorMessage()
-        {
-            _errorResponse = new ErrorResponse(_rowDescription.Encoding);
-        }
-
         public bool TryGetCompleteResult(out CompleteCommand result)
         {
-            if (_resumptionData.IsDefault)
+            if (_state is ReadState.CommandComplete)
             {
                 result = _completeResult;
                 return true;
@@ -548,28 +540,26 @@ class PgV3CommandReader
 
         public ReadStatus Read(ref MessageReader<PgV3Header> reader)
         {
-            var status = ReadStatus.InvalidData;
-            if (_state is not ReadState.Error)
-                status = ReadCore(ref reader);
+            if (!_errorResponse.IsDefault)
+                goto error;
 
+            var status = ReadCore(ref reader);
             if (status is ReadStatus.InvalidData && reader.IsExpected(BackendCode.ErrorResponse, out _))
             {
-                if (_state is not ReadState.Error)
-                    CreateErrorMessage();
-
-                // Make sure the error response can MoveNext once again.
+                _errorResponse = new ErrorResponse(_rowDescription.Encoding);
+                // Make sure the error response can MoveNext once more.
                 reader = MessageReader<PgV3Header>.Recreate(reader.Sequence, reader.GetResumptionData(), reader.Consumed);
-                if (!reader.ReadMessage(ref _errorResponse, out status))
-                {
-                    _state = ReadState.Error;
-                    return status;
-                }
-
-                // We swallow the error given we expect errors at this point in the protocol.
-                return ReadStatus.Done;
+                goto error;
             }
-
             return status;
+
+            error:
+            if (!reader.ReadMessage(ref _errorResponse, out status))
+                return status;
+
+            // We swallow the error given we expect errors at this point in the protocol.
+            DebugShim.Assert(reader.Current.Code is BackendCode.ReadyForQuery && reader.CurrentRemaining is 0);
+            return ReadStatus.Done;
         }
 
         ReadStatus ReadCore(ref MessageReader<PgV3Header> reader)
@@ -669,16 +659,17 @@ class PgV3CommandReader
                     _resumptionData = reader.GetResumptionData();
                     Buffer = reader.UnconsumedSequence;
                     break;
-                default:
+                case BackendCode.CommandComplete:
                     if (_state is not ReadState.CommandComplete)
                         _completeResult = new CompleteCommand(reader.GetResumptionData(), reader.Consumed, Flags.HasErrorBarrier());
 
+                    // Always signal we reached command complete regardless of whether we need to resume.
+                    _state = ReadState.CommandComplete;
                     if (!reader.ReadMessage(ref _completeResult, out status))
-                    {
-                        _state = ReadState.CommandComplete;
                         return status;
-                    }
                     break;
+                default:
+                    return ReadStatus.InvalidData;
             }
 
             return ReadStatus.Done;
