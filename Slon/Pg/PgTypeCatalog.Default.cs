@@ -24,7 +24,7 @@ partial class PgTypeCatalog
                     if (info.RangeName is { } rangeName)
                         yield return new(rangeName, info.RangeType!.Value);
                     if (info.MultiRangeName is { } multiRangeName)
-                        yield return new(multiRangeName, info.RangeType!.Value);
+                        yield return new(multiRangeName, info.MultiRangeType!.Value);
                 }
             }
         }

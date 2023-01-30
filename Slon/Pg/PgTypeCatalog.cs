@@ -89,7 +89,7 @@ sealed partial class PgTypeCatalog
             if (!t.IsPortable)
                 throw new ArgumentException($"Type '{t}' is not portable, all types passed to this constructor must be portable.");
 
-            _typesByDataTypeName[(string)t.Identifier.DataTypeName] = t;
+            _typesByDataTypeName.Add((string)t.Identifier.DataTypeName, t);
         }
     }
 
@@ -104,11 +104,11 @@ sealed partial class PgTypeCatalog
             if (t.IsPortable)
                 throw new ArgumentException($"Type '{t}' is portable, all types passed to this constructor must not be portable.");
 
-            _typesByDataTypeName[(string)dataTypeName] = t;
+            _typesByDataTypeName.Add((string)dataTypeName, t);
             if (typesByOid is not null && dataTypeNameLookup is not null)
             {
-                typesByOid[(uint)t.Identifier.Oid] = t;
-                dataTypeNameLookup[(uint)t.Identifier.Oid] = dataTypeName;
+                typesByOid.Add((uint)t.Identifier.Oid, t);
+                dataTypeNameLookup.Add((uint)t.Identifier.Oid, dataTypeName);
             }
         }
     }
