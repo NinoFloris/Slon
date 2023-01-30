@@ -190,6 +190,21 @@ class PgV3CommandReader
         }
     }
 
+
+    // TODO
+    // public void Close()
+    // {
+    //     while (Read())
+    //     {}
+    //     CloseCore();
+    // }
+
+    public async ValueTask CloseAsync()
+    {
+        while (await ReadAsync().ConfigureAwait(false))
+        {}
+    }
+
     ValueTask<T> ReadMessageAsync<T>(T message, CancellationToken cancellationToken, Operation? operation = null) where T : IBackendMessage<PgV3Header>
     {
         var op = operation ?? _operation;
@@ -232,9 +247,20 @@ class PgV3CommandReader
         void ThrowNotCompleted() => throw new InvalidOperationException("Command reader is not successfully completed.");
     }
 
+    ValueTask HandleWritableParameters(bool async, IReadOnlyCollection<IParameterSession> writableParameters)
+    {
+        // TODO actually handle writable intput/output and output parameters.
+        _commandStart.Session?.CloseWritableParameters();
+        throw new NotImplementedException();
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Task<bool> ReadAsync(CancellationToken cancellationToken = default)
     {
+        // If we have writable parameters we immediately go async so we can fully read and process the first row.
+        if (_state is CommandReaderState.Initialized && _commandStart.Session is { WritableParameters: { } writableParameters })
+            return Core(this, default, writableParameters, cancellationToken);
+
         switch (_state)
         {
             case CommandReaderState.Initialized:
@@ -264,7 +290,7 @@ class PgV3CommandReader
                 {
                     // TODO implement ConsumeData
                     // Only go async once we have to
-                    ReadStatus.NeedMoreData or ReadStatus.AsyncResponse => Core(this, status, cancellationToken),
+                    ReadStatus.NeedMoreData or ReadStatus.AsyncResponse => Core(this, status, null, cancellationToken),
                     ReadStatus.Done or ReadStatus.InvalidData => CompleteCommand(this, unexpected: status is ReadStatus.InvalidData, cancellationToken).AsTask(),
                     _ => ThrowArgumentOutOfRange()
                 };
@@ -272,14 +298,19 @@ class PgV3CommandReader
                 return HandleUncommon(this);
         }
 
-        static async Task<bool> Core(PgV3CommandReader instance, ReadStatus status, CancellationToken cancellationToken = default)
+        static async Task<bool> Core(PgV3CommandReader instance, ReadStatus status, IReadOnlyCollection<IParameterSession>? writableParameters = null, CancellationToken cancellationToken = default)
         {
-            var first = true;
+            // Skip the read if we haven't gotten any writable parameters, in that case we handle the given status (which is the most common reason for calling this method).
+            var skipRead = writableParameters is null;
+            // Only expect writableParameters if we're on the first row (CommandReaderState.Initialized).
+            DebugShim.Assert(writableParameters is null || instance._state is CommandReaderState.Initialized);
             switch (instance._state)
             {
                 case CommandReaderState.Initialized:
                     // First row is already loaded.
                     instance._state = CommandReaderState.Active;
+                    if (writableParameters is not null)
+                        await instance.HandleWritableParameters(async: true, writableParameters);
                     return true;
                 case CommandReaderState.Active:
                     while (true)
@@ -288,18 +319,18 @@ class PgV3CommandReader
                         {
                             try
                             {
-                                if (!first && instance._rowReader.ReadNext(out status))
+                                if (!skipRead && instance._rowReader.ReadNext(out status))
                                     return true;
                             }
                             catch (Exception ex)
                             {
-                                instance.UnrecoverablyComplete(instance._operation, ex);
+                                instance.CompleteUnrecoverably(instance._operation, ex);
                                 throw;
                             }
                         }
-                        else if (instance._rowReader.ReadNext(out status))
+                        else if (!skipRead && instance._rowReader.ReadNext(out status))
                             return true;
-                        first = false;
+                        skipRead = false;
 
                         switch (status)
                         {
