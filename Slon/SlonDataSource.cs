@@ -80,23 +80,29 @@ public partial class SlonDataSource : ICommandExecutionProvider<CommandExecution
     {
         readonly IPgCommand.BeginExecutionDelegate _beginExecutionDelegate;
         IPgCommand.Values _values;
+        CommandExecution _commandExecution;
 
         public MultiplexingItem(IPgCommand.BeginExecutionDelegate beginExecutionDelegate, in IPgCommand.Values values)
         {
             _beginExecutionDelegate = beginExecutionDelegate;
             _values = values;
+            _commandExecution = default;
         }
 
-        public CommandExecution CommandExecution { get; private set; }
+        public CommandExecution CommandExecution
+        {
+            get => _commandExecution;
+            set
+            {
+                // Null out the values so any heap objects can be freed before the entire operation is done.
+                _values = default;
+                _commandExecution = value;
+            }
+        }
 
         public IPgCommand.Values GetValues() => _values;
         public IPgCommand.BeginExecutionDelegate BeginExecutionMethod => throw new NotSupportedException();
-        public CommandExecution BeginExecution(in IPgCommand.Values values)
-        {
-            // Null out the values so any heap objects can be freed before the entire operation is done.
-            _values = default;
-            return CommandExecution = _beginExecutionDelegate(values);
-        }
+        public CommandExecution BeginExecution(in IPgCommand.Values values) => _beginExecutionDelegate(values);
     }
 
     static async Task MultiplexingCommandWriter(ChannelReader<OperationSource> reader, SlonDataSource dataSource)
@@ -183,8 +189,8 @@ public partial class SlonDataSource : ICommandExecutionProvider<CommandExecution
         static ValueTask<WriteResult> WriteCommand(PgV3CommandWriter commandWriter, OperationSource source, bool flushHint)
         {
             ref var command = ref PgV3Protocol.GetDataRef<MultiplexingItem>(source);
-            var commandContext = commandWriter.WriteAsync(source, ref command, flushHint, source.CancellationToken);
-            // We can drop the commandContext as it was written into the source data to be retrieved via the ICommandExecutionProvider.
+            var commandContext = commandWriter.WriteAsync(source, command, flushHint, source.CancellationToken);
+            command.CommandExecution = commandContext.GetCommandExecution();
             return commandContext.WriteTask;
         }
     }
@@ -354,14 +360,14 @@ public partial class SlonDataSource: DbDataSource, IConnectionFactory<PgV3Protoc
     {
         EnsureInitialized();
         // TODO SingleThreadSynchronizationContext for sync writes happening async.
-        return GetDbDependencies().CommandWriter.WriteAsync(slot, ref command, flushHint: true, CancellationToken.None);
+        return GetDbDependencies().CommandWriter.WriteAsync(slot, command, flushHint: true, CancellationToken.None);
     }
 
     internal async ValueTask<CommandContext<CommandExecution>> WriteCommandAsync<TCommand>(OperationSlot slot, TCommand command, CancellationToken cancellationToken = default)
         where TCommand : IPgCommand
     {
         await EnsureInitializedAsync(cancellationToken);
-        return GetDbDependencies().CommandWriter.WriteAsync(slot, ref command, flushHint: true, cancellationToken);
+        return GetDbDependencies().CommandWriter.WriteAsync(slot, command, flushHint: true, cancellationToken);
     }
 
     internal async ValueTask<OperationSlot> GetSlotAsync(bool exclusiveUse, TimeSpan connectionTimeout, CancellationToken cancellationToken = default)

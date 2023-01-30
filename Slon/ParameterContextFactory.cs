@@ -239,7 +239,7 @@ readonly struct ParameterCache : IDisposable
     int BuilderRevision { get; }
     ReadOnlySpan<ParameterCacheItem> Items => _pooledMemory.Span;
 
-    void ThrowDefaultValue() => throw new InvalidOperationException($"This operation cannot be performed on a default value of {nameof(ParameterCache)}.");
+    static void ThrowDefaultValue() => throw new InvalidOperationException($"This operation cannot be performed on a default value of {nameof(ParameterCache)}.");
 
     public bool IsDefault => _pooledMemory.IsDefault;
     public bool TryGetItems(ParameterContextBuilder builder, out ReadOnlySpan<ParameterCacheItem> items)

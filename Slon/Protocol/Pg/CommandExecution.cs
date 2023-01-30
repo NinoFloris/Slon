@@ -22,29 +22,44 @@ readonly struct CommandExecution
 {
     readonly ExecutionFlags _executionFlags;
     readonly CommandFlags _flags;
-    readonly object? _sessionOrStatement;
+    readonly object _sessionOrStatement;
 
     CommandExecution(ExecutionFlags executionFlags, CommandFlags flags, object? sessionOrStatement)
     {
         _executionFlags = executionFlags;
         _flags = flags;
-        _sessionOrStatement = sessionOrStatement;
+        // string.Empty is a sentinel so we always know whether we're looking at a default struct (which would have null).
+        _sessionOrStatement = sessionOrStatement ?? string.Empty;
     }
 
     // TODO improve the api of this 'thing'.
     public (ExecutionFlags ExecutionFlags, CommandFlags Flags) TryGetSessionOrStatement(out ICommandSession? session, out Statement? statement)
     {
-        if (_sessionOrStatement is Statement value)
+        var sessionOrStatement = _sessionOrStatement;
+        if (sessionOrStatement is null)
+            ThrowDefaultValue();
+
+        if (sessionOrStatement is Statement statementValue)
         {
-            statement = value;
+            statement = statementValue;
             session = null;
-            return (_executionFlags, _flags);
+        }
+        else if (sessionOrStatement is ICommandSession sessionValue)
+        {
+            statement = null;
+            session = sessionValue;
+        }
+        else
+        {
+            // The sentinel case.
+            statement = null;
+            session = null;
         }
 
-        statement = null;
-        session = (ICommandSession?)_sessionOrStatement;
         return (_executionFlags, _flags);
     }
+
+    static void ThrowDefaultValue() => throw new InvalidOperationException($"This operation cannot be performed on a default value of {nameof(CommandExecution)}.");
 
     public static CommandExecution Create(ExecutionFlags executionFlags, CommandFlags flags) => new(executionFlags, flags, null);
     public static CommandExecution Create(ExecutionFlags executionFlags, CommandFlags flags, ICommandSession session)

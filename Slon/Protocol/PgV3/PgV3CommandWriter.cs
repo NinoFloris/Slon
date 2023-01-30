@@ -1,8 +1,10 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using Slon.Buffers;
 using Slon.Pg;
 using Slon.Protocol.Pg;
@@ -22,8 +24,7 @@ sealed class PgV3CommandWriter: CommandWriter<CommandValues, CommandExecution>
         _agnosticStatementMapper = agnosticStatementMapper;
     }
 
-    // Note: ref command to allow structs to mutate themselves in BeginExecution.
-    public override CommandContext<CommandExecution> WriteAsync<TCommand>(OperationSlot slot, ref TCommand command, bool flushHint = true, CancellationToken cancellationToken = default)
+    public override CommandContext<CommandExecution> WriteAsync<TCommand>(OperationSlot slot, in TCommand command, bool flushHint = true, CancellationToken cancellationToken = default)
     {
         if (slot.Protocol is not PgV3Protocol protocol)
         {
@@ -36,7 +37,6 @@ sealed class PgV3CommandWriter: CommandWriter<CommandValues, CommandExecution>
             ThrowInvalidCommand();
             return default;
         }
-
 
         var values = pgCommand.GetValues();
         CommandContext<CommandExecution> result;
@@ -148,11 +148,11 @@ sealed class PgV3CommandWriter: CommandWriter<CommandValues, CommandExecution>
             var parameterContext = _values.Additional.ParameterContext;
             try
             {
-                var parametersWriter = new ParametersWriter(parameterContext, _protocol, _typeCatalog, FlushMode.None); // Don't do anything during flushing, it's all buffered.
                 if (!_values.ExecutionFlags.HasPrepared())
                     Parse.WriteMessage(ref buffer, _typeCatalog, _values.StatementText, parameterContext.Parameters, _statementName, encoding);
 
                 // Bind is rather big, duplicating things for a static WriteMessage/WriteStreamingMessage becomes rather bloaty, just new the struct.
+                using var parametersWriter = new ParametersWriter(parameterContext, _protocol, _typeCatalog, FlushMode.None); // Don't do anything during flushing, it's all buffered.
                 new Bind(portal, parametersWriter, _values.Additional.RowRepresentation, _statementName, encoding).Write(ref buffer);
 
                 // We don't have to describe if we already known the statement fields from another connection preparation.

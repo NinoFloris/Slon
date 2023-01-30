@@ -62,6 +62,7 @@ readonly struct ParametersWriter: IDisposable
             else
                 totalByteCount += p.Size?.Value ?? 0;
 
+        // TODO If byteCount small enough return false to do one pass writing.
         byteCount = totalByteCount + (Items.Length * 4);
         if (unknownOutputs is null)
             _pgWriter.UpdateState(unknownOutputs, SizeResult.Create(byteCount));
