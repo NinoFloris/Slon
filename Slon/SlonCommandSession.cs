@@ -32,7 +32,7 @@ class SlonCommandSession: ICommandSession
         {
             // TODO return a view instead.
             if (_parameterContext is null)
-                return Array.Empty<IParameterSession>();
+                return null;
 
             if (_outputSessions is { } sessions)
                 return sessions;

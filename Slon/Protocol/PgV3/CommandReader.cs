@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
 using System.Runtime.CompilerServices;
@@ -105,7 +106,7 @@ class PgV3CommandReader
 #if !NETSTANDARD2_0
         [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
 #endif
-    // If this throws due to a protocol issue it will complete the operation and transition itself to UnrecoverablyCompleted.
+    // If this throws due to a protocol issue it will complete the operation and transition itself to CompleteUnrecoverably.
     // The operation itself will be completed with an exception if the known protocol state is indeterminate
     // or it will be completed 'succesfully' if the next operation could still succeed due to being able to reach a safe point.
     public async ValueTask InitializeAsync(CommandContext<CommandExecution> commandContext, CancellationToken cancellationToken = default)
@@ -127,9 +128,10 @@ class PgV3CommandReader
         try
         {
             commandStart = await ReadMessageAsync(commandStart, cancellationToken, operation).ConfigureAwait(false);
-            if (commandStart is { PlanError: { } error, Statement: not null })
+            if (commandStart.Error is { } error)
             {
-                commandStart.Statement.Invalidate();
+                if (commandStart is { PlanError: not null, Statement: not null })
+                    commandStart.Statement.Invalidate();
                 ThrowPostgresException(error);
             }
             if (commandStart.ExecutionFlags.HasPreparing())
@@ -151,10 +153,7 @@ class PgV3CommandReader
                     commandStart.Session!.CancelPreparation(ex);
             }
 
-            if (commandStart.Session is { } session)
-                session.CloseWritableParameters();
-
-            UnrecoverablyComplete(operation, ex, abortProtocol: !commandStart.IsReadyForNext);
+            CompleteUnrecoverably(operation, ex, abortProtocol: !commandStart.IsReadyForNext);
             throw;
         }
 
@@ -207,7 +206,7 @@ class PgV3CommandReader
             }
             catch (Exception ex) when (ex is not TimeoutException && (ex is not OperationCanceledException || ex is OperationCanceledException oce && oce.CancellationToken != cancellationToken))
             {
-                instance.UnrecoverablyComplete(operation, ex);
+                instance.CompleteUnrecoverably(operation, ex);
                 throw;
             }
         }
@@ -254,7 +253,7 @@ class PgV3CommandReader
                     }
                     catch (Exception ex)
                     {
-                        UnrecoverablyComplete(_operation, ex);
+                        CompleteUnrecoverably(_operation, ex);
                         throw;
                     }
                 }
@@ -335,7 +334,7 @@ class PgV3CommandReader
                 default:
                 {
                     var ex = new ArgumentOutOfRangeException();
-                    instance.UnrecoverablyComplete(instance._operation, ex);
+                    instance.CompleteUnrecoverably(instance._operation, ex);
                     return Task.FromException<bool>(ex);
                 }
             }
@@ -360,7 +359,7 @@ class PgV3CommandReader
             if (unexpected)
             {
                 // We don't need to pass an exception, InvalidData kills the connection.
-                instance.UnrecoverablyComplete(instance._operation);
+                instance.CompleteUnrecoverably(instance._operation);
                 return false;
             }
 
@@ -380,8 +379,11 @@ class PgV3CommandReader
         static Task<bool> ThrowArgumentOutOfRange() => Task.FromException<bool>(new ArgumentOutOfRangeException());
     }
 
-    void UnrecoverablyComplete(Operation operation, Exception? ex = null, bool abortProtocol = true)
+    void CompleteUnrecoverably(Operation operation, Exception? ex = null, bool abortProtocol = true)
     {
+        if (_commandStart.Session is { } session)
+            session.CloseWritableParameters();
+
         _state = CommandReaderState.UnrecoverablyCompleted;
         // We sometimes don't have to abort if we were able to advance the protocol to a safe point (RFQ).
         operation.Complete(abortProtocol ? ex : null);
@@ -476,6 +478,7 @@ class PgV3CommandReader
         public bool IsReadyForNext => _state is ReadState.CommandComplete or ReadState.ErrorComplete;
 
         public bool HasError => _state is not ReadState.RowOrCompletion or ReadState.CommandComplete;
+        public ErrorOrNoticeMessage? Error => _errorResponse.Message;
         public ErrorOrNoticeMessage? PlanError => _errorResponse.Message is { SqlState: "0A000", Message: "cached plan must not change result type" } ? _errorResponse.Message : null;
 
         public void Initialize(in CommandContext<CommandExecution> commandContext)
@@ -518,7 +521,6 @@ class PgV3CommandReader
             if (_state is not ReadState.Error)
                 status = ReadCore(ref reader);
 
-            // TODO implement more cases for parse errors, parameter type errors etc.
             if (status is ReadStatus.InvalidData && reader.IsExpected(BackendCode.ErrorResponse, out _))
             {
                 if (_state is not ReadState.Error)
@@ -532,16 +534,8 @@ class PgV3CommandReader
                     return status;
                 }
 
-                // We swallow the error if it's expected, we'll handle it outside, in InitializeAsync.
-                if (PlanError is not null)
-                {
-                    _errorResponse = default;
-                    return ReadStatus.Done;
-                }
-
-                _errorResponse = default;
-                return ReadStatus.InvalidData;
-                // TODO try read until RFQ so we don't have to kill the connection.
+                // We swallow the error given we expect errors at this point in the protocol.
+                return ReadStatus.Done;
             }
 
             return status;
@@ -603,6 +597,7 @@ class PgV3CommandReader
                 goto rowOrCompletion;
 
             describe:
+            // We take a copy to revert to once we know which of the two codes (NoData or RowDescription) we received.
             var readerCopy = reader;
             if (_state is not ReadState.RowDescription && !reader.MoveNext())
             {
@@ -736,7 +731,7 @@ class PgV3CommandReader
 
         // We're dropping down to manual here because reconstructing a SequenceReader every row is too slow.
         // Invariant is that this method cannot throw exceptions unless BackendMessage.DebugEnabled, who knew try catch could be expensive.
-        // The reason we would want to know about any exceptions is that in such an event we must transition to UnrecoverablyCompleted.
+        // The reason we would want to know about any exceptions is that in such an event we must transition to CompleteUnrecoverably.
         public bool ReadNext(out ReadStatus status)
         {
             PgV3Header header;

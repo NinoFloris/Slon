@@ -349,18 +349,20 @@ class PgV3Protocol : Protocol
             static void ThrowOverflowException() => throw new OverflowException("Buffers cannot be larger than int.MaxValue, return ReadStatus.ConsumeData to free data while processing.");
         }
 
-        static Exception CreateUnexpectedError<T>(Encoding encoding, ReadOnlySequence<byte> buffer, scoped in MessageReader<PgV3Header>.ResumptionData resumptionData, long consumed, Exception? readerException = null)
+        static Exception CreateUnexpectedError<T>(PgV3Protocol protocol, ReadOnlySequence<byte> buffer, scoped in MessageReader<PgV3Header>.ResumptionData resumptionData, long consumed, Exception? readerException = null)
         {
             // Try to read error response.
             Exception exception;
             if (readerException is null && !resumptionData.IsDefault && resumptionData.Header.Code == BackendCode.ErrorResponse)
             {
-                var errorResponse = new ErrorResponse(encoding);
+                // When we're not Ready yet we're in the startup phase where PG closes the connection without an RFQ.
+                var errorResponse = new ErrorResponse(protocol.Encoding, expectRfq: protocol.State is not ProtocolState.Created);
                 Debug.Assert(resumptionData.MessageIndex <= int.MaxValue);
                 consumed -= resumptionData.MessageIndex;
                 // Let it start clean, as if it has to MoveNext for the first time.
                 MessageReader<PgV3Header>.ResumptionData emptyResumptionData = default;
                 var errorResponseStatus = ReadCore(ref errorResponse, buffer, ref emptyResumptionData, ref consumed, false);
+                // TODO make this work like a normal message read.
                 if (errorResponseStatus != ReadStatus.Done)
                     exception = new Exception($"Unexpected error on message: {typeof(T).FullName}, could not read full error response, terminated connection.");
                 else
@@ -412,7 +414,7 @@ class PgV3Protocol : Protocol
             var resumed = false;
             do
             {
-                var buffer =protocol._reader.ReadAtLeast(ComputeMinimumSize(consumed, resumptionData, protocol._protocolOptions.MaximumMessageChunkSize), readTimeout);
+                var buffer = protocol._reader.ReadAtLeast(ComputeMinimumSize(consumed, resumptionData, protocol._protocolOptions.MaximumMessageChunkSize), readTimeout);
 
                 try
                 {
@@ -435,7 +437,7 @@ class PgV3Protocol : Protocol
                     case ReadStatus.NeedMoreData:
                         break;
                     case ReadStatus.InvalidData:
-                        var exception = CreateUnexpectedError<T>(protocol.Encoding, buffer, resumptionData, consumed, readerExn);
+                        var exception = CreateUnexpectedError<T>(protocol, buffer, resumptionData, consumed, readerExn);
                         protocol.MoveToComplete(exception, brokenRead: true);
                         throw exception;
                     case ReadStatus.AsyncResponse:
@@ -493,7 +495,7 @@ class PgV3Protocol : Protocol
                     case ReadStatus.NeedMoreData:
                         break;
                     case ReadStatus.InvalidData:
-                        var exception = CreateUnexpectedError<T>(protocol.Encoding, buffer, resumptionData, consumed, readerExn);
+                        var exception = CreateUnexpectedError<T>(protocol, buffer, resumptionData, consumed, readerExn);
                         protocol.MoveToComplete(exception, brokenRead: true);
                         throw exception;
                     case ReadStatus.AsyncResponse:

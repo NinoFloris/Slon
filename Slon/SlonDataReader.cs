@@ -87,8 +87,7 @@ public sealed partial class SlonDataReader
             try
             {
                 if (commandReader is not null)
-                    while (await commandReader.ReadAsync().ConfigureAwait(false))
-                    {}
+                    await commandReader.CloseAsync();
 
                 var result = enumerator.MoveNext();
                 DebugShim.Assert(!result);
@@ -124,8 +123,16 @@ public sealed partial class SlonDataReader
                 if (_state is not ReaderState.Uninitialized or ReaderState.Closed)
                     _state = ReaderState.Closed;
                 break;
+            case CommandReaderState.Active:
+                break;
+            case CommandReaderState.None:
+            default:
+                ThrowArgumentOutOfRange(_commandReader.State);
+                break;
         }
 
+        void ThrowArgumentOutOfRange(CommandReaderState state)
+            => throw new ArgumentOutOfRangeException(nameof(_commandReader.State), state, "Unexpected case.");
         void HandleCompleted()
         {
             // Store this before we move on.
