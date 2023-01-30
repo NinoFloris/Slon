@@ -251,6 +251,7 @@ readonly struct ParametersWriter: IDisposable
 
     public void Dispose()
     {
-         _protocol.ReturnPgWriter(_pgWriter);
+        if (_pgWriter is not null)
+            _protocol.ReturnPgWriter(_pgWriter);
     }
 }
