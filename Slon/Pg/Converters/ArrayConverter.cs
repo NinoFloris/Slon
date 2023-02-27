@@ -3,6 +3,7 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using System.Threading.Tasks;
 using Slon.Pg.Types;
@@ -236,6 +237,7 @@ class MultiDimArrayConverter<T, TConverter> : PgConverter<Array> where TConverte
 // TODO Support icollection in general.
 sealed class ArrayConverterFactory: PgConverterFactory
 {
+    [RequiresUnreferencedCode("Reflection used for pg type conversions.")]
     public override PgConverterInfo? CreateConverterInfo(Type type, PgConverterOptions options, PgTypeId? pgTypeId = null)
     {
         if (!type.IsArray)
@@ -265,6 +267,7 @@ sealed class ArrayConverterFactory: PgConverterFactory
             (true, _) => CreateInfoFromElementInfo(elementInfo, (PgConverter)Activator.CreateInstance(typeof(MultiDimArrayConverterResolver<>).MakeGenericType(elementType), elementInfo, rank)!)
         };
 
+        [RequiresUnreferencedCode("Reflection used for pg type conversions.")]
         PgConverterInfo CreateInfoFromElementInfo(PgConverterInfo elementInfo, PgConverter converter)
         {
             PgConverterInfo info;

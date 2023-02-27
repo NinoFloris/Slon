@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using System.Threading.Tasks;
 using Slon.Pg.Types;
@@ -9,6 +10,7 @@ namespace Slon.Pg;
 
 abstract class PgConverterFactory : PgConverter
 {
+    [RequiresUnreferencedCode("Reflection used for pg type conversions.")]
     public abstract PgConverterInfo? CreateConverterInfo(Type type, PgConverterOptions options, PgTypeId? pgTypeId = null);
 
     internal sealed override bool IsDbNullValueAsObject(object? value, PgConverterOptions options) => throw new NotSupportedException();

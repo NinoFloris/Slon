@@ -1,0 +1,75 @@
+name: NativeAOT
+
+on:
+  push:
+    branches:
+      - main
+      - 'hotfix/**'
+    tags:
+      - '*'
+  pull_request:
+
+env:
+  dotnet_sdk_version: '8.0.100-preview.1.23115.2'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: NuGet Cache
+        uses: actions/cache@v3
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/Directory.Build.targets') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+      - name: Setup .NET Core SDK
+        uses: actions/setup-dotnet@v3.0.3
+        with:
+          dotnet-version: |
+            ${{ env.dotnet_sdk_version }}
+      - name: Setup Native AOT prerequisites
+        run: sudo apt-get install clang zlib1g-dev
+        shell: bash
+
+      - name: Build
+        run: dotnet publish Slon.NativeAotSample/Slon.NativeAotSample.csproj -r linux-x64 -c Release
+        shell: bash
+
+      # Uncomment the following to SSH into the agent running the build (https://github.com/mxschmitt/action-tmate)
+      #- uses: actions/checkout@v3
+      #- name: Setup tmate session
+      #  uses: mxschmitt/action-tmate@v3
+
+      - name: Write binary size to summary
+        run: |
+          size="$(ls -l Slon.NativeAotSample/bin/Release/net8.0/linux-x64/native/Slon.NativeAotSample | cut -d ' ' -f 5)"
+          echo "Binary size is $size bytes ($((size / (1024 * 1024))) mb)" >> $GITHUB_STEP_SUMMARY
+
+      - name: Dump mstat
+        run: dotnet run --project MStatDumper/MStatDumper.csproj -c release -- "Slon.NativeAotSample/obj/Release/net8.0/linux-x64/native/Slon.NativeAotSample.mstat" md >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload mstat
+        uses: actions/upload-artifact@v3.1.2
+        with:
+          name: Slon.mstat
+          path: "Slon.NativeAotSample/obj/Release/net8.0/linux-x64/native/Slon.NativeAotSample.mstat"
+          retention-days: 3
+
+      - name: Assert binary size
+        run: |
+          size="$(ls -l Slon.NativeAotSample/bin/Release/net8.0/linux-x64/native/Slon.NativeAotSample | cut -d ' ' -f 5)"
+          if (( size > 10240000 )); then
+            echo "Binary size exceeds 10mb threshold"
+            exit 1
+          fi

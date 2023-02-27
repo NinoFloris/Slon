@@ -255,8 +255,14 @@ public partial class SlonDataSource: DbDataSource, IConnectionFactory<PgV3Protoc
     bool _isInitialized;
 
     public SlonDataSource(string connectionString)
+        : this(new()
+        {
+            EndPoint = new IPEndPoint(IPAddress.Parse("127.0.0.1"), 5432),
+            Username = "postgres",
+            Password = "postgres123",
+        }, new(), null)
     {
-        
+
     }
 
     internal SlonDataSource(SlonDataSourceOptions options, PgV3ProtocolOptions pgV3ProtocolOptions, IPgDatabaseInfoProvider? pgDatabaseInfoProvider = null)

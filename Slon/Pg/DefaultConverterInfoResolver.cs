@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Numerics;
 using Slon.Pg.Converters;
 using Slon.Pg.Types;
@@ -14,6 +15,7 @@ class DefaultConverterInfoResolver: IPgConverterInfoResolver
         new ArrayConverterFactory()
     };
 
+    [RequiresUnreferencedCode("Reflection used for pg type conversions.")]
     public PgConverterInfo? GetConverterInfo(Type? type, DataTypeName? dataTypeName, PgConverterOptions options)
     {
         if (type is null && dataTypeName is null)
