@@ -345,18 +345,12 @@ sealed partial class PgTypeCatalog
     {
         // TODO
         throw new NotImplementedException();
-        canonicalTypeId = default;
-        dataTypeName = default;
-        return false;
     }
 
     public bool TryGetArrayIdentifiers(string elementDataTypeName, out PgTypeId canonicalTypeId, out DataTypeName dataTypeName)
     {
         // TODO
         throw new NotImplementedException();
-        canonicalTypeId = default;
-        dataTypeName = default;
-        return false;
     }
 
     public bool TryGetIdentifiers(string name, out PgTypeId canonicalTypeId, out DataTypeName dataTypeName)
@@ -370,8 +364,5 @@ sealed partial class PgTypeCatalog
         }
         // TODO
         throw new NotImplementedException();
-        canonicalTypeId = default;
-        dataTypeName = default;
-        return false;
     }
 }

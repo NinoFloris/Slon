@@ -272,9 +272,9 @@ sealed class ArrayConverterFactory: PgConverterFactory
         {
             PgConverterInfo info;
             if (elementInfo is PgConverterResolverInfo)
-                info = (PgConverterInfo)Activator.CreateInstance(typeof(PgConverterResolverInfo<>).MakeGenericType(type), options, converter);
+                info = (PgConverterInfo)Activator.CreateInstance(typeof(PgConverterResolverInfo<>).MakeGenericType(type), options, converter)!;
             else
-                info = (PgConverterInfo)Activator.CreateInstance(typeof(PgConverterInfo<>).MakeGenericType(type), options, converter, options.GetArrayTypeId(elementInfo.PgTypeId!.Value));
+                info = (PgConverterInfo)Activator.CreateInstance(typeof(PgConverterInfo<>).MakeGenericType(type), options, converter, options.GetArrayTypeId(elementInfo.PgTypeId!.Value))!;
 
             if (elementInfo.IsDefault)
                 typeof(PgConverterInfo).GetProperty("IsDefault")!.SetValue(info, elementInfo.IsDefault);

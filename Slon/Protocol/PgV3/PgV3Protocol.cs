@@ -366,7 +366,7 @@ class PgV3Protocol : Protocol
                 if (errorResponseStatus != ReadStatus.Done)
                     exception = new Exception($"Unexpected error on message: {typeof(T).FullName}, could not read full error response, terminated connection.");
                 else
-                    exception = new Exception($"Unexpected error on message: {typeof(T).FullName}, error message: {errorResponse.Message.Message}.");
+                    exception = new Exception($"Unexpected error on message: {typeof(T).FullName}, error message: {errorResponse.Message!.Message}.");
             }
             else
             {
