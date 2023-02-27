@@ -12,7 +12,7 @@ enum ParameterContextFlags: short
     AnyUpperBoundByteCount = 2,
     AnyNonBinaryWrites = 4,
     AnySessions = 8,
-    AnyOutputSessions = 16,
+    AnyWritableParamSessions = 16,
     AnyWriteState = 32,
 }
 
@@ -96,8 +96,8 @@ static class ParameterContextExtensions
     public static bool HasSessions(this ParameterContext context)
         => (context.Flags & ParameterContextFlags.AnySessions) != 0;
 
-    public static bool HasOutputSessions(this ParameterContext context)
-        => (context.Flags & ParameterContextFlags.AnyOutputSessions) != 0;
+    public static bool HasWritableParamSessions(this ParameterContext context)
+        => (context.Flags & ParameterContextFlags.AnyWritableParamSessions) != 0;
 
     public static bool HasTextWrites(this ParameterContext context)
         => (context.Flags & ParameterContextFlags.AnyNonBinaryWrites) != 0;

@@ -47,14 +47,14 @@ readonly struct Parameter
     }
 }
 
-interface IParameterValueReader : IValueReader
+interface IBoxedParameterValueReader
 {
     void ReadAsObject(object? value);
 }
 
 static class ParameterValueReaderExtensions
 {
-    public static void ReadParameterValue<TReader>(this ref TReader reader, object? value) where TReader : struct, IParameterValueReader
+    public static void ReadParameterValue<TReader>(this ref TReader reader, object? value) where TReader : struct, IParameterValueReader, IBoxedParameterValueReader
     {
         if (value is IParameterSession session)
         {
@@ -77,7 +77,7 @@ static class PgConverterInfoExtensions
         return new Parameter(parameterValue, converterInfo, reader.PgTypeId, reader.Size, reader.Representation, reader.WriteState);
     }
 
-    struct ValueReader: IParameterValueReader
+    struct ValueReader: IParameterValueReader, IBoxedParameterValueReader
     {
         readonly PgConverterInfo _converterInfo;
         readonly int _bufferLength;
@@ -160,7 +160,7 @@ static class ParameterExtensions
         return new BufferedOutput(default);
     }
 
-    struct ValueWriter : IParameterValueReader
+    struct ValueWriter : IParameterValueReader, IBoxedParameterValueReader
     {
         readonly PgWriter _writer;
         readonly PgConverterInfo _converterInfo;

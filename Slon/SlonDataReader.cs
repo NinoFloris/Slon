@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections;
 using System.Data.Common;
 using System.Runtime.CompilerServices;
@@ -36,6 +37,7 @@ public sealed partial class SlonDataReader
     readonly Action<SlonDataReader>? _returnAction;
 
     // Will be set during initialization.
+    SlonDataSource _dataSource = null!;
     PgV3CommandReader _commandReader = null!;
     CommandContextBatch<CommandExecution>.Enumerator _commandEnumerator;
 
@@ -44,7 +46,7 @@ public sealed partial class SlonDataReader
 
     // This is not a pooled method as it quickly uses up all the pooled instances during pipelining, meanign we only pay for the overhead of pooling.
     // Improvement of this code (and removing the alloc) is ideally dependent on something like: https://github.com/dotnet/runtime/issues/78064
-    internal static async ValueTask<SlonDataReader> Create(bool async, ValueTask<CommandContextBatch<CommandExecution>> batch)
+    internal static async ValueTask<SlonDataReader> Create(bool async, SlonDataSource dataSource, ValueTask<CommandContextBatch<CommandExecution>> batch)
     {
         // If the enumerator task fails there is not much we can cleanup (or should have to).
         CommandContextBatch<CommandExecution>.Enumerator enumerator = (await batch.ConfigureAwait(false)).GetEnumerator();
@@ -71,7 +73,7 @@ public sealed partial class SlonDataReader
             throw;
         }
 
-        return SharedPool.Rent().Initialize(commandReader, enumerator, operation.Value);
+        return SharedPool.Rent().Initialize(dataSource, commandReader, enumerator, operation.Value);
     }
 
     static ValueTask ConsumeBatch(bool async, CommandContextBatch<CommandExecution>.Enumerator enumerator, PgV3CommandReader? commandReader = null)
@@ -99,9 +101,10 @@ public sealed partial class SlonDataReader
         }
     }
 
-    SlonDataReader Initialize(PgV3CommandReader reader, CommandContextBatch<CommandExecution>.Enumerator enumerator, Operation firstOp)
+    SlonDataReader Initialize(SlonDataSource dataSource, PgV3CommandReader reader, CommandContextBatch<CommandExecution>.Enumerator enumerator, Operation firstOp)
     {
         _state = ReaderState.Active;
+        _dataSource = dataSource;
         _commandReader = reader;
         _commandEnumerator = enumerator;
         SyncStates();
@@ -296,6 +299,14 @@ public sealed partial class SlonDataReader: DbDataReader
     public override Task<bool> IsDBNullAsync(int ordinal, CancellationToken cancellationToken)
     {
         throw new NotImplementedException();
+    }
+
+    public override T GetFieldValue<T>(int ordinal)
+    {
+        var reader = new SequenceReader<byte>();
+        var info = _dataSource.GetConverterInfo<T>();
+        info!.Converter.Read(ref reader, 4, out var value, info.Options);
+        return value;
     }
 
     public override bool GetBoolean(int ordinal)

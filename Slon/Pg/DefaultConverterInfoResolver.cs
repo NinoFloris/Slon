@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Numerics;
 using Slon.Pg.Converters;
 using Slon.Pg.Types;
@@ -8,6 +9,10 @@ namespace Slon.Pg;
 class DefaultConverterInfoResolver: IPgConverterInfoResolver
 {
     static ReadOnlyMemoryTextConverter? _romTextConverter;
+
+    static readonly PgConverterFactory[] ConverterFactories = {
+        new ArrayConverterFactory()
+    };
 
     public PgConverterInfo? GetConverterInfo(Type? type, DataTypeName? dataTypeName, PgConverterOptions options)
     {
@@ -61,6 +66,14 @@ class DefaultConverterInfoResolver: IPgConverterInfoResolver
         };
         if (textInfo is not null)
             return textInfo;
+
+        foreach (var factory in ConverterFactories)
+            if (factory.CreateConverterInfo(type, options, dataTypeName is null ? null : new(dataTypeName.GetValueOrDefault())) is { } converterInfo)
+            {
+                if (!converterInfo.GetType().IsGenericType || converterInfo.GetType() != typeof(PgConverterInfo<>).MakeGenericType(type) && converterInfo.GetType() != typeof(PgConverterResolverInfo<>).MakeGenericType(type))
+                    throw new InvalidOperationException($"Factory '{factory.GetType().FullName}' returned a non generic converter info or one for a different type: {converterInfo.GetType().FullName}");
+                return converterInfo;
+            }
 
         return null;
 

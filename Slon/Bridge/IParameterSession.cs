@@ -1,10 +1,9 @@
 using System;
-using Slon.Protocol;
 
 namespace Slon;
 
 /// Support type for reading a value stored on an instance of IParameterSession({T}), allows values to stay unboxed if they are.
-interface IValueReader
+interface IParameterValueReader
 {
     void Read<T>(T? value);
 }
@@ -23,7 +22,7 @@ interface IParameterSession
     object? Value { get; set; }
 
     /// Apply a reader to a value stored on an instance of IParameterSession({T}), allows values to stay unboxed if they are.
-    void ApplyReader<TReader>(ref TReader reader) where TReader: IValueReader;
+    void ApplyReader<TReader>(ref TReader reader) where TReader: IParameterValueReader;
 
     /// Close the session once writes or reads from the session are finished, for instance once the protocol write is done.
     void Close();

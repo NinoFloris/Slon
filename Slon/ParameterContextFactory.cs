@@ -63,16 +63,16 @@ readonly struct ParameterContextFactory
         if (dbParameter.GetExplicitDbType() is { } slonDbType)
         {
             if (!_frontendTypeCatalog.TryGetIdentifiers(slonDbType, out var id, out var dataTypeName))
-                throw new InvalidOperationException("Could not resolve given SlonDbType to a known data type.");
+                throw new InvalidOperationException("Could not resolve given DbType to a known data type.");
 
             pgTypeId = id;
-            cacheItem.SlonDbType = new SlonDbType(dataTypeName);
+            cacheItem.DbType = new SlonDbType(dataTypeName);
         }
         // We allow generic db parameters to have null values without specifying some identifier, as we know the CLR type.
         else if (cacheItem.ValueType is null)
             throw new InvalidOperationException($"A null value requires an {nameof(SlonDbType)} to be set.");
         else
-            cacheItem.IsInferredSlonDbType = true;
+            cacheItem.IsInferredDbType = true;
 
         Parameter parameter;
         if (cachedConverterInfo is not null)
@@ -83,18 +83,18 @@ readonly struct ParameterContextFactory
         // No sense in caching (potentially) single use sessions.
         cacheItem.Parameter = parameter with { Value = null };
 
-        if (cacheItem.IsInferredSlonDbType)
+        if (cacheItem.IsInferredDbType)
         {
             // Inferred db types don't need a lookup for 'correctness' as they are already fully qualified,
             // they're only settable by internals, and not at all used for converter info resolving.
             // It only serves to communicate back to the user what final db type was chosen.
             // TODO we may want to add an api to/for SlonDbParameter to do inference without execution.
             if (dbParameter.HasInferredSlonDbType)
-                cacheItem.SlonDbType = dbParameter.SlonDbType;
+                cacheItem.DbType = dbParameter.SlonDbType;
             else
             {
-                cacheItem.SlonDbType = new SlonDbType(_frontendTypeCatalog.GetDataTypeName(parameter.PgTypeId));
-                dbParameter.SetInferredDbType(cacheItem.SlonDbType, parameter.ConverterInfo.IsValueDependent);
+                cacheItem.DbType = new SlonDbType(_frontendTypeCatalog.GetDataTypeName(parameter.PgTypeId));
+                dbParameter.SetInferredDbType(cacheItem.DbType, parameter.ConverterInfo.IsValueDependent);
             }
         }
 
@@ -133,8 +133,8 @@ readonly struct ParameterContextFactory
                         if (cacheItem.IsSlonDbParameter)
                         {
                             dbParameter = (SlonDbParameter)enumerator.Current.Value!;
-                            if (cacheItem.IsInferredSlonDbType && dbParameter.HasInferredSlonDbType == false && dbParameter.SlonDbType == SlonDbType.Infer)
-                                dbParameter.SetInferredDbType(cacheItem.SlonDbType, cachedParameter.ConverterInfo.IsValueDependent);
+                            if (cacheItem.IsInferredDbType && dbParameter.HasInferredSlonDbType == false && dbParameter.SlonDbType == SlonDbType.Infer)
+                                dbParameter.SetInferredDbType(cacheItem.DbType, cachedParameter.ConverterInfo.IsValueDependent);
 
                             // If our value is an SlonDbParameter we have to use our fresh session as the value.
                             cachedParameter = cachedParameter with { Value = lastSession };
@@ -147,8 +147,8 @@ readonly struct ParameterContextFactory
                         if (cacheItem.IsSlonDbParameter)
                         {
                             dbParameter = (SlonDbParameter)enumerator.Current.Value!;
-                            if (cacheItem.IsInferredSlonDbType && dbParameter.HasInferredSlonDbType == false && dbParameter.SlonDbType == SlonDbType.Infer)
-                                dbParameter.SetInferredDbType(cacheItem.SlonDbType, cachedParameter.ConverterInfo.IsValueDependent);
+                            if (cacheItem.IsInferredDbType && dbParameter.HasInferredSlonDbType == false && dbParameter.SlonDbType == SlonDbType.Infer)
+                                dbParameter.SetInferredDbType(cacheItem.DbType, cachedParameter.ConverterInfo.IsValueDependent);
                         }
 
                         // We don't update the cache for converter info matches as it does not seem worth the cost
@@ -277,8 +277,8 @@ struct ParameterCacheItem
     public bool IsSlonDbParameter { get; set; }
     public short ValueRevision { get; set; }
     public bool? PreferTextualRepresentation { get; set; }
-    public SlonDbType SlonDbType { get; set; }
-    public bool IsInferredSlonDbType { get; set; }
+    public SlonDbType DbType { get; set; }
+    public bool IsInferredDbType { get; set; }
 
     public readonly ParameterEquality TryGetParameter(object? value, out Parameter cachedParameter, out PgConverterInfo? cachedConverterInfo)
     {
@@ -339,11 +339,11 @@ struct ParameterCacheItem
 
     readonly bool ConverterInfoEquals(object? value, SlonDbParameter? cachedDbParameter, SlonDbParameter? dbParameter)
     {
-        // Converter info is resolved based on the Type of the value and an optional PgTypeId (which is derived from SlonDbType).
+        // Converter info is resolved based on the Type of the value and an optional PgTypeId (which is resolved from a SlonDbType).
         // Note: we don't use the values stored on the cachedDbParameter as these may have been mutated, instead we refer to copies.
         if (cachedDbParameter is not null && dbParameter is not null)
         {
-            if (!IsInferredSlonDbType && (dbParameter.HasInferredSlonDbType || dbParameter.SlonDbType != SlonDbType))
+            if (!IsInferredDbType && (dbParameter.HasInferredSlonDbType || dbParameter.SlonDbType != DbType))
                 return false;
 
             if (dbParameter.ValueType != ValueType)

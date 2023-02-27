@@ -23,7 +23,7 @@ interface IFrontendTypeCatalog
     bool TryGetIdentifiers(SlonDbType slonDbType, out PgTypeId canonicalTypeId, out DataTypeName dataTypeName);
 }
 
-record SlonDataSourceOptions
+public record SlonDataSourceOptions
 {
     internal static TimeSpan DefaultCommandTimeout = TimeSpan.FromSeconds(30);
 
@@ -254,6 +254,11 @@ public partial class SlonDataSource: DbDataSource, IConnectionFactory<PgV3Protoc
     PgDbDependencies? _dbDependencies;
     bool _isInitialized;
 
+    public SlonDataSource(string connectionString)
+    {
+        
+    }
+
     internal SlonDataSource(SlonDataSourceOptions options, PgV3ProtocolOptions pgV3ProtocolOptions, IPgDatabaseInfoProvider? pgDatabaseInfoProvider = null)
     {
         options.Validate();
@@ -423,6 +428,12 @@ public partial class SlonDataSource: DbDataSource, IConnectionFactory<PgV3Protoc
     protected override void Dispose(bool disposing)
     {
         _channelWriter?.Complete();
+    }
+
+    internal PgConverterInfo<T>? GetConverterInfo<T>()
+    {
+        var dbDeps = GetDbDependencies();
+        return (PgConverterInfo<T>?)dbDeps.ConverterOptions.GetConverterInfo(typeof(T));
     }
 
     internal ParameterContextFactory GetParameterContextFactory(string? statementText = null)

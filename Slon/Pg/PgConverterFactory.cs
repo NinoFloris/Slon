@@ -9,7 +9,7 @@ namespace Slon.Pg;
 
 abstract class PgConverterFactory : PgConverter
 {
-    public abstract PgConverter? CreateConverter(Type type, PgConverterOptions options, PgTypeId? pgTypeId = null);
+    public abstract PgConverterInfo? CreateConverterInfo(Type type, PgConverterOptions options, PgTypeId? pgTypeId = null);
 
     internal sealed override bool IsDbNullValueAsObject(object? value, PgConverterOptions options) => throw new NotSupportedException();
     internal sealed override SizeResult GetSizeAsObject(object value, int bufferLength, ref object? writeState, PgConverterOptions options) => throw new NotSupportedException();

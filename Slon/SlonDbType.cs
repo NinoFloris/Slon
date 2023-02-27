@@ -111,7 +111,7 @@ public readonly record struct SlonDbType
     }
 
     internal bool IsInfer => _dataTypeName is null;
-    internal string DataTypeName => _dataTypeName ?? throw new InvalidOperationException("SlonDbType does not carry a name.");
+    internal string DataTypeName => _dataTypeName ?? throw new InvalidOperationException("DbType does not carry a name.");
 
     internal bool ResolveArrayType { get; init; }
     internal bool ResolveMultiRangeType { get; init; }

@@ -17,7 +17,7 @@ class SlonCommandSession: ICommandSession
         _dataSource = dataSource;
         _statement = values.Statement;
         var parameterContext = values.Additional.ParameterContext;
-        if (parameterContext.HasOutputSessions())
+        if (parameterContext.HasWritableParamSessions())
             _parameterContext = parameterContext;
     }
 

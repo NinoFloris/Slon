@@ -202,7 +202,7 @@ public sealed partial class SlonCommand
             DebugShim.Assert(executionFlags.HasUnprepared() || statement is not null);
             // We only allocate to facilitate preparation or output params, both are fairly uncommon operations.
             SlonCommandSession? session = null;
-            if (executionFlags.HasPreparing() || values.Additional.ParameterContext.HasOutputSessions())
+            if (executionFlags.HasPreparing() || values.Additional.ParameterContext.HasWritableParamSessions())
                 session = new SlonCommandSession((SlonDataSource)values.Additional.State, values);
 
             var commandExecution = executionFlags switch
@@ -230,7 +230,6 @@ public sealed partial class SlonCommand
         return connection is not null;
     }
     SlonConnection GetConnection() => TryGetConnection(out var connection) ? connection : throw new NullReferenceException("Connection is null.");
-    SlonConnection.CommandWriter GetCommandWriter() => GetConnection().GetCommandWriter();
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     bool TryGetDataSource([NotNullWhen(true)]out SlonDataSource? connection)
@@ -258,12 +257,13 @@ public sealed partial class SlonCommand
             // Pick a connection and do the write ourselves, connectionless command execution for sync paths :)
             var slot = dataSource.GetSlot(exclusiveUse: false, dataSource.ConnectionTimeout);
             var command = dataSource.WriteCommand(slot, CreateCommand(null, behavior));
-            return SlonDataReader.Create(async: false, new ValueTask<CommandContextBatch<CommandExecution>>(command)).GetAwaiter().GetResult();
+            return SlonDataReader.Create(async: false, dataSource, new ValueTask<CommandContextBatch<CommandExecution>>(command)).GetAwaiter().GetResult();
         }
         else
         {
-            var command = GetCommandWriter().WriteCommand(allowPipelining: false, CreateCommand(null, behavior), HasCloseConnection(behavior));
-            return SlonDataReader.Create(async: false, command).GetAwaiter().GetResult();
+            var conn = GetConnection();
+            var command = conn.GetCommandWriter().WriteCommand(allowPipelining: false, CreateCommand(null, behavior), HasCloseConnection(behavior));
+            return SlonDataReader.Create(async: false, conn.DbDataSource, command).GetAwaiter().GetResult();
         }
     }
 
@@ -274,12 +274,13 @@ public sealed partial class SlonCommand
         {
             ThrowIfHasCloseConnection(behavior);
             var command = dataSource.WriteMultiplexingCommand(CreateCommand(parameters, behavior), cancellationToken);
-            return SlonDataReader.Create(async: true, command);
+            return SlonDataReader.Create(async: true, dataSource, command);
         }
         else
         {
-            var command = GetCommandWriter().WriteCommand(allowPipelining: true, CreateCommand(parameters, behavior), HasCloseConnection(behavior), cancellationToken);
-            return SlonDataReader.Create(async: true, command);
+            var conn = GetConnection();
+            var command = conn.GetCommandWriter().WriteCommand(allowPipelining: true, CreateCommand(parameters, behavior), HasCloseConnection(behavior), cancellationToken);
+            return SlonDataReader.Create(async: true, conn.DbDataSource, command);
         }
     }
 

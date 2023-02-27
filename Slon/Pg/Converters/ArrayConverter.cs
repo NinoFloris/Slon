@@ -236,14 +236,14 @@ class MultiDimArrayConverter<T, TConverter> : PgConverter<Array> where TConverte
 // TODO Support icollection in general.
 sealed class ArrayConverterFactory: PgConverterFactory
 {
-    public override PgConverter? CreateConverter(Type type, PgConverterOptions options, PgTypeId? pgTypeId = null)
+    public override PgConverterInfo? CreateConverterInfo(Type type, PgConverterOptions options, PgTypeId? pgTypeId = null)
     {
         if (!type.IsArray)
             return null;
 
         var elementType = type.GetElementType()!;
-        var info = options.GetConverterInfo(elementType, pgTypeId is not { } id ? null : options.GetElementTypeId(id));
-        if (info is null)
+        var elementInfo = options.GetConverterInfo(elementType, pgTypeId is not { } id ? null : options.GetElementTypeId(id));
+        if (elementInfo is null)
             throw new NotSupportedException($"Cannot convert array with element type '{elementType.FullName}', no converter registered for this element type.");
 
         // MAXDIM in pg is 6, `SELECT '{{{{{{{1}}}}}}}'::integer[]` does not allow the cast.
@@ -254,16 +254,33 @@ sealed class ArrayConverterFactory: PgConverterFactory
             throw new NotSupportedException("Cannot convert jagged arrays.");
 
         var rank = type.GetArrayRank();
-        // For value dependent converters we must delay the element info work.
+        // For value dependent converters we must delay the element elementInfo work.
         // TODO fill in accurate constructor args.
-        return (info is PgConverterResolverInfo, rank) switch
+        return (elementInfo is PgConverterResolverInfo, rank) switch
         {
-            (false, 1) => (PgConverter)Activator.CreateInstance(typeof(ArrayConverter<>).MakeGenericType(elementType, info.ConverterType), info.Converter)!,
-            (false, _) => (PgConverter)Activator.CreateInstance(typeof(MultiDimArrayConverter<,>).MakeGenericType(elementType, info.ConverterType), info.Converter)!,
+            (false, 1) => CreateInfoFromElementInfo(elementInfo, (PgConverter)Activator.CreateInstance(typeof(ArrayConverter<>).MakeGenericType(elementType, elementInfo.ConverterType), elementInfo.Converter)!),
+            (false, _) => CreateInfoFromElementInfo(elementInfo, (PgConverter)Activator.CreateInstance(typeof(MultiDimArrayConverter<,>).MakeGenericType(elementType, elementInfo.ConverterType), elementInfo.Converter)!),
 
-            (true, 1) => (PgConverter)Activator.CreateInstance(typeof(ArrayConverterResolver<>).MakeGenericType(elementType), info)!,
-            (true, _) => (PgConverter)Activator.CreateInstance(typeof(MultiDimArrayConverterResolver<>).MakeGenericType(elementType), info, rank)!
+            (true, 1) => CreateInfoFromElementInfo(elementInfo, (PgConverter)Activator.CreateInstance(typeof(ArrayConverterResolver<>).MakeGenericType(elementType), elementInfo)!),
+            (true, _) => CreateInfoFromElementInfo(elementInfo, (PgConverter)Activator.CreateInstance(typeof(MultiDimArrayConverterResolver<>).MakeGenericType(elementType), elementInfo, rank)!)
         };
+
+        PgConverterInfo CreateInfoFromElementInfo(PgConverterInfo elementInfo, PgConverter converter)
+        {
+            PgConverterInfo info;
+            if (elementInfo is PgConverterResolverInfo)
+                info = (PgConverterInfo)Activator.CreateInstance(typeof(PgConverterResolverInfo<>).MakeGenericType(type), options, converter);
+            else
+                info = (PgConverterInfo)Activator.CreateInstance(typeof(PgConverterInfo<>).MakeGenericType(type), options, converter, options.GetArrayTypeId(elementInfo.PgTypeId!.Value));
+
+            if (elementInfo.IsDefault)
+                typeof(PgConverterInfo).GetProperty("IsDefault")!.SetValue(info, elementInfo.IsDefault);
+
+            if (elementInfo.PreferredRepresentation is not null)
+                typeof(PgConverterInfo).GetProperty("PreferredRepresentation")!.SetValue(info, elementInfo.PreferredRepresentation);
+
+            return info;
+        }
     }
 
     // TODO benchmark this unit.

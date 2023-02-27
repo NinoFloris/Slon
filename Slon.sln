@@ -13,6 +13,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Slon.Polyfills", "Slon.Poly
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Slon.FunctionalTests", "Slon.FunctionalTests\Slon.FunctionalTests.csproj", "{FB3EDF98-C621-48B8-9398-60C1E56BA4F6}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Slon.NativeAot", "Slon.NativeAot\Slon.NativeAot.csproj", "{23B025C8-BD90-4961-ACB9-E77825345147}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -42,5 +44,9 @@ Global
 		{FB3EDF98-C621-48B8-9398-60C1E56BA4F6}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{FB3EDF98-C621-48B8-9398-60C1E56BA4F6}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{FB3EDF98-C621-48B8-9398-60C1E56BA4F6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{23B025C8-BD90-4961-ACB9-E77825345147}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{23B025C8-BD90-4961-ACB9-E77825345147}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{23B025C8-BD90-4961-ACB9-E77825345147}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{23B025C8-BD90-4961-ACB9-E77825345147}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

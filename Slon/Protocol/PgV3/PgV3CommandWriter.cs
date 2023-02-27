@@ -34,6 +34,7 @@ sealed class PgV3CommandWriter: CommandWriter<CommandValues, CommandExecution>
         {
             ThrowInvalidCommand();
             return default;
+
         }
 
         var values = pgCommand.GetValues();
@@ -223,7 +224,7 @@ sealed class PgV3CommandWriter: CommandWriter<CommandValues, CommandExecution>
             CleanupUncommon(parameters);
 
         // We can also dispose the context itself sooner if there are no output sessions.
-        if (!anySessions || !context.HasOutputSessions())
+        if (!anySessions || !context.HasWritableParamSessions())
             context.Dispose();
 
         void CleanupUncommon(ReadOnlySpan<Parameter> parameters)

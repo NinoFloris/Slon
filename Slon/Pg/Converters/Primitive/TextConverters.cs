@@ -4,7 +4,6 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using Slon.Pg.Types;
 using Slon.Protocol;
 
 namespace Slon.Pg.Converters;
@@ -165,26 +164,5 @@ sealed class CharTextConverter : PgConverter<char>
     {
         Span<char> spanValue = stackalloc char[] { value };
         writer.WriteTextResumable(spanValue, encoding);
-    }
-}
-
-// We maybe just want to have these kind of type switches in the resolver, rooting the types more clearly.
-sealed class TextConverterFactory: PgConverterFactory
-{
-    static ReadOnlyMemoryTextConverter? _converter;
-    static CharTextConverter? _charConverter;
-
-    public override PgConverter? CreateConverter(Type type, PgConverterOptions options, PgTypeId? pgTypeId = null)
-    {
-        // TODO I really want to support ROSeq as well.
-        return type switch
-        {
-            _ when type == typeof(string) => new StringTextConverter(_converter ??= new ReadOnlyMemoryTextConverter()),
-            _ when type == typeof(char[]) => new CharArrayTextConverter(_converter ??= new ReadOnlyMemoryTextConverter()),
-            _ when type == typeof(ReadOnlyMemory<char>) => _converter ??= new ReadOnlyMemoryTextConverter(),
-            _ when type == typeof(ArraySegment<char>) => new CharArraySegmentTextConverter(_converter ??= new ReadOnlyMemoryTextConverter()),
-            _ when type == typeof(char) => _charConverter ??= new CharTextConverter(),
-            _ => null
-        };
     }
 }

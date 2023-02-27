@@ -1,6 +1,5 @@
 using BenchmarkDotNet.Configs;
 using BenchmarkDotNet.Running;
-using PerfLabTests;
 
 namespace Slon.Benchmark;
 

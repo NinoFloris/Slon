@@ -4,7 +4,9 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
+using System.IO.Pipelines;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -753,7 +755,7 @@ class PgV3CommandReader
 
         // We're dropping down to manual here because reconstructing a SequenceReader every row is too slow.
         // Invariant is that this method cannot throw exceptions unless BackendMessage.DebugEnabled, who knew try catch could be expensive.
-        // The reason we would want to know about any exceptions is that in such an event we must transition to CompleteUnrecoverably.
+        // The reason we would want to know about any exceptions is that in such an event we must transition to UnrecoverablyCompleted.
         public bool ReadNext(out ReadStatus status)
         {
             PgV3Header header;

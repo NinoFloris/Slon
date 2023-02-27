@@ -33,8 +33,8 @@ struct ParameterContextBuilder
     public PgConverterOptions ConverterOptions { get; }
 
     /// This property controls what should happen when a null value is passed for a non nullable struct type.
-    /// This can happen if the boxed value is accompanied by a pg type id that resolves to a converter info for a
-    /// struct type (e.g. 'pg_catalog.integer'), or it's accompanied by an instance of such a converter info.
+    /// This can happen if the boxed value is accompanied by a type id that resolves to a data type for a
+    /// struct type (e.g. 'int').
     /// Parameter construction can be lenient and coerce these values to a db null when this property is true.
     /// When the property is false an exception is thrown during parameter construction.
     /// Default is true.
@@ -88,22 +88,22 @@ struct ParameterContextBuilder
             parameter = converterInfo.CreateParameter(value, _remainingBufferSize, NullStructValueIsDbNull, preferredRepresentation: preferredRepresentation);
         }
 
-        if (parameter.Size is { } size)
+        if (parameter.Size is { Value: null })
+        {
+            // Disable optimizations for remaining parameters, as this is a parameter that needs buffering later on, we don't know what buffer remains.
+            _remainingBufferSize = 0;
+            _flags |= ParameterContextFlags.AnyUnknownByteCount;
+        }
+        else if (parameter.Size is { Value: null } size)
         {
             _remainingBufferSize -= size.Value ?? 0;
 
             if (size.Kind is SizeResultKind.UpperBound && (_flags & ParameterContextFlags.AnyUpperBoundByteCount) == 0)
                 _flags |= ParameterContextFlags.AnyUpperBoundByteCount;
         }
-        else
-        {
-            // Disable optimizations for remaining parameters, as this is a parameter that needs buffering later on, we don't know what buffer remains.
-            _remainingBufferSize = 0;
-            _flags |= ParameterContextFlags.AnyUnknownByteCount;
-        }
 
         if (isSession)
-            _flags |= parameterKind is not ParameterKind.Input ? ParameterContextFlags.AnySessions : ParameterContextFlags.AnySessions | ParameterContextFlags.AnyOutputSessions;
+            _flags |= parameterKind is ParameterKind.Input ? ParameterContextFlags.AnySessions : ParameterContextFlags.AnySessions | ParameterContextFlags.AnyWritableParamSessions;
 
         if (parameter.DataRepresentation is not DataRepresentation.Binary)
             _flags |= ParameterContextFlags.AnyNonBinaryWrites;

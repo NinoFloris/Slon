@@ -62,8 +62,8 @@ public class SlonParameterTests
 
         // We don't do any lookup back to a datatypename for value parameters.
         Assert.False(cacheItem.IsSlonDbParameter);
-        Assert.False(cacheItem.IsInferredSlonDbType);
-        Assert.AreEqual(SlonDbType.Infer, cacheItem.SlonDbType);
+        Assert.False(cacheItem.IsInferredDbType);
+        Assert.AreEqual(SlonDbType.Infer, cacheItem.DbType);
     }
 
     [Test]
@@ -82,9 +82,9 @@ public class SlonParameterTests
 
         // Check all the inference lookup happened correctly.
         var dataTypeName = parameter.ConverterInfo.Options.TypeCatalog.GetDataTypeName(parameter.PgTypeId);
-        Assert.True(cacheItem.IsInferredSlonDbType);
+        Assert.True(cacheItem.IsInferredDbType);
         Assert.True(dbParameter.HasInferredSlonDbType);
-        Assert.AreEqual(new SlonDbType(dataTypeName), cacheItem.SlonDbType);
+        Assert.AreEqual(new SlonDbType(dataTypeName), cacheItem.DbType);
         Assert.AreEqual(dataTypeName, new DataTypeName(dbParameter.SlonDbType.DataTypeName));
     }
 
@@ -104,9 +104,9 @@ public class SlonParameterTests
 
         // Check all the typed lookup happened correctly
         var dataTypeName = new DataTypeName(SlonDbTypes.Int2.DataTypeName);
-        Assert.False(cacheItem.IsInferredSlonDbType);
+        Assert.False(cacheItem.IsInferredDbType);
         Assert.False(dbParameter.HasInferredSlonDbType);
-        Assert.AreEqual(new SlonDbType(dataTypeName), cacheItem.SlonDbType);
+        Assert.AreEqual(new SlonDbType(dataTypeName), cacheItem.DbType);
         Assert.AreEqual(dataTypeName, new DataTypeName(dbParameter.SlonDbType.DataTypeName));
     }
 
