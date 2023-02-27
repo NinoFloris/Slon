@@ -76,7 +76,7 @@ sealed partial class PgTypeCatalog
 {
     // Important keys are represented by their underlying primitives for slightly faster lookups.
     // TODO this can use frozendicts for the 7.0 TFM.
-    readonly Dictionary<string, PgType> _typesByDataTypeName = new();
+    readonly Dictionary<string, PgType> _typesByDataTypeName = new(StringComparer.Ordinal);
     readonly Dictionary<uint, PgType>? _typesByOid;
     readonly Dictionary<uint, DataTypeName>? _dataTypeNameLookup;
     // This one and future additions for range/multirange serve purely as a lookup cache for inverse relations like element type -> array type etc.

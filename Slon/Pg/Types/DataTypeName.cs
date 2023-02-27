@@ -20,7 +20,7 @@ readonly record struct DataTypeName
 
             var typeNameLength = fullyQualifiedDataTypeName.Length - schemaEndIndex + 1;
             if (typeNameLength > NAMEDATALEN)
-                if (fullyQualifiedDataTypeName.EndsWith("[]") && typeNameLength == NAMEDATALEN + "[]".Length - "_".Length)
+                if (fullyQualifiedDataTypeName.EndsWith("[]", StringComparison.Ordinal) && typeNameLength == NAMEDATALEN + "[]".Length - "_".Length)
                     throw new ArgumentException($"Name is too long and would be truncated to: {fullyQualifiedDataTypeName.Substring(0, fullyQualifiedDataTypeName.Length - typeNameLength + NAMEDATALEN)}");
         }
 
@@ -39,7 +39,7 @@ readonly record struct DataTypeName
 
     // Includes schema unless it's pg_catalog.
     public string DisplayName =>
-        ValueOrThrowIfDefault().StartsWith("pg_catalog")
+        ValueOrThrowIfDefault().StartsWith("pg_catalog", StringComparison.Ordinal)
             ? ToDisplayName(UnqualifiedName)
             : Schema + ToDisplayName(UnqualifiedName);
 
@@ -65,7 +65,7 @@ readonly record struct DataTypeName
     // Static transform as defined by https://www.postgresql.org/docs/current/sql-createtype.html#SQL-CREATETYPE-ARRAY
     public DataTypeName ToArrayName()
     {
-        if (_value.StartsWith("_") || _value.EndsWith("[]"))
+        if (_value.StartsWith("_", StringComparison.Ordinal) || _value.EndsWith("[]", StringComparison.Ordinal))
             return this;
 
         if (_value.Length + "_".Length > NAMEDATALEN)
@@ -78,7 +78,7 @@ readonly record struct DataTypeName
     // Manual testing confirmed it's only the first occurence of 'range' that gets replaced.
     public DataTypeName ToMultiRangeName()
     {
-        if (_value.Contains("multirange"))
+        if (_value.IndexOf("multirange", StringComparison.Ordinal) != -1)
             return this;
 
         var rangeIndex = _value.IndexOf("range", StringComparison.Ordinal);
@@ -107,7 +107,7 @@ readonly record struct DataTypeName
     {
         var baseTypeName = unqualifiedName;
         var prefixedArrayType = unqualifiedName.IndexOf('_') == 0;
-        var postfixedArrayType = unqualifiedName.EndsWith("[]");
+        var postfixedArrayType = unqualifiedName.EndsWith("[]", StringComparison.Ordinal);
         if (prefixedArrayType)
             baseTypeName = baseTypeName.Substring(1);
         else if (postfixedArrayType)

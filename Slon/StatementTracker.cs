@@ -9,7 +9,7 @@ sealed class StatementTracker
 {
     readonly int _autoPrepareMinimumUses;
     readonly ConcurrentDictionary<Guid, PgV3Statement> _statements = new();
-    readonly ConcurrentDictionary<string, PgV3Statement> _statementsBySql = new();
+    readonly ConcurrentDictionary<string, PgV3Statement> _statementsBySql = new(StringComparer.Ordinal);
 
     public StatementTracker(int autoPrepareMinimumUses)
     {
