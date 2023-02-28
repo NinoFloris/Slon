@@ -37,7 +37,7 @@ abstract class PgConverter
 
 abstract class PgConverter<T> : PgConverter
 {
-    static readonly bool IsStructType = typeof(T).IsValueType && Nullable.GetUnderlyingType(typeof(T)) is null;
+    static bool IsStructType => typeof(T).IsValueType && default(T) != null;
 
     // We support custom extended db null semantics but we enable this via a delegate instead of a virtual method as it's quite uncommon.
     // This is also important for perf as we want the default semantics (almost all of the converters) to be non virtual and inlineable.
