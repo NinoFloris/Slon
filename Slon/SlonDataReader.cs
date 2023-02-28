@@ -1,12 +1,17 @@
 using System;
 using System.Buffers;
 using System.Collections;
+using System.Collections.Specialized;
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
+using System.Net;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Slon.Pg;
+using Slon.Pg.Converters;
 using Slon.Protocol;
 using Slon.Protocol.Pg;
 using Slon.Protocol.PgV3; // TODO
@@ -304,6 +309,54 @@ public sealed partial class SlonDataReader: DbDataReader
 
     public override T GetFieldValue<T>(int ordinal)
     {
+        var charArrayConverter = new ArrayConverter<char>(new CharTextConverter(), default, ArrayPool<(SizeResult, object?)>.Shared);
+        var stringArrayConverter = new ArrayConverter<string>(new StringTextConverter(new ReadOnlyMemoryTextConverter()), default, ArrayPool<(SizeResult, object?)>.Shared);
+        var boolArrayConverter = new ArrayConverter<bool>(new BooleanConverter(), default, ArrayPool<(SizeResult, object?)>.Shared);
+        var byteArrayConverter = new ArrayConverter<byte>(new ByteConverter(), default, ArrayPool<(SizeResult, object?)>.Shared);
+        var sbyteArrayConverter = new ArrayConverter<sbyte>(new SByteConverter(), default, ArrayPool<(SizeResult, object?)>.Shared);
+        var shortArrayConverter = new ArrayConverter<short>(new Int2Converter(), default, ArrayPool<(SizeResult, object?)>.Shared);
+        var intArrayConverter = new ArrayConverter<int>(new Int4Converter(), default, ArrayPool<(SizeResult, object?)>.Shared);
+        var longArrayConverter = new ArrayConverter<long>(new Int8Converter(), default, ArrayPool<(SizeResult, object?)>.Shared);
+        var ushortArrayConverter = new ArrayConverter<ushort>(new NumberValueConverter<ushort,short, Int2Converter>(new Int2Converter()), default, ArrayPool<(SizeResult, object?)>.Shared);
+        var uintArrayConverter = new ArrayConverter<uint>(new NumberValueConverter<uint,int, Int4Converter>(new Int4Converter()), default, ArrayPool<(SizeResult, object?)>.Shared);
+        var ulongArrayConverter = new ArrayConverter<ulong>(new NumberValueConverter<ulong,long, Int8Converter>(new Int8Converter()), default, ArrayPool<(SizeResult, object?)>.Shared);
+        var decimalArrayConverter = new ArrayConverter<decimal>(null!, default, ArrayPool<(SizeResult, object?)>.Shared);
+        var doubleArrayConverter = new ArrayConverter<double>(null!, default, ArrayPool<(SizeResult, object?)>.Shared);
+        var floatArrayConverter = new ArrayConverter<float>(null!, default, ArrayPool<(SizeResult, object?)>.Shared);
+        var bigintegerArrayConverter = new ArrayConverter<BigInteger>(null!, default, ArrayPool<(SizeResult, object?)>.Shared);
+        var guidArrayConverter = new ArrayConverter<Guid>(null!, default, ArrayPool<(SizeResult, object?)>.Shared);
+#if !NETSTANDARD2_0
+        var dateArrayConverter = new ArrayConverter<DateOnly>(null!, default, ArrayPool<(SizeResult, object?)>.Shared);
+        var timeArrayConverter = new ArrayConverter<TimeOnly>(null!, default, ArrayPool<(SizeResult, object?)>.Shared);
+#endif
+        var timespanArrayConverter = new ArrayConverter<TimeSpan>(null!, default, ArrayPool<(SizeResult, object?)>.Shared);
+        var dateTimeArrayConverter = new ArrayConverter<DateTime>(new DateTimeTimestampConverter(), default, ArrayPool<(SizeResult, object?)>.Shared);
+        var dateTimeOffsetArrayConverter = new ArrayConverter<DateTimeOffset>(new DateTimeOffsetTimestampTzConverter(), default, ArrayPool<(SizeResult, object?)>.Shared);
+
+        var cidrArrayConverter = new ArrayConverter<(IPAddress Address, int Subnet)>(null!, default, ArrayPool<(SizeResult, object?)>.Shared);
+
+        var arraySegmentArrayConverter = new ArrayConverter<ArraySegment<byte>>(null!, default, ArrayPool<(SizeResult, object?)>.Shared);
+        var romArrayConverter = new ArrayConverter<ReadOnlyMemory<byte>>(null!, default, ArrayPool<(SizeResult, object?)>.Shared);
+        var memoryArrayConverter = new ArrayConverter<Memory<byte>>(null!, default, ArrayPool<(SizeResult, object?)>.Shared);
+        var bitvectorArrayConverter = new ArrayConverter<BitVector32>(null!, default, ArrayPool<(SizeResult, object?)>.Shared);
+
+        // total: 24 instantiations
+
+        // Missing value type instantiations (13) :
+        // - range
+        // - box
+        // - circle
+        // - polygon
+        // - point
+        // - path
+        // - line segment
+        // - line
+        // - pg decimal
+        // - pg interval
+        // - inet
+        // - tid
+        // - lsn
+
         var reader = new SequenceReader<byte>();
         var info = _dataSource.GetConverterInfo<T>();
         info!.Converter.Read(ref reader, 4, out var value, info.Options);
