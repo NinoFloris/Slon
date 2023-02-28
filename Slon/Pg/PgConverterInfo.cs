@@ -8,7 +8,7 @@ abstract class PgConverterInfo
 {
     readonly bool _canConvert;
     readonly bool _canTextConvert;
-    readonly bool _isTypeNullable;
+    readonly bool _isTypeDbNullable;
 
     protected PgConverterInfo(Type type, PgConverterOptions options)
     {
@@ -24,7 +24,7 @@ abstract class PgConverterInfo
         PgTypeId = options.GetCanonicalTypeId(pgTypeId);
         _canConvert = converter.CanConvert;
         _canTextConvert = converter.CanTextConvert;
-        _isTypeNullable = converter.IsTypeDbNullable;
+        _isTypeDbNullable = converter.IsDbNullable;
     }
 
     public Type Type { get; }
@@ -145,7 +145,7 @@ abstract class PgConverterInfo
 
     public bool IsDbNullValue<T>(T? value)
     {
-        if (Converter is not null && !_isTypeNullable)
+        if (Converter is not null && !_isTypeDbNullable)
             return false;
 
         var converter = GetConverter(value);
@@ -154,7 +154,7 @@ abstract class PgConverterInfo
 
     public bool IsDbNullValueAsObject(object? value)
     {
-        if (Converter is not null && !_isTypeNullable)
+        if (Converter is not null && !_isTypeDbNullable)
             return false;
 
         var converter = GetConverterAsObject(value);

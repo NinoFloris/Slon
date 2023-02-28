@@ -12,7 +12,7 @@ abstract class PgConverter
 {
     internal PgConverter() {}
 
-    internal virtual bool IsTypeDbNullable => true; // All objects are by default.
+    public virtual bool IsDbNullable => true; // All objects are by default.
 
     internal abstract bool IsDbNullValueAsObject([NotNullWhen(false)]object? value, PgConverterOptions options);
 
@@ -45,7 +45,7 @@ abstract class PgConverter<T> : PgConverter
     // It does not particularly seem better DX to have a user override two virtual methods compared to pointing a delegate to a method.
     // Having something low-level like this would have been a nice - just right - alternative... https://github.com/dotnet/runtime/issues/12760
     protected Func<PgConverter<T>, T, PgConverterOptions, bool>? IsDbNull { get; init; }
-    internal sealed override bool IsTypeDbNullable => !IsStructType || IsDbNull is not null;
+    public sealed override bool IsDbNullable => !IsStructType || IsDbNull is not null;
 
     public bool IsDbNullValue([NotNullWhen(false)] T? value, PgConverterOptions options)
         => value is null or DBNull || IsDbNull?.Invoke(this, value, options) is true;
@@ -72,7 +72,7 @@ abstract class PgConverter<T> : PgConverter
 
     public virtual ValueTask WriteTextAsync(PgWriter writer, T value, PgConverterOptions options, CancellationToken cancellationToken = default)
     {
-        Write(writer, value, options);
+        WriteText(writer, value, options);
         return new ValueTask();
     }
 
@@ -98,11 +98,11 @@ abstract class PgConverter<T> : PgConverter
         => WriteAsync(writer, (T)value, options, cancellationToken);
 
     internal sealed override SizeResult GetTextSizeAsObject(object value, int bufferLength, ref object? writeState, PgConverterOptions options)
-        => GetSize((T)value, bufferLength, ref writeState, options);
+        => GetTextSize((T)value, bufferLength, ref writeState, options);
 
     internal sealed override ReadStatus ReadTextAsObject(ref SequenceReader<byte> reader, int byteCount, out object? value, PgConverterOptions options)
     {
-        var status = Read(ref reader, byteCount, out var typedValue, options);
+        var status = ReadText(ref reader, byteCount, out var typedValue, options);
         value = status is ReadStatus.Done ? typedValue : null;
         return status;
     }
@@ -111,5 +111,5 @@ abstract class PgConverter<T> : PgConverter
         => WriteText(writer, (T)value, options);
 
     internal sealed override ValueTask WriteTextAsObjectAsync(PgWriter writer, object value, PgConverterOptions options, CancellationToken cancellationToken = default)
-        => WriteAsync(writer, (T)value, options, cancellationToken);
+        => WriteTextAsync(writer, (T)value, options, cancellationToken);
 }

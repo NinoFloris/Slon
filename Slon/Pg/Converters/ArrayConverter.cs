@@ -210,7 +210,7 @@ sealed class ArrayConverter<T> : PgConverter<T?[]>, IArrayElementOperations
     public ArrayConverter(PgConverter<T> elemConverter, PgTypeId elemTypeId, ArrayPool<(SizeResult, object?)> statePool, int pgLowerBound = 1)
     {
         _elemConverter = elemConverter;
-        _arrayConverter = new ArrayConverter(this, _elemConverter.IsTypeDbNullable, elemTypeId, statePool, pgLowerBound);
+        _arrayConverter = new ArrayConverter(this, _elemConverter.IsDbNullable, elemTypeId, statePool, pgLowerBound);
     }
 
     public override bool CanConvert => _elemConverter.CanConvert;
