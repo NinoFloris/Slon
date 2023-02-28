@@ -48,6 +48,7 @@ class PgWriter
 
     internal FlushMode FlushMode => _flushSuppressed ? FlushMode.None : _flushMode;
 
+    public DataRepresentation DataRepresentation { get; internal set; }
     public object? State { get; private set; }
     public SizeResult Size { get; private set; }
     // public int BytesWritten { get; }

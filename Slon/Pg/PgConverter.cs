@@ -16,23 +16,13 @@ abstract class PgConverter
 
     internal abstract bool IsDbNullValueAsObject([NotNullWhen(false)]object? value, PgConverterOptions options);
 
-    // Overridden for text only converters.
-    public virtual bool CanConvert => true;
+    public virtual bool CanConvert(DataRepresentation representation) => representation is DataRepresentation.Binary;
 
     internal abstract ReadStatus ReadAsObject(ref SequenceReader<byte> reader, int byteCount, out object? value, PgConverterOptions options);
 
-    internal abstract SizeResult GetSizeAsObject(object value, int bufferLength, ref object? writeState, PgConverterOptions options);
+    internal abstract SizeResult GetSizeAsObject(object value, int bufferLength, ref object? writeState, DataRepresentation representation, PgConverterOptions options);
     internal abstract void WriteAsObject(PgWriter writer, object value, PgConverterOptions options);
     internal abstract ValueTask WriteAsObjectAsync(PgWriter writer, object value, PgConverterOptions options, CancellationToken cancellationToken = default);
-
-    // Overridden when the textual representation is supported.
-    public virtual bool CanTextConvert => false;
-
-    internal abstract ReadStatus ReadTextAsObject(ref SequenceReader<byte> reader, int byteCount, out object? value, PgConverterOptions options);
-
-    internal abstract SizeResult GetTextSizeAsObject(object value, int bufferLength, ref object? writeState, PgConverterOptions options);
-    internal abstract void WriteTextAsObject(PgWriter writer, object value, PgConverterOptions options);
-    internal abstract ValueTask WriteTextAsObjectAsync(PgWriter writer, object value, PgConverterOptions options, CancellationToken cancellationToken = default);
 }
 
 abstract class PgConverter<T> : PgConverter
@@ -52,27 +42,12 @@ abstract class PgConverter<T> : PgConverter
 
     public abstract ReadStatus Read(ref SequenceReader<byte> reader, int byteCount, out T value, PgConverterOptions options);
 
-    public abstract SizeResult GetSize(T value, int bufferLength, ref object? writeState, PgConverterOptions options);
+    public abstract SizeResult GetSize(T value, int bufferLength, ref object? writeState, DataRepresentation representation, PgConverterOptions options);
     public abstract void Write(PgWriter writer, T value, PgConverterOptions options);
 
     public virtual ValueTask WriteAsync(PgWriter writer, T value, PgConverterOptions options, CancellationToken cancellationToken = default)
     {
         Write(writer, value, options);
-        return new ValueTask();
-    }
-
-    public virtual ReadStatus ReadText(ref SequenceReader<byte> reader, int byteCount, out T value, PgConverterOptions options)
-        => throw new NotSupportedException();
-
-    public virtual SizeResult GetTextSize(T value, int bufferLength, ref object? writeState, PgConverterOptions options)
-        => throw new NotSupportedException();
-
-    public virtual void WriteText(PgWriter writer, T value, PgConverterOptions options)
-        => throw new NotSupportedException();
-
-    public virtual ValueTask WriteTextAsync(PgWriter writer, T value, PgConverterOptions options, CancellationToken cancellationToken = default)
-    {
-        WriteText(writer, value, options);
         return new ValueTask();
     }
 
@@ -88,28 +63,12 @@ abstract class PgConverter<T> : PgConverter
         return status;
     }
 
-    internal sealed override SizeResult GetSizeAsObject(object value, int bufferLength, ref object? writeState, PgConverterOptions options)
-        => GetSize((T)value, bufferLength, ref writeState, options);
+    internal sealed override SizeResult GetSizeAsObject(object value, int bufferLength, ref object? writeState, DataRepresentation representation, PgConverterOptions options)
+        => GetSize((T)value, bufferLength, ref writeState, representation, options);
 
     internal sealed override void WriteAsObject(PgWriter writer, object value, PgConverterOptions options)
         => Write(writer, (T)value, options);
 
     internal sealed override ValueTask WriteAsObjectAsync(PgWriter writer, object value, PgConverterOptions options, CancellationToken cancellationToken = default)
         => WriteAsync(writer, (T)value, options, cancellationToken);
-
-    internal sealed override SizeResult GetTextSizeAsObject(object value, int bufferLength, ref object? writeState, PgConverterOptions options)
-        => GetTextSize((T)value, bufferLength, ref writeState, options);
-
-    internal sealed override ReadStatus ReadTextAsObject(ref SequenceReader<byte> reader, int byteCount, out object? value, PgConverterOptions options)
-    {
-        var status = ReadText(ref reader, byteCount, out var typedValue, options);
-        value = status is ReadStatus.Done ? typedValue : null;
-        return status;
-    }
-
-    internal sealed override void WriteTextAsObject(PgWriter writer, object value, PgConverterOptions options)
-        => WriteText(writer, (T)value, options);
-
-    internal sealed override ValueTask WriteTextAsObjectAsync(PgWriter writer, object value, PgConverterOptions options, CancellationToken cancellationToken = default)
-        => WriteTextAsync(writer, (T)value, options, cancellationToken);
 }

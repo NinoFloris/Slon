@@ -11,7 +11,7 @@ sealed class DateTimeTimestampTzConverter: PgConverter<DateTime>
         throw new NotImplementedException();
     }
 
-    public override SizeResult GetSize(DateTime value, int bufferLength, ref object? writeState, PgConverterOptions options)
+    public override SizeResult GetSize(DateTime value, int bufferLength, ref object? writeState, DataRepresentation representation, PgConverterOptions options)
     {
         throw new NotImplementedException();
     }
@@ -29,7 +29,7 @@ sealed class DateTimeOffsetTimestampTzConverter: PgConverter<DateTimeOffset>
         throw new NotImplementedException();
     }
 
-    public override SizeResult GetSize(DateTimeOffset value, int bufferLength, ref object? writeState, PgConverterOptions options)
+    public override SizeResult GetSize(DateTimeOffset value, int bufferLength, ref object? writeState, DataRepresentation representation, PgConverterOptions options)
     {
         throw new NotImplementedException();
     }
@@ -47,7 +47,7 @@ sealed class LongTimestampTzConverter: PgConverter<long>
         throw new NotImplementedException();
     }
 
-    public override SizeResult GetSize(long value, int bufferLength, ref object? writeState, PgConverterOptions options)
+    public override SizeResult GetSize(long value, int bufferLength, ref object? writeState, DataRepresentation representation, PgConverterOptions options)
     {
         throw new NotImplementedException();
     }

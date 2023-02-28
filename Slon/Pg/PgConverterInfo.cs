@@ -6,7 +6,7 @@ namespace Slon.Pg;
 
 abstract class PgConverterInfo
 {
-    readonly bool _canConvert;
+    readonly bool _canBinaryConvert;
     readonly bool _canTextConvert;
     readonly bool _isTypeDbNullable;
 
@@ -22,8 +22,8 @@ abstract class PgConverterInfo
         Options = options;
         Converter = converter;
         PgTypeId = options.GetCanonicalTypeId(pgTypeId);
-        _canConvert = converter.CanConvert;
-        _canTextConvert = converter.CanTextConvert;
+        _canBinaryConvert = converter.CanConvert(DataRepresentation.Binary);
+        _canTextConvert = converter.CanConvert(DataRepresentation.Text);
         _isTypeDbNullable = converter.IsDbNullable;
     }
 
@@ -106,17 +106,14 @@ abstract class PgConverterInfo
         // If we don't have a static converter we must ask the retrieved one through virtual calls.
         representation = preferredRepresentation switch
         {
-            DataRepresentation.Binary when (Converter is not null ? _canConvert : converter.CanConvert) => DataRepresentation.Binary,
-            DataRepresentation.Text when (Converter is not null ? !_canTextConvert : !converter.CanTextConvert) => DataRepresentation.Binary,
-            _ => (Converter is not null ? _canConvert : converter.CanConvert) ? DataRepresentation.Binary : DataRepresentation.Text
+            DataRepresentation.Binary when (Converter is not null ? _canBinaryConvert : converter.CanConvert(DataRepresentation.Binary))
+                => DataRepresentation.Binary,
+            DataRepresentation.Text when (Converter is not null ? !_canTextConvert : !converter.CanConvert(DataRepresentation.Text))
+                => DataRepresentation.Binary,
+            _ => (Converter is not null ? _canBinaryConvert : converter.CanConvert(DataRepresentation.Binary)) ? DataRepresentation.Binary : DataRepresentation.Text
         };
 
-        return representation switch
-        {
-            DataRepresentation.Binary => converter.GetSize(value!, bufferLength, ref writeState, Options),
-            DataRepresentation.Text => converter.GetTextSize(value!, bufferLength, ref writeState, Options),
-            _ => throw new ArgumentOutOfRangeException(nameof(representation), representation, null)
-        };
+        return converter.GetSize(value!, bufferLength, ref writeState, representation, Options);
     }
 
     public SizeResult GetAnySizeAsObject(object? value, int bufferLength, out object? writeState, out DataRepresentation representation, DataRepresentation? preferredRepresentation = null)
@@ -128,17 +125,14 @@ abstract class PgConverterInfo
         // If we don't have a static converter we must ask the retrieved one through virtual calls.
         representation = preferredRepresentation switch
         {
-            DataRepresentation.Binary when (Converter is not null ? _canConvert : converter.CanConvert) => DataRepresentation.Binary,
-            DataRepresentation.Text when (Converter is not null ? !_canTextConvert : !converter.CanTextConvert) => DataRepresentation.Binary,
-            _ => (Converter is not null ? _canConvert : converter.CanConvert) ? DataRepresentation.Binary : DataRepresentation.Text
+            DataRepresentation.Binary when (Converter is not null ? _canBinaryConvert : converter.CanConvert(DataRepresentation.Binary))
+                => DataRepresentation.Binary,
+            DataRepresentation.Text when (Converter is not null ? !_canTextConvert : !converter.CanConvert(DataRepresentation.Text))
+                => DataRepresentation.Binary,
+            _ => (Converter is not null ? _canBinaryConvert : converter.CanConvert(DataRepresentation.Binary)) ? DataRepresentation.Binary : DataRepresentation.Text
         };
 
-        return representation switch
-        {
-            DataRepresentation.Binary => converter.GetSizeAsObject(value!, bufferLength, ref writeState, Options),
-            DataRepresentation.Text => converter.GetTextSizeAsObject(value!, bufferLength, ref writeState, Options),
-            _ => throw new ArgumentOutOfRangeException(nameof(representation), representation, null)
-        };
+        return converter.GetSizeAsObject(value!, bufferLength, ref writeState, representation, Options);
     }
 
     void ThrowNotSupported() => throw new NotSupportedException();

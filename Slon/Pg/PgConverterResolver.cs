@@ -23,14 +23,10 @@ abstract class PgConverterResolver : PgConverter
     public abstract PgTypeId GetDataTypeNameAsObject(object? value);
 
     internal sealed override bool IsDbNullValueAsObject(object? value, PgConverterOptions options) => throw new NotSupportedException();
-    internal sealed override SizeResult GetSizeAsObject(object value, int bufferLength, ref object? writeState, PgConverterOptions options) => throw new NotSupportedException();
+    internal sealed override SizeResult GetSizeAsObject(object value, int bufferLength, ref object? writeState, DataRepresentation representation, PgConverterOptions options) => throw new NotSupportedException();
     internal sealed override ReadStatus ReadAsObject(ref SequenceReader<byte> reader, int byteCount, out object? value, PgConverterOptions options) => throw new NotSupportedException();
     internal sealed override void WriteAsObject(PgWriter writer, object? value, PgConverterOptions options) => throw new NotSupportedException();
     internal sealed override ValueTask WriteAsObjectAsync(PgWriter writer, object? value, PgConverterOptions options, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-    internal sealed override SizeResult GetTextSizeAsObject(object value, int bufferLength, ref object? writeState, PgConverterOptions options) => throw new NotSupportedException();
-    internal sealed override ReadStatus ReadTextAsObject(ref SequenceReader<byte> reader, int byteCount, out object? value, PgConverterOptions options) => throw new NotSupportedException();
-    internal sealed override void WriteTextAsObject(PgWriter writer, object? value, PgConverterOptions options) => throw new NotSupportedException();
-    internal sealed override ValueTask WriteTextAsObjectAsync(PgWriter writer, object? value, PgConverterOptions options, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 }
 
 abstract class PgConverterResolver<T> : PgConverterResolver

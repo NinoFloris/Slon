@@ -129,7 +129,8 @@ static class ParameterExtensions
         if (parameter.IsDbNull)
             return;
 
-        var reader = new ValueWriter(writer, parameter.ConverterInfo, parameter.DataRepresentation, CancellationToken.None);
+        writer.DataRepresentation = parameter.DataRepresentation;
+        var reader = new ValueWriter(writer, parameter.ConverterInfo, CancellationToken.None);
         reader.ReadParameterValue(parameter.Value);
 
         static void ThrowNotSupported() => throw new NotSupportedException("Cannot write with a non-blocking writer.");
@@ -143,7 +144,8 @@ static class ParameterExtensions
         if (parameter.IsDbNull)
             return new ValueTask();
 
-        var reader = new ValueWriter(writer, parameter.ConverterInfo, parameter.DataRepresentation, cancellationToken);
+        writer.DataRepresentation = parameter.DataRepresentation;
+        var reader = new ValueWriter(writer, parameter.ConverterInfo, cancellationToken);
         reader.ReadParameterValue(parameter.Value);
 
         return reader.Result;
@@ -156,7 +158,8 @@ static class ParameterExtensions
         // TODO some array pool backed thing
         var pooledBufferWriter = (IBufferWriter<byte>)null!;
         var pgWriter = parameter.ConverterInfo.Options.GetBufferedWriter(pooledBufferWriter, parameter.WriteState);
-        var reader = new ValueWriter(pgWriter, parameter.ConverterInfo, parameter.HasTextWrite() ? DataRepresentation.Text : DataRepresentation.Binary, CancellationToken.None);
+        pgWriter.DataRepresentation = parameter.HasTextWrite() ? DataRepresentation.Text : DataRepresentation.Binary;
+        var reader = new ValueWriter(pgWriter, parameter.ConverterInfo, CancellationToken.None);
         return new BufferedOutput(default);
     }
 
@@ -164,14 +167,12 @@ static class ParameterExtensions
     {
         readonly PgWriter _writer;
         readonly PgConverterInfo _converterInfo;
-        readonly DataRepresentation _dataRepresentation;
         readonly CancellationToken _cancellationToken;
 
-        public ValueWriter(PgWriter writer, PgConverterInfo converterInfo, DataRepresentation dataRepresentation, CancellationToken cancellationToken)
+        public ValueWriter(PgWriter writer, PgConverterInfo converterInfo, CancellationToken cancellationToken)
         {
             _writer = writer;
             _converterInfo = converterInfo;
-            _dataRepresentation = dataRepresentation;
             _cancellationToken = cancellationToken;
         }
 
@@ -183,37 +184,17 @@ static class ParameterExtensions
             var converterInfo = _converterInfo;
             var converter = converterInfo.GetConverter(value);
             var writer = _writer;
-            switch (_dataRepresentation)
-            {
-                case DataRepresentation.Text:
-                    if (writer.FlushMode is not FlushMode.NonBlocking)
-                        converter.WriteText(writer, value, converterInfo.Options);
-                    else
-                        try
-                        {
-                            Result = converter.WriteTextAsync(writer, value, converterInfo.Options, _cancellationToken);
-                        }
-                        catch (Exception ex)
-                        {
-                            Result = new ValueTask(Task.FromException(ex));
-                        }
-                    break;
-                case DataRepresentation.Binary:
-                    if (writer.FlushMode is not FlushMode.NonBlocking)
-                        converter.Write(writer, value, converterInfo.Options);
-                    else
-                        try
-                        {
-                            Result = converter.WriteAsync(writer, value, converterInfo.Options, _cancellationToken);
-                        }
-                        catch (Exception ex)
-                        {
-                            Result = new ValueTask(Task.FromException(ex));
-                        }
-                    break;
-                default:
-                    throw new ArgumentOutOfRangeException();
-            }
+            if (writer.FlushMode is not FlushMode.NonBlocking)
+                converter.Write(writer, value, converterInfo.Options);
+            else
+                try
+                {
+                    Result = converter.WriteAsync(writer, value, converterInfo.Options, _cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    Result = new ValueTask(Task.FromException(ex));
+                }
         }
 
         public void ReadAsObject(object? value)
@@ -222,37 +203,17 @@ static class ParameterExtensions
             var converterInfo = _converterInfo;
             var converter = converterInfo.GetConverterAsObject(value);
             var writer = _writer;
-            switch (_dataRepresentation)
-            {
-                case DataRepresentation.Text:
-                    if (writer.FlushMode is not FlushMode.NonBlocking)
-                        converter.WriteTextAsObject(writer, value, converterInfo.Options);
-                    else
-                        try
-                        {
-                            Result = converter.WriteTextAsObjectAsync(writer, value, converterInfo.Options, _cancellationToken);
-                        }
-                        catch (Exception ex)
-                        {
-                            Result = new ValueTask(Task.FromException(ex));
-                        }
-                    break;
-                case DataRepresentation.Binary:
-                    if (writer.FlushMode is not FlushMode.NonBlocking)
-                        converter.WriteAsObject(writer, value, converterInfo.Options);
-                    else
-                        try
-                        {
-                            Result = converter.WriteAsObjectAsync(writer, value, converterInfo.Options, _cancellationToken);
-                        }
-                        catch (Exception ex)
-                        {
-                            Result = new ValueTask(Task.FromException(ex));
-                        }
-                    break;
-                default:
-                    throw new ArgumentOutOfRangeException();
-            }
+            if (writer.FlushMode is not FlushMode.NonBlocking)
+                converter.WriteAsObject(writer, value, converterInfo.Options);
+            else
+                try
+                {
+                    Result = converter.WriteAsObjectAsync(writer, value, converterInfo.Options, _cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    Result = new ValueTask(Task.FromException(ex));
+                }
         }
     }
 

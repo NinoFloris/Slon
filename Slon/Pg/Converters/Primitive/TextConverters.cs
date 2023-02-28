@@ -13,24 +13,14 @@ sealed class ReadOnlyMemoryTextConverter: PgConverter<ReadOnlyMemory<char>>
     public override ReadStatus Read(ref SequenceReader<byte> reader, int byteCount, out ReadOnlyMemory<char> value, PgConverterOptions options)
         => ReadCore(ref reader, byteCount, out value, options);
 
-    public override SizeResult GetSize(ReadOnlyMemory<char> value, int bufferLength, ref object? writeState, PgConverterOptions options)
+    public override SizeResult GetSize(ReadOnlyMemory<char> value, int bufferLength, ref object? writeState, DataRepresentation representation, PgConverterOptions options)
         => GetSizeCore(value, bufferLength, options);
     public override void Write(PgWriter writer, ReadOnlyMemory<char> value, PgConverterOptions options)
         => WriteCore(false, writer, value, options.TextEncoding, CancellationToken.None).GetAwaiter().GetResult();
     public override ValueTask WriteAsync(PgWriter writer, ReadOnlyMemory<char> value, PgConverterOptions options, CancellationToken cancellationToken = default)
         => WriteCore(true, writer, value, options.TextEncoding, cancellationToken);
 
-    public override bool CanTextConvert => true;
-
-    public override ReadStatus ReadText(ref SequenceReader<byte> reader, int byteCount, out ReadOnlyMemory<char> value, PgConverterOptions options)
-        => ReadCore(ref reader, byteCount, out value, options);
-
-    public override SizeResult GetTextSize(ReadOnlyMemory<char> value, int bufferLength, ref object? writeState, PgConverterOptions options)
-        => GetSizeCore(value, bufferLength, options);
-    public override void WriteText(PgWriter writer, ReadOnlyMemory<char> value, PgConverterOptions options)
-        => WriteCore(false, writer, value, options.TextEncoding, CancellationToken.None).GetAwaiter().GetResult();
-    public override ValueTask WriteTextAsync(PgWriter writer, ReadOnlyMemory<char> value, PgConverterOptions options, CancellationToken cancellationToken = default)
-        => WriteCore(true, writer, value, options.TextEncoding, cancellationToken);
+    public override bool CanConvert(DataRepresentation representation) => representation is DataRepresentation.Binary or DataRepresentation.Text;
 
     ReadStatus ReadCore(ref SequenceReader<byte> reader, int byteLength, out ReadOnlyMemory<char> value, PgConverterOptions options)
     {
@@ -97,9 +87,6 @@ sealed class StringTextConverter : ValueConverter<string, ReadOnlyMemory<char>, 
 
     public override ReadStatus Read(ref SequenceReader<byte> reader, int byteCount, out string value, PgConverterOptions options)
         => ReadCore(ref reader, byteCount, out value, options);
-
-    public override ReadStatus ReadText(ref SequenceReader<byte> reader, int byteCount, out string value, PgConverterOptions options)
-        => ReadCore(ref reader, byteCount, out value, options);
 }
 
 sealed class CharArrayTextConverter : ValueConverter<char[], ReadOnlyMemory<char>, ReadOnlyMemoryTextConverter>
@@ -125,20 +112,12 @@ sealed class CharTextConverter : PgConverter<char>
     public override ReadStatus Read(ref SequenceReader<byte> reader, int byteCount, out char value, PgConverterOptions options)
         => ReadCore(ref reader, byteCount, out value, options);
 
-    public override SizeResult GetSize(char value, int bufferLength, ref object? writeState, PgConverterOptions options)
+    public override SizeResult GetSize(char value, int bufferLength, ref object? writeState, DataRepresentation representation, PgConverterOptions options)
         => GetSizeCore(value, bufferLength, options);
     public override void Write(PgWriter writer, char value, PgConverterOptions options)
         => WriteCore(writer, value, options.TextEncoding);
 
-    public override bool CanTextConvert => true;
-
-    public override ReadStatus ReadText(ref SequenceReader<byte> reader, int byteCount, out char value, PgConverterOptions options)
-        => ReadCore(ref reader, byteCount, out value, options);
-
-    public override SizeResult GetTextSize(char value, int bufferLength, ref object? writeState, PgConverterOptions options)
-        => GetSizeCore(value, bufferLength, options);
-    public override void WriteText(PgWriter writer, char value, PgConverterOptions options)
-        => WriteCore(writer, value, options.TextEncoding);
+    public override bool CanConvert(DataRepresentation representation) => representation is DataRepresentation.Binary or DataRepresentation.Text;
 
     ReadStatus ReadCore(ref SequenceReader<byte> reader, int byteLength, out char value, PgConverterOptions options)
     {

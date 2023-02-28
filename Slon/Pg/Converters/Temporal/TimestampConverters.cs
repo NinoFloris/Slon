@@ -11,7 +11,7 @@ sealed class DateTimeTimestampConverter: PgConverter<DateTime>
         throw new NotImplementedException();
     }
 
-    public override SizeResult GetSize(DateTime value, int bufferLength, ref object? writeState, PgConverterOptions options)
+    public override SizeResult GetSize(DateTime value, int bufferLength, ref object? writeState, DataRepresentation representation, PgConverterOptions options)
     {
         throw new NotImplementedException();
     }
