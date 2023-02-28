@@ -8,15 +8,15 @@ using Slon.Protocol;
 namespace Slon.Pg.Converters;
 
 /// A composing converter that converts number types, it delegates all behavior to the underlying converter.
-sealed class NumberValueConverter<T, TEffective, TConverter> : PgConverter<T> where TConverter : PgConverter<TEffective>
+sealed class NumberValueConverter<T, TEffective> : PgConverter<T>
 #if !NETSTANDARD2_0
     where T : INumberBase<T> where TEffective : INumberBase<TEffective>
 #endif
 {
-    readonly TConverter _effectiveConverter;
-    public NumberValueConverter(TConverter effectiveConverter) => _effectiveConverter = effectiveConverter;
+    readonly PgConverter<TEffective> _effectiveConverter;
+    public NumberValueConverter(PgConverter<TEffective> effectiveConverter) => _effectiveConverter = effectiveConverter;
 
-    TConverter EffectiveConverter => _effectiveConverter;
+    PgConverter<TEffective> EffectiveConverter => _effectiveConverter;
 
 #if !NETSTANDARD2_0
     T ConvertFrom(TEffective value, PgConverterOptions options) => T.CreateChecked(value);

@@ -104,8 +104,8 @@ class DefaultConverterInfoResolver: IPgConverterInfoResolver
         // Explicit conversions.
         converter ??= dataTypeName switch
         {
-            _ when dataTypeName == DataTypeNames.Int2 => new NumberValueConverter<T, short, Int2Converter>(new Int2Converter()),
-            _ when dataTypeName == DataTypeNames.Int2 => new NumberValueConverter<T, short, Int2Converter>(new Int2Converter()),
+            _ when dataTypeName == DataTypeNames.Int2 => new NumberValueConverter<T, short>(new Int2Converter()),
+            _ when dataTypeName == DataTypeNames.Int4 => new NumberValueConverter<T, int>(new Int4Converter()),
             // TODO
             // DataTypeNames.Float4
             // DataTypeNames.Float8
