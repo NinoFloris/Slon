@@ -7,6 +7,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Slon.Pg.Descriptors;
 using Slon.Pg.Types;
 using Slon.Protocol;
 
@@ -242,22 +243,22 @@ sealed class ArrayConverter<T> : PgConverter<T?[]>, IArrayElementOperations
         => _elemConverter.WriteAsync(writer, Unsafe.As<Array, T?[]>(ref array)[index]!, options, cancellationToken);
 }
 
-class MultiDimArrayConverter<T, TConverter> : PgConverter<Array> where TConverter : PgConverter<T>
+class MultiDimArrayConverter<TElement, T> : PgConverter<T>
 {
-    readonly TConverter _effectiveConverter;
-    protected MultiDimArrayConverter(TConverter effectiveConverter) => _effectiveConverter = effectiveConverter;
+    readonly PgConverter<TElement> _elementConverter;
+    protected MultiDimArrayConverter(PgConverter<TElement> elementConverter, int rank) => _elementConverter = elementConverter;
 
-    public override ReadStatus Read(ref SequenceReader<byte> reader, int byteCount, out Array value, PgConverterOptions options)
+    public override ReadStatus Read(ref SequenceReader<byte> reader, int byteCount, out T value, PgConverterOptions options)
     {
         throw new NotImplementedException();
     }
 
-    public override SizeResult GetSize(Array value, int bufferLength, ref object? writeState, DataRepresentation representation, PgConverterOptions options)
+    public override SizeResult GetSize(T value, int bufferLength, ref object? writeState, DataRepresentation representation, PgConverterOptions options)
     {
         throw new NotImplementedException();
     }
 
-    public override void Write(PgWriter writer, Array value, PgConverterOptions options)
+    public override void Write(PgWriter writer, T value, PgConverterOptions options)
     {
         throw new NotImplementedException();
     }
@@ -286,45 +287,26 @@ sealed class ArrayConverterFactory: PgConverterFactory
 
         var rank = type.GetArrayRank();
         // For value dependent converters we must delay the element elementInfo work.
-        // TODO fill in accurate constructor args.
-        return (elementInfo is PgConverterResolverInfo, rank) switch
+        return (elementInfo.Converter is null, rank) switch
         {
-            (false, 1) => CreateInfoFromElementInfo(elementInfo, (PgConverter)Activator.CreateInstance(typeof(ArrayConverter<>).MakeGenericType(elementType, elementInfo.ConverterType), elementInfo.Converter)!),
-            (false, _) => CreateInfoFromElementInfo(elementInfo, (PgConverter)Activator.CreateInstance(typeof(MultiDimArrayConverter<,>).MakeGenericType(elementType, elementInfo.ConverterType), elementInfo.Converter)!),
+            (false, 1) => elementInfo.ComposeDynamic((PgConverter)Activator.CreateInstance(typeof(ArrayConverter<>).MakeGenericType(elementType), elementInfo.Converter)!, options.GetArrayTypeId(elementInfo.PgTypeId!.Value)),
+            (false, _) => elementInfo.ComposeDynamic((PgConverter)Activator.CreateInstance(typeof(MultiDimArrayConverter<,>).MakeGenericType(elementType, type), elementInfo.Converter, rank)!, options.GetArrayTypeId(elementInfo.PgTypeId!.Value)),
 
-            (true, 1) => CreateInfoFromElementInfo(elementInfo, (PgConverter)Activator.CreateInstance(typeof(ArrayConverterResolver<>).MakeGenericType(elementType), elementInfo)!),
-            (true, _) => CreateInfoFromElementInfo(elementInfo, (PgConverter)Activator.CreateInstance(typeof(MultiDimArrayConverterResolver<>).MakeGenericType(elementType), elementInfo, rank)!)
+            (true, 1) => elementInfo.ComposeDynamic((PgConverterResolver)Activator.CreateInstance(typeof(ArrayConverterResolver<>).MakeGenericType(elementType), elementInfo)!),
+            (true, _) => elementInfo.ComposeDynamic((PgConverterResolver)Activator.CreateInstance(typeof(MultiDimArrayConverterResolver<,>).MakeGenericType(elementType, type), elementInfo, rank)!)
         };
-
-        [RequiresUnreferencedCode("Reflection used for pg type conversions.")]
-        PgConverterInfo CreateInfoFromElementInfo(PgConverterInfo elementInfo, PgConverter converter)
-        {
-            PgConverterInfo info;
-            if (elementInfo is PgConverterResolverInfo)
-                info = (PgConverterInfo)Activator.CreateInstance(typeof(PgConverterResolverInfo<>).MakeGenericType(type), options, converter)!;
-            else
-                info = (PgConverterInfo)Activator.CreateInstance(typeof(PgConverterInfo<>).MakeGenericType(type), options, converter, options.GetArrayTypeId(elementInfo.PgTypeId!.Value))!;
-
-            if (elementInfo.IsDefault)
-                typeof(PgConverterInfo).GetProperty("IsDefault")!.SetValue(info, elementInfo.IsDefault);
-
-            if (elementInfo.PreferredRepresentation is not null)
-                typeof(PgConverterInfo).GetProperty("PreferredRepresentation")!.SetValue(info, elementInfo.PreferredRepresentation);
-
-            return info;
-        }
     }
 
     // TODO benchmark this unit.
     class ArrayConverterResolver<T> : PgConverterResolver<T?[]>
     {
-        readonly PgConverterResolverInfo<T> _elemResolverInfo;
+        readonly PgConverterInfo _elemResolverInfo;
         readonly PgConverterOptions _options;
         readonly ConcurrentDictionary<PgConverter<T>, PgConverter<T?[]>> _converters = new(ReferenceEqualityComparer.Instance);
         PgConverter<T>? _elemConverter;
         PgConverter<T?[]>? _converter;
 
-        public ArrayConverterResolver(PgConverterResolverInfo<T> elemResolverInfo, PgConverterOptions options)
+        public ArrayConverterResolver(PgConverterInfo elemResolverInfo, PgConverterOptions options)
         {
             _elemResolverInfo = elemResolverInfo;
             _options = options;
@@ -333,7 +315,7 @@ sealed class ArrayConverterFactory: PgConverterFactory
         public override PgConverter<T?[]> GetConverter(T?[]? value)
         {
             var v = value is null ? default : value[0]; // We don't need to check lower bounds here, only relevant for multi dim.
-            var elemConverter = _elemResolverInfo.ConverterResolver.GetConverter(v);
+            var elemConverter = _elemResolverInfo.GetConverter(v);
 
             // Cache the last one used separately as well for faster recurring lookups.
             if (ReferenceEquals(elemConverter, _elemConverter))
@@ -351,30 +333,40 @@ sealed class ArrayConverterFactory: PgConverterFactory
             }, (_elemResolverInfo, v));
         }
 
-        public override PgTypeId GetDataTypeName(T?[]? value)
+        public override PgConverter<T?[]> GetConverter(Field field)
+        {
+            throw new NotImplementedException();
+        }
+
+        public override PgTypeId GetPgTypeId(T?[]? value)
         {
             var v = value is null ? default : value[0]; // We don't need to check lower bounds here, only relevant for multi dim.
             return _options.GetArrayTypeId(_elemResolverInfo.GetPgTypeId(v));
         }
     }
 
-    class MultiDimArrayConverterResolver<T> : PgConverterResolver
+    class MultiDimArrayConverterResolver<TElement, T> : PgConverterResolver<T>
     {
-        readonly PgConverterResolverInfo _elemResolverInfo;
+        readonly PgConverterInfo _elemResolverInfo;
         readonly int _rank;
 
-        public MultiDimArrayConverterResolver(PgConverterResolverInfo elemResolverInfo, int rank): base(typeof(Array))
+        public MultiDimArrayConverterResolver(PgConverterInfo elemResolverInfo, int rank)
         {
             _elemResolverInfo = elemResolverInfo;
             _rank = rank;
         }
 
-        public override PgConverter GetConverterAsObject(object? value)
+        public override PgConverter<T> GetConverter(T? value)
         {
             throw new NotImplementedException();
         }
 
-        public override PgTypeId GetDataTypeNameAsObject(object? value)
+        public override PgConverter<T> GetConverter(Field field)
+        {
+            throw new NotImplementedException();
+        }
+
+        public override PgTypeId GetPgTypeId(T? value)
         {
             throw new NotImplementedException();
         }

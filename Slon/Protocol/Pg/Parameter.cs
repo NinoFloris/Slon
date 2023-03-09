@@ -96,23 +96,22 @@ static class PgConverterInfoExtensions
             _bufferLength = bufferLength;
             _nullStructValueIsDbNull = nullStructValueIsDbNull;
             _preferredRepresentation = preferredRepresentation;
-            Size = null;
         }
 
         public void Read<T>(T? value)
         {
-            var converterInfo = _converterInfo;
-            PgTypeId = converterInfo.GetPgTypeId(value);
-            if (!converterInfo.IsDbNullValue(value))
-                Size = converterInfo.GetAnySize(value, _bufferLength, out _writeState, out _representation, _preferredRepresentation);
+            PgTypeId = _converterInfo.GetPgTypeId(value);
+            var writer = _converterInfo.GetWriter(value);
+            if (!writer.IsDbNullValue(value))
+                Size = writer.GetAnySize(value, _bufferLength, out _writeState, out _representation, _preferredRepresentation);
         }
 
         public void ReadAsObject(object? value)
         {
-            var converterInfo = _converterInfo;
-            PgTypeId = converterInfo.GetPgTypeIdAsObject(value);
-            if ((!_nullStructValueIsDbNull || value is not null) && !converterInfo.IsDbNullValueAsObject(value))
-                Size = converterInfo.GetAnySizeAsObject(value, _bufferLength, out _writeState, out _representation, _preferredRepresentation);
+            PgTypeId = _converterInfo.GetPgTypeId(value);
+            var writer = _converterInfo.GetWriter(value);
+            if ((!_nullStructValueIsDbNull || value is not null) && !writer.IsDbNullValue(value))
+                Size = writer.GetAnySize(value, _bufferLength, out _writeState, out _representation, _preferredRepresentation);
         }
     }
 }
@@ -133,7 +132,7 @@ static class ParameterExtensions
         var reader = new ValueWriter(writer, parameter.ConverterInfo, CancellationToken.None);
         reader.ReadParameterValue(parameter.Value);
 
-        static void ThrowNotSupported() => throw new NotSupportedException("Cannot write with a non-blocking writer.");
+        static void ThrowNotSupported() => throw new NotSupportedException("Cannot write with a non-blocking pgWriter.");
     }
 
     public static ValueTask WriteAsync(this Parameter parameter, PgWriter writer, CancellationToken cancellationToken)
@@ -150,7 +149,7 @@ static class ParameterExtensions
 
         return reader.Result;
 
-        static void ThrowNotSupported() => throw new NotSupportedException("Cannot write with a blocking writer.");
+        static void ThrowNotSupported() => throw new NotSupportedException("Cannot write with a blocking pgWriter.");
     }
 
     public static BufferedOutput GetBufferedOutput(this Parameter parameter)
@@ -165,13 +164,13 @@ static class ParameterExtensions
 
     struct ValueWriter : IParameterValueReader, IBoxedParameterValueReader
     {
-        readonly PgWriter _writer;
+        readonly PgWriter _pgWriter;
         readonly PgConverterInfo _converterInfo;
         readonly CancellationToken _cancellationToken;
 
-        public ValueWriter(PgWriter writer, PgConverterInfo converterInfo, CancellationToken cancellationToken)
+        public ValueWriter(PgWriter pgWriter, PgConverterInfo converterInfo, CancellationToken cancellationToken)
         {
-            _writer = writer;
+            _pgWriter = pgWriter;
             _converterInfo = converterInfo;
             _cancellationToken = cancellationToken;
         }
@@ -181,15 +180,14 @@ static class ParameterExtensions
         public void Read<T>(T? value)
         {
             DebugShim.Assert(value is not null);
-            var converterInfo = _converterInfo;
-            var converter = converterInfo.GetConverter(value);
-            var writer = _writer;
-            if (writer.FlushMode is not FlushMode.NonBlocking)
-                converter.Write(writer, value, converterInfo.Options);
+            var writer = _converterInfo.GetWriter(value);
+            var pgWriter = _pgWriter;
+            if (pgWriter.FlushMode is not FlushMode.NonBlocking)
+                writer.Write(pgWriter, value);
             else
                 try
                 {
-                    Result = converter.WriteAsync(writer, value, converterInfo.Options, _cancellationToken);
+                    Result = writer.WriteAsync(pgWriter, value, _cancellationToken);
                 }
                 catch (Exception ex)
                 {
@@ -200,15 +198,14 @@ static class ParameterExtensions
         public void ReadAsObject(object? value)
         {
             DebugShim.Assert(value is not null);
-            var converterInfo = _converterInfo;
-            var converter = converterInfo.GetConverterAsObject(value);
-            var writer = _writer;
-            if (writer.FlushMode is not FlushMode.NonBlocking)
-                converter.WriteAsObject(writer, value, converterInfo.Options);
+            var writer = _converterInfo.GetWriter(value);
+            var pgWriter = _pgWriter;
+            if (pgWriter.FlushMode is not FlushMode.NonBlocking)
+                writer.Write(pgWriter, value);
             else
                 try
                 {
-                    Result = converter.WriteAsObjectAsync(writer, value, converterInfo.Options, _cancellationToken);
+                    Result = writer.WriteAsync(pgWriter, value, _cancellationToken);
                 }
                 catch (Exception ex)
                 {

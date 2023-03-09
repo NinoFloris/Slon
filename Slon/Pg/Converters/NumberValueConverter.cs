@@ -7,16 +7,18 @@ using Slon.Protocol;
 
 namespace Slon.Pg.Converters;
 
-/// A composing converter that converts number types, it delegates all behavior to the underlying converter.
+// NOTE: We don't inherit from ValueConverter to be able to avoid the virtual calls for ConvertFrom/ConvertTo.
+
+/// A value converter that converts number types, it delegates all behavior to the effective converter.
 sealed class NumberValueConverter<T, TEffective> : PgConverter<T>
 #if !NETSTANDARD2_0
     where T : INumberBase<T> where TEffective : INumberBase<TEffective>
 #endif
 {
     readonly PgConverter<TEffective> _effectiveConverter;
-    public NumberValueConverter(PgConverter<TEffective> effectiveConverter) => _effectiveConverter = effectiveConverter;
-
-    PgConverter<TEffective> EffectiveConverter => _effectiveConverter;
+    public NumberValueConverter(PgConverter<TEffective> effectiveConverter)
+        : base(FromDelegatedDbNullPredicate(effectiveConverter.DbNullPredicate, typeof(T)))
+        => _effectiveConverter = effectiveConverter;
 
 #if !NETSTANDARD2_0
     T ConvertFrom(TEffective value, PgConverterOptions options) => T.CreateChecked(value);
@@ -26,6 +28,12 @@ sealed class NumberValueConverter<T, TEffective> : PgConverter<T>
     T ConvertFrom(TEffective value, PgConverterOptions options) => throw new NotImplementedException();
     TEffective ConvertTo(T value, PgConverterOptions options) => throw new NotImplementedException();
 #endif
+
+    protected override bool IsDbNull(T? value, PgConverterOptions options)
+    {
+        DebugShim.Assert(value is not null);
+        return _effectiveConverter.IsDbNullValue(ConvertTo(value, options), options);
+    }
 
     public override bool CanConvert(DataRepresentation representation) => _effectiveConverter.CanConvert(representation);
 

@@ -9,6 +9,7 @@ using System.Threading.Channels;
 using System.Threading.Tasks;
 using Slon.Data;
 using Slon.Pg;
+using Slon.Pg.Descriptors;
 using Slon.Pg.Types;
 using Slon.Protocol;
 using Slon.Protocol.Pg;
@@ -436,10 +437,14 @@ public partial class SlonDataSource: DbDataSource, IConnectionFactory<PgV3Protoc
         _channelWriter?.Complete();
     }
 
-    internal PgConverterInfo<T>? GetConverterInfo<T>()
+    internal PgConverterInfo GetConverterInfo(Type type, Field field)
     {
-        var dbDeps = GetDbDependencies();
-        return (PgConverterInfo<T>?)dbDeps.ConverterOptions.GetConverterInfo(typeof(T));
+        var converterOptions = GetDbDependencies().ConverterOptions;
+        var info = converterOptions.GetConverterInfo(type, field.PgTypeId);
+        if (info is null && type == typeof(object))
+            info = converterOptions.GetDefaultConverterInfo(field.PgTypeId);
+
+        return info ?? throw new InvalidOperationException($"Cannot find converter for clr type {type} and pg type {field.PgTypeId}");
     }
 
     internal ParameterContextFactory GetParameterContextFactory(string? statementText = null)

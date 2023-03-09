@@ -1,4 +1,5 @@
 using System;
+using Slon.Pg.Descriptors;
 using Slon.Pg.Types;
 
 namespace Slon.Pg.Converters;
@@ -17,12 +18,10 @@ sealed class DateTimeConverterResolver: PgConverterResolver<DateTime>
     }
 
     public override PgConverter<DateTime> GetConverter(DateTime value)
-    {
-        if (value.Kind is DateTimeKind.Utc)
-            return _tzConverter ??= new DateTimeTimestampTzConverter();
+        => value.Kind is DateTimeKind.Utc
+            ? _tzConverter ??= new DateTimeTimestampTzConverter()
+            : _converter ??= new DateTimeTimestampConverter();
 
-        return _converter ??= new DateTimeTimestampConverter();
-    }
-
-    public override PgTypeId GetDataTypeName(DateTime value) => value.Kind is DateTimeKind.Utc ? _timestampTz : _timestamp;
+    public override PgConverter<DateTime> GetConverter(Field field) => _converter ??= new DateTimeTimestampConverter();
+    public override PgTypeId GetPgTypeId(DateTime value) => value.Kind is DateTimeKind.Utc ? _timestampTz : _timestamp;
 }

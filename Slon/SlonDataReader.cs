@@ -7,6 +7,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Slon.Pg.Descriptors;
 using Slon.Protocol;
 using Slon.Protocol.Pg;
 using Slon.Protocol.PgV3; // TODO
@@ -305,20 +306,24 @@ public sealed partial class SlonDataReader: DbDataReader
     public override T GetFieldValue<T>(int ordinal)
     {
         var reader = new SequenceReader<byte>();
-        var info = _dataSource.GetConverterInfo<T>();
-        info!.Converter.Read(ref reader, 4, out var value, info.Options);
-        return value;
+        // TODO store last used converter per column for quick checking.
+        var field = new Field();
+        var info = _dataSource.GetConverterInfo(typeof(T), field);
+        if (typeof(T) == typeof(object) && info.Type != typeof(object))
+        {
+            info.GetReader(field).Read(ref reader, 4, out var objectValue);
+            return (T)objectValue!;
+        }
+
+        info.GetReader<T>(field).Read(ref reader, 4, out var value);
+        return value!;
     }
 
     public override bool GetBoolean(int ordinal)
-    {
-        throw new NotImplementedException();
-    }
+        => GetFieldValue<bool>(ordinal);
 
     public override byte GetByte(int ordinal)
-    {
-        throw new NotImplementedException();
-    }
+        => GetFieldValue<byte>(ordinal);
 
     public override long GetBytes(int ordinal, long dataOffset, byte[]? buffer, int bufferOffset, int length)
     {
@@ -326,9 +331,7 @@ public sealed partial class SlonDataReader: DbDataReader
     }
 
     public override char GetChar(int ordinal)
-    {
-        throw new NotImplementedException();
-    }
+        => GetFieldValue<char>(ordinal);
 
     public override long GetChars(int ordinal, long dataOffset, char[]? buffer, int bufferOffset, int length)
     {
@@ -341,19 +344,13 @@ public sealed partial class SlonDataReader: DbDataReader
     }
 
     public override DateTime GetDateTime(int ordinal)
-    {
-        throw new NotImplementedException();
-    }
+        => GetFieldValue<DateTime>(ordinal);
 
     public override decimal GetDecimal(int ordinal)
-    {
-        throw new NotImplementedException();
-    }
+        => GetFieldValue<decimal>(ordinal);
 
     public override double GetDouble(int ordinal)
-    {
-        throw new NotImplementedException();
-    }
+        => GetFieldValue<double>(ordinal);
 
     [return: DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)]
     public override Type GetFieldType(int ordinal)
@@ -362,29 +359,19 @@ public sealed partial class SlonDataReader: DbDataReader
     }
 
     public override float GetFloat(int ordinal)
-    {
-        throw new NotImplementedException();
-    }
+        => GetFieldValue<float>(ordinal);
 
     public override Guid GetGuid(int ordinal)
-    {
-        throw new NotImplementedException();
-    }
+        => GetFieldValue<Guid>(ordinal);
 
     public override short GetInt16(int ordinal)
-    {
-        throw new NotImplementedException();
-    }
+        => GetFieldValue<short>(ordinal);
 
     public override int GetInt32(int ordinal)
-    {
-        throw new NotImplementedException();
-    }
+        => GetFieldValue<int>(ordinal);
 
     public override long GetInt64(int ordinal)
-    {
-        throw new NotImplementedException();
-    }
+        => GetFieldValue<long>(ordinal);
 
     public override string GetName(int ordinal)
     {
@@ -397,14 +384,10 @@ public sealed partial class SlonDataReader: DbDataReader
     }
 
     public override string GetString(int ordinal)
-    {
-        throw new NotImplementedException();
-    }
+        => GetFieldValue<string>(ordinal);
 
     public override object GetValue(int ordinal)
-    {
-        throw new NotImplementedException();
-    }
+        => GetFieldValue<object>(ordinal);
 
     public override int GetValues(object[] values)
     {

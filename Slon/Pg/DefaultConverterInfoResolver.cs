@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Numerics;
 using Slon.Pg.Converters;
@@ -72,15 +71,14 @@ class DefaultConverterInfoResolver: IPgConverterInfoResolver
         foreach (var factory in ConverterFactories)
             if (factory.CreateConverterInfo(type, options, dataTypeName is null ? null : new(dataTypeName.GetValueOrDefault())) is { } converterInfo)
             {
-                if (!converterInfo.GetType().IsGenericType || converterInfo.GetType() != typeof(PgConverterInfo<>).MakeGenericType(type) && converterInfo.GetType() != typeof(PgConverterResolverInfo<>).MakeGenericType(type))
-                    throw new InvalidOperationException($"Factory '{factory.GetType().FullName}' returned a non generic converter info or one for a different type: {converterInfo.GetType().FullName}");
+                // TODO validate returned info.
                 return converterInfo;
             }
 
         return null;
 
         PgConverterInfo CreateTextInfo<T>(PgConverter<T> converter)
-            => CreateConverterInfo(converter, DataTypeNames.Text, options, preferredRepresentation: DataRepresentation.Text, isDefaultInfo);
+            => PgConverterInfo.Create(options, converter, DataTypeNames.Text, isDefaultInfo, DataRepresentation.Text);
 
         PgConverterInfo? CreateNumberInfo<T>(DataTypeName dataTypeName, Func<PgConverter<T>>? defaultConverterFunc)
 #if !NETSTANDARD2_0
@@ -113,13 +111,6 @@ class DefaultConverterInfoResolver: IPgConverterInfoResolver
             _ => null
         };
 
-        return converter is not null ? CreateConverterInfo(converter, dataTypeName, options, isDefaultInfo: isDefaultInfo) : null;
+        return converter is not null ? PgConverterInfo.Create(options, converter, dataTypeName, isDefaultInfo) : null;
     }
-
-    PgConverterInfo CreateConverterInfo<T>(PgConverter<T> converter, DataTypeName dataTypeName, PgConverterOptions options, DataRepresentation? preferredRepresentation = null, bool isDefaultInfo = false) =>
-        new PgConverterInfo<T>(options, converter, dataTypeName)
-        {
-            IsDefault = isDefaultInfo,
-            PreferredRepresentation = preferredRepresentation
-        };
 }
