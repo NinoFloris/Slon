@@ -94,7 +94,7 @@ readonly struct ParameterContextFactory
             else
             {
                 cacheItem.DbType = new SlonDbType(_frontendTypeCatalog.GetDataTypeName(parameter.PgTypeId));
-                dbParameter.SetInferredDbType(cacheItem.DbType, parameter.ConverterInfo.IsValueDependent);
+                dbParameter.SetInferredDbType(cacheItem.DbType, parameter.Writer.Info.IsValueDependent);
             }
         }
 
@@ -134,7 +134,7 @@ readonly struct ParameterContextFactory
                         {
                             dbParameter = (SlonDbParameter)enumerator.Current.Value!;
                             if (cacheItem.IsInferredDbType && dbParameter.HasInferredSlonDbType == false && dbParameter.SlonDbType == SlonDbType.Infer)
-                                dbParameter.SetInferredDbType(cacheItem.DbType, cachedParameter.ConverterInfo.IsValueDependent);
+                                dbParameter.SetInferredDbType(cacheItem.DbType, cachedParameter.Writer.Info.IsValueDependent);
 
                             // If our value is an SlonDbParameter we have to use our fresh session as the value.
                             cachedParameter = cachedParameter with { Value = lastSession };
@@ -143,12 +143,14 @@ readonly struct ParameterContextFactory
                         builder.AddParameter(cachedParameter);
                         break;
                     case ParameterEquality.ConverterInfo:
+                        DebugShim.Assert(cachedConverterInfo is not null);
                         // We sync the InferredDbType if the current instance does not have it yet, this saves a lookup.
+                        // We can only sync it when the Converter is not value dependent, as we haven't established value equality.
                         if (cacheItem.IsSlonDbParameter)
                         {
                             dbParameter = (SlonDbParameter)enumerator.Current.Value!;
-                            if (cacheItem.IsInferredDbType && dbParameter.HasInferredSlonDbType == false && dbParameter.SlonDbType == SlonDbType.Infer)
-                                dbParameter.SetInferredDbType(cacheItem.DbType, cachedParameter.ConverterInfo.IsValueDependent);
+                            if (!cachedConverterInfo.IsValueDependent && cacheItem.IsInferredDbType && dbParameter is { HasInferredSlonDbType: false, SlonDbType.IsInfer: true })
+                                dbParameter.SetInferredDbType(cacheItem.DbType, cachedConverterInfo.IsValueDependent);
                         }
 
                         // We don't update the cache for converter info matches as it does not seem worth the cost
@@ -293,7 +295,7 @@ struct ParameterCacheItem
         if (parameterEquality is ParameterEquality.ConverterInfo)
         {
             cachedParameter = default;
-            cachedConverterInfo = Parameter.ConverterInfo;
+            cachedConverterInfo = Parameter.Writer.Info;
             return ParameterEquality.ConverterInfo;
         }
 
@@ -324,6 +326,8 @@ struct ParameterCacheItem
             return ParameterEquality.Full;
         }
 
+        // TODO invalid, can only do this for immutable or value types
+
         // Shortcircuit if it's the same instance.
         if (ReferenceEquals(cachedValue, value))
             return ParameterEquality.Full;
@@ -343,7 +347,9 @@ struct ParameterCacheItem
         // Note: we don't use the values stored on the cachedDbParameter as these may have been mutated, instead we refer to copies.
         if (cachedDbParameter is not null && dbParameter is not null)
         {
-            if (!IsInferredDbType && (dbParameter.HasInferredSlonDbType || dbParameter.SlonDbType != DbType))
+            // We can't share (clr type, pgtype) converter info's with (clr type, infer) ones.
+            // Explicitly set DbTypes can never change their pg type based on the value, instead they should throw, inferred DbTypes could however.
+            if (!IsInferredDbType && (dbParameter.SlonDbType.IsInfer || dbParameter.HasInferredSlonDbType || dbParameter.SlonDbType != DbType))
                 return false;
 
             if (dbParameter.ValueType != ValueType)

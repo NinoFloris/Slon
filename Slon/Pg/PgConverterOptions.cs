@@ -16,6 +16,7 @@ class PgConverterOptions
 
     public required Encoding TextEncoding { get; init; }
     public required IPgConverterInfoResolver ConverterInfoResolver { get; init; }
+    public bool EnableDateTimeInfinityConversions { get; init; } = true;
 
     PgConverterInfo? GetConverterInfoCore(Type? type, PgTypeId? pgTypeId)
     {

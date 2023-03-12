@@ -153,7 +153,7 @@ readonly struct ParametersWriter: IDisposable
         }
         else if (sizeResult is {} size)
         {
-            pgWriter.WriteInteger(size.Value.GetValueOrDefault());
+            pgWriter.WriteInt32(size.Value.GetValueOrDefault());
             p.Write(pgWriter);
         }
     }
@@ -226,7 +226,6 @@ readonly struct ParametersWriter: IDisposable
         var sizeResult = p.Size.Value;
         switch (sizeResult.Kind)
         {
-            case SizeResultKind.FixedSize:
             case SizeResultKind.Size:
                 writer.WriteInt(sizeResult.Value.GetValueOrDefault());
                 if (pgWriter.FlushMode is FlushMode.NonBlocking)

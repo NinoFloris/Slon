@@ -22,18 +22,6 @@ sealed class ConverterInfoCache<TPgTypeId> where TPgTypeId : struct
             throw new InvalidOperationException("Cannot use this type argument.");
     }
 
-    PgTypeId? AsPgTypeId(TPgTypeId? pgTypeId)
-    {
-        if (pgTypeId is { } id)
-            return _options.RequirePortableTypeIds switch
-            {
-                true => new PgTypeId(Unsafe.As<TPgTypeId, DataTypeName>(ref id)),
-                false => new PgTypeId(Unsafe.As<TPgTypeId, Oid>(ref id))
-            };
-
-        return null;
-    }
-
     public PgConverterInfo? GetOrAddInfo(Type? type, TPgTypeId? pgTypeId)
     {
         if (pgTypeId is null && type is not null)
@@ -50,11 +38,11 @@ sealed class ConverterInfoCache<TPgTypeId> where TPgTypeId : struct
                 if (type is null && cachedInfo.IsDefault || cachedInfo.Type == type)
                     return cachedInfo;
 
-        return AddByIdEntry(id, infos);
+        return AddEntryById(id, infos);
 
         PgConverterInfo? AddByType(Type type)
         {
-            var info = CreateInfo();
+            var info = CreateInfo(type, pgTypeId, _options);
             if (info is null)
                 return null;
 
@@ -62,9 +50,9 @@ sealed class ConverterInfoCache<TPgTypeId> where TPgTypeId : struct
             return _cacheByClrType.TryAdd(type, info) ? info : _cacheByClrType[type];
         }
 
-        PgConverterInfo? AddByIdEntry(TPgTypeId pgTypeId, PgConverterInfo[]? infos)
+        PgConverterInfo? AddEntryById(TPgTypeId pgTypeId, PgConverterInfo[]? infos)
         {
-            var info = CreateInfo();
+            var info = CreateInfo(type, pgTypeId, _options);
             if (info is null)
                 return null;
 
@@ -89,34 +77,44 @@ sealed class ConverterInfoCache<TPgTypeId> where TPgTypeId : struct
             }
         }
 
-        PgConverterInfo? CreateInfo()
+        static PgConverterInfo? CreateInfo(Type? type, TPgTypeId? pgtypeid, PgConverterOptions options)
         {
-            var typeId = AsPgTypeId(pgTypeId);
-            DataTypeName? dataTypeName = null;
-            if (typeId is { } id)
-                dataTypeName = id.IsDataTypeName ? id.DataTypeName : _options.TypeCatalog.GetDataTypeName(id);
-            var info = _options.ConverterInfoResolver.GetConverterInfo(type, dataTypeName, _options);
+            var typeId = AsPgTypeId(pgtypeid);
+            var info = options.ConverterInfoResolver.GetConverterInfo(type, typeId is { } id ? options.TypeCatalog.GetDataTypeName(id) : null, options);
             if (info is null)
                 return null;
 
-            if (type is null)
+            if (typeId is not null)
             {
-                if (!info.IsDefault)
+                if (info.PgTypeId != typeId)
+                    throw new InvalidOperationException("A Postgres type was passed but the resolved PgConverterInfo does not have an equal PgTypeId.");
+
+                if (type is null && !info.IsDefault)
                     throw new InvalidOperationException("No CLR type was passed but the resolved PgConverterInfo does not have IsDefault set to true.");
             }
-            else
+
+            if (type is not null)
             {
-                if (pgTypeId is null && !info.IsDefault)
-                    throw new InvalidOperationException("No DataTypeName was passed but the resolved PgConverterInfo does not have IsDefault set to true.");
                 if (info.Type != type)
-                    throw new InvalidOperationException("A CLR type was passed but the resolved PgConverterInfo is not for this type.");
+                    throw new InvalidOperationException("A CLR type was passed but the resolved PgConverterInfo does not have an equal Type.");
+
+                if (typeId is null && !info.IsDefault)
+                    throw new InvalidOperationException("No Postgres type was passed but the resolved PgConverterInfo does not have IsDefault set to true.");
             }
 
-            // We can't do this for ValueDependent infos but it's a good sanity check.
-            if (pgTypeId is not null && info.PgTypeId is { } infoTypeId && infoTypeId != typeId)
-                throw new InvalidOperationException("No DataTypeName was passed but the resolved PgConverterInfo does not have IsDefault set to true.");
-
             return info;
+        }
+
+        static PgTypeId? AsPgTypeId(TPgTypeId? pgTypeId)
+        {
+            if (pgTypeId is { } id)
+                return (typeof(TPgTypeId) == typeof(DataTypeName)) switch
+                {
+                    true => new PgTypeId(Unsafe.As<TPgTypeId, DataTypeName>(ref id)),
+                    false => new PgTypeId(Unsafe.As<TPgTypeId, Oid>(ref id))
+                };
+
+            return null;
         }
     }
 }

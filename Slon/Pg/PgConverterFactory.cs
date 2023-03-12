@@ -1,23 +1,23 @@
 using System;
-using System.Buffers;
-using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using System.Threading.Tasks;
 using Slon.Pg.Types;
-using Slon.Protocol;
 
 namespace Slon.Pg;
 
+// TODO should this even be inheriting from PgConverter? (when do we want to be able to add them or use them interchangeably?)
 abstract class PgConverterFactory : PgConverter
 {
-    [RequiresUnreferencedCode("Reflection used for pg type conversions.")]
     public abstract PgConverterInfo? CreateConverterInfo(Type type, PgConverterOptions options, PgTypeId? pgTypeId = null);
 
     public sealed override bool CanConvert(DataRepresentation representation) => false;
+    public sealed override bool IsDbNullable => throw new NotSupportedException();
 
+    internal sealed override Type TypeToConvert => throw new NotSupportedException();
+    internal sealed override object? ReadAsObject(PgReader reader, PgConverterOptions options) => throw new NotSupportedException();
+    internal sealed override ValueTask<object?> ReadAsObjectAsync(PgReader reader, PgConverterOptions options, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     internal sealed override bool IsDbNullValueAsObject(object? value, PgConverterOptions options) => throw new NotSupportedException();
     internal sealed override SizeResult GetSizeAsObject(object value, int bufferLength, ref object? writeState, DataRepresentation representation, PgConverterOptions options) => throw new NotSupportedException();
-    internal sealed override ReadStatus ReadAsObject(ref SequenceReader<byte> reader, int byteCount, out object? value, PgConverterOptions options) => throw new NotSupportedException();
     internal sealed override void WriteAsObject(PgWriter writer, object? value, PgConverterOptions options) => throw new NotSupportedException();
     internal sealed override ValueTask WriteAsObjectAsync(PgWriter writer, object? value, PgConverterOptions options, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 }

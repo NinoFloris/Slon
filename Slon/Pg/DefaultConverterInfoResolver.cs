@@ -46,9 +46,9 @@ class DefaultConverterInfoResolver: IPgConverterInfoResolver
         // If there is no default name for the clr type we have to provide one, when making a type default be sure to replace it here with .Value.
         var numericInfo = type switch
         {
-            _ when type == typeof(int) => CreateNumberInfo<int>(dataTypeName!.Value, () => new Int4Converter()),
-            _ when type == typeof(long) => CreateNumberInfo<long>(dataTypeName!.Value, () => new Int8Converter()),
-            _ when type == typeof(short) => CreateNumberInfo<short>(dataTypeName!.Value, () => new Int2Converter()),
+            _ when type == typeof(int) => CreateNumberInfo<int>(dataTypeName!.Value, () => new Int32Converter()),
+            _ when type == typeof(long) => CreateNumberInfo<long>(dataTypeName!.Value, () => new Int64Converter()),
+            _ when type == typeof(short) => CreateNumberInfo<short>(dataTypeName!.Value, () => new Int16Converter()),
             _ when type == typeof(byte) => CreateNumberInfo<byte>(dataTypeName ?? DataTypeNames.Int2, null),
             _ => null
         };
@@ -102,8 +102,8 @@ class DefaultConverterInfoResolver: IPgConverterInfoResolver
         // Explicit conversions.
         converter ??= dataTypeName switch
         {
-            _ when dataTypeName == DataTypeNames.Int2 => new NumberValueConverter<T, short>(new Int2Converter()),
-            _ when dataTypeName == DataTypeNames.Int4 => new NumberValueConverter<T, int>(new Int4Converter()),
+            _ when dataTypeName == DataTypeNames.Int2 => new NumberValueConverter<T, short>(new Int16Converter()),
+            _ when dataTypeName == DataTypeNames.Int4 => new NumberValueConverter<T, int>(new Int32Converter()),
             // TODO
             // DataTypeNames.Float4
             // DataTypeNames.Float8

@@ -206,7 +206,7 @@ sealed class PgV3CommandWriter: CommandWriter<CommandValues, CommandExecution>
             try
             {
                 if (parameter.WriteState is not null)
-                    parameter.ConverterInfo.DisposeWriteState(parameter.WriteState);
+                    parameter.Writer.Info.DisposeWriteState(parameter.WriteState);
             }
             catch (Exception ex)
             {
@@ -268,7 +268,7 @@ sealed class PgV3CommandWriter: CommandWriter<CommandValues, CommandExecution>
                     try
                     {
                         if (parameter.WriteState is not null)
-                            parameter.ConverterInfo.DisposeWriteState(parameter.WriteState);
+                            parameter.Writer.Info.DisposeWriteState(parameter.WriteState);
                     }
                     catch (Exception ex)
                     {

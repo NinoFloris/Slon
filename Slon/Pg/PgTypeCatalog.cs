@@ -153,10 +153,7 @@ sealed partial class PgTypeCatalog
                 Identifier = GetDataTypeNameCore(pgType.Identifier),
                 Kind = array with
                 {
-                    ElementType = array.ElementType with
-                    {
-                        Identifier = GetDataTypeNameCore(array.ElementType.Identifier)
-                    }
+                    ElementType = ToPortableType(array.ElementType)
                 }
             },
             PgKind.Range range => pgType with
@@ -164,10 +161,7 @@ sealed partial class PgTypeCatalog
                 Identifier = GetDataTypeNameCore(pgType.Identifier),
                 Kind = range with
                 {
-                    ElementType = range.ElementType with
-                    {
-                        Identifier = GetDataTypeNameCore(range.ElementType.Identifier)
-                    }
+                    ElementType = ToPortableType(range.ElementType)
                 }
             },
             PgKind.MultiRange multiRange => pgType with
@@ -175,10 +169,7 @@ sealed partial class PgTypeCatalog
                 Identifier = GetDataTypeNameCore(pgType.Identifier),
                 Kind = multiRange with
                 {
-                    RangeType = multiRange.RangeType with
-                    {
-                        Identifier = GetDataTypeNameCore(multiRange.RangeType.Identifier)
-                    }
+                    RangeType = ToPortableType(multiRange.RangeType)
                 }
             },
             PgKind.Enum => pgType with { Identifier = GetDataTypeNameCore(pgType.Identifier) },
@@ -193,10 +184,7 @@ sealed partial class PgTypeCatalog
                 Identifier = GetDataTypeNameCore(pgType.Identifier),
                 Kind = domain with
                 {
-                    UnderlyingType = domain.UnderlyingType with
-                    {
-                        Identifier = GetDataTypeNameCore(domain.UnderlyingType.Identifier)
-                    }
+                    UnderlyingType = ToPortableType(domain.UnderlyingType)
                 }
             },
             var v => throw new ArgumentOutOfRangeException(nameof(pgType.Kind), v, null)

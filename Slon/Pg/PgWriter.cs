@@ -69,7 +69,7 @@ class PgWriter
     public void WriteAsOid(PgTypeId pgTypeId)
     {
         var oid = _typeCatalog.GetOid(pgTypeId);
-        WriteUnsignedInteger((uint)oid);
+        WriteUInt32((uint)oid);
     }
 
     public void Flush(TimeSpan timeout = default)
@@ -103,29 +103,29 @@ class PgWriter
     }
 
 //
-//     public void WriteInteger(short value);
-    public void WriteInteger(int value)
+//     public void WriteInt32(short value);
+    public void WriteInt32(int value)
     {
         _writer.WriteInt(value);
     }
 
-    public void WriteInteger(long value)
+    public void WriteInt64(long value)
     {
         throw new NotImplementedException();
     }
 
 // #if !NETSTANDARD2_0
-//     public void WriteInteger(Int128 value);
+//     public void WriteInt32(Int128 value);
 // #endif
 //
-//     public void WriteUnsignedInteger(ushort value);
-    public void WriteUnsignedInteger(uint value)
+//     public void WriteUInt32(ushort value);
+    public void WriteUInt32(uint value)
     {
         _writer.WriteUInt(value);
     }
-//     public void WriteUnsignedInteger(ulong value);
+//     public void WriteUInt32(ulong value);
 // #if !NETSTANDARD2_0
-//     public void WriteUnsignedInteger(UInt128 value)
+//     public void WriteUInt32(UInt128 value)
 //     
 // #endif
 

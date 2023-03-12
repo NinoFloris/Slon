@@ -7,6 +7,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Slon.Pg;
 using Slon.Pg.Descriptors;
 using Slon.Protocol;
 using Slon.Protocol.Pg;
@@ -305,18 +306,16 @@ public sealed partial class SlonDataReader: DbDataReader
 
     public override T GetFieldValue<T>(int ordinal)
     {
-        var reader = new SequenceReader<byte>();
+        var reader = new PgReader();
         // TODO store last used converter per column for quick checking.
         var field = new Field();
         var info = _dataSource.GetConverterInfo(typeof(T), field);
         if (typeof(T) == typeof(object) && info.Type != typeof(object))
         {
-            info.GetReader(field).Read(ref reader, 4, out var objectValue);
-            return (T)objectValue!;
+            return (T)info.GetReader(field).Read(reader)!;
         }
 
-        info.GetReader<T>(field).Read(ref reader, 4, out var value);
-        return value!;
+        return info.GetReader<T>(field).Read(reader);
     }
 
     public override bool GetBoolean(int ordinal)

@@ -237,6 +237,7 @@ public sealed class SlonParameter<T> : SlonDbParameter, IDbDataParameter<T>, IPa
 
     public new SlonParameter<T> Clone() => (SlonParameter<T>)CloneCore();
 
+    // TODO we need to think about structural equality here as we may think two values are equal while they were mutated over time (e.g. arrays)
     internal override bool ValueEquals(SlonDbParameter other)
     {
         if (other is SlonParameter<T> otherT)
