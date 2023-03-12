@@ -184,7 +184,7 @@ namespace MStatDumper
                     .Where(x => x.Method.DeclaringType.Scope.Name == "Slon")
                     .GroupBy(x => GetClassName(x.Method))
                     .OrderByDescending(x => x.Sum(x => x.Size + x.GcInfoSize + x.EhInfoSize))
-                    .Take(20)
+                    .Take(200)
                     .ToList();
 
                 static string GetClassName(MethodReference methodReference)
