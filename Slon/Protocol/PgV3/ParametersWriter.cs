@@ -49,7 +49,7 @@ readonly struct ParametersWriter: IDisposable
         var unknownCount = 0;
         if (Context.HasUnknownByteCounts())
             foreach (var p in Items.Span)
-                if (p.Size?.Kind is SizeResultKind.Unknown)
+                if (p.Size?.Kind is ValueSizeKind.Unknown)
                     unknownCount++;
 
         var unknownOutputs = unknownCount > 0 ? ArrayPool<BufferedOutput>.Shared.Rent(unknownCount) : null!;
@@ -57,7 +57,7 @@ readonly struct ParametersWriter: IDisposable
 
         var totalByteCount = 0;
         foreach (var p in Items.Span)
-            if (p.Size?.Kind is SizeResultKind.Unknown)
+            if (p.Size?.Kind is ValueSizeKind.Unknown)
                 unknownOutputs[unknownI++] = p.GetBufferedOutput();
             else
                 totalByteCount += p.Size?.Value ?? 0;
@@ -65,9 +65,9 @@ readonly struct ParametersWriter: IDisposable
         // TODO If byteCount small enough return false to do one pass writing.
         byteCount = totalByteCount + (Items.Length * 4);
         if (unknownOutputs is null)
-            _pgWriter.UpdateState(unknownOutputs, SizeResult.Create(byteCount));
+            _pgWriter.UpdateState(unknownOutputs, ValueSize.Create(byteCount));
         else
-            _pgWriter.UpdateState(unknownOutputs, unknownOutputs.Length == 0 ? SizeResult.Zero : SizeResult.Unknown);
+            _pgWriter.UpdateState(unknownOutputs, unknownOutputs.Length == 0 ? ValueSize.Zero : ValueSize.Unknown);
 
         return true;
     }
@@ -113,18 +113,18 @@ readonly struct ParametersWriter: IDisposable
             var p = Items.Span[i];
             var bytesBuffered = buffer.BufferedBytes;
             var size = p.Size;
-            var bufferedOutput = size is { Kind: SizeResultKind.Unknown } ? new BufferedOutput?(unknownOutputs[unknownI++]) : null;
+            var bufferedOutput = size is { Kind: ValueSizeKind.Unknown } ? new BufferedOutput?(unknownOutputs[unknownI++]) : null;
             WriteParameter(ref buffer, pgWriter, p, size, bufferedOutput, onePass: false);
 
             // Converter went over its previously given byte count here, fail loudly as this is an implementation issue in the converter.
-            if (size is { Kind: not SizeResultKind.Unknown, Value: { } byteCount } && buffer.BufferedBytes - bytesBuffered > sizeof(int) + byteCount)
+            if (size is { Kind: not ValueSizeKind.Unknown, Value: { } byteCount } && buffer.BufferedBytes - bytesBuffered > sizeof(int) + byteCount)
                 throw new InvalidOperationException($"The '{p.GetConverterType().FullName}' converter wrote more than the previously reported size of the value.");
         }
         pgWriter.Writer.Commit();
         buffer = new BufferWriter<TWriter>(buffer.Output);
     }
 
-    static void WriteParameter<TWriter>(ref BufferWriter<TWriter> buffer, PgWriter pgWriter, Parameter p, SizeResult? sizeResult, BufferedOutput? bufferedOutput, bool onePass) where TWriter : IBufferWriter<byte>
+    static void WriteParameter<TWriter>(ref BufferWriter<TWriter> buffer, PgWriter pgWriter, Parameter p, ValueSize? sizeResult, BufferedOutput? bufferedOutput, bool onePass) where TWriter : IBufferWriter<byte>
     {
         Debug.Assert(onePass && pgWriter.FlushMode is FlushMode.None && bufferedOutput is null || !onePass);
 
@@ -142,7 +142,7 @@ readonly struct ParametersWriter: IDisposable
         }
 
         // We only need to consider upper bounds in one pass cases.
-        if (onePass && p.Size?.Kind is SizeResultKind.UpperBound)
+        if (onePass && p.Size?.Kind is ValueSizeKind.UpperBound)
         {
             // Make a copy and advance so we can write the length in at the end.
             var backFillBuffer = buffer;
@@ -181,7 +181,7 @@ readonly struct ParametersWriter: IDisposable
             }
 
             // Converter went over its previously given byte count here, fail loudly as this is an implementation issue in the converter.
-            if (p.Size is { Kind: not SizeResultKind.Unknown, Value: { } byteCount } && writer.BufferedBytes - bytesBuffered > sizeof(int) + byteCount)
+            if (p.Size is { Kind: not ValueSizeKind.Unknown, Value: { } byteCount } && writer.BufferedBytes - bytesBuffered > sizeof(int) + byteCount)
                 throw new InvalidOperationException($"The '{p.GetConverterType().FullName}' converter wrote more than the previously reported size of the value.");
         }
 
@@ -208,7 +208,7 @@ readonly struct ParametersWriter: IDisposable
             }
 
             // Converter went over its previously given byte count here, fail loudly as this is an implementation issue in the converter.
-            if (p.Size is { Kind: not SizeResultKind.Unknown, Value: { } byteCount } && writer.BufferedBytes - bytesBuffered > sizeof(int) + byteCount)
+            if (p.Size is { Kind: not ValueSizeKind.Unknown, Value: { } byteCount } && writer.BufferedBytes - bytesBuffered > sizeof(int) + byteCount)
                 throw new InvalidOperationException($"The '{p.GetConverterType().FullName}' converter wrote more than the previously reported size of the value.");
         }
 
@@ -226,14 +226,14 @@ readonly struct ParametersWriter: IDisposable
         var sizeResult = p.Size.Value;
         switch (sizeResult.Kind)
         {
-            case SizeResultKind.Size:
+            case ValueSizeKind.Size:
                 writer.WriteInt(sizeResult.Value.GetValueOrDefault());
                 if (pgWriter.FlushMode is FlushMode.NonBlocking)
                     return p.WriteAsync(pgWriter, cancellationToken);
 
                 p.Write(pgWriter);
                 return new ValueTask();
-            case SizeResultKind.Unknown:
+            case ValueSizeKind.Unknown:
                 var buffer = p.GetBufferedOutput();
                 writer.WriteInt(buffer.Length);
                 if (pgWriter.FlushMode is FlushMode.NonBlocking)
@@ -241,7 +241,7 @@ readonly struct ParametersWriter: IDisposable
 
                 buffer.Write(pgWriter);
                 return new ValueTask();
-            case SizeResultKind.UpperBound:
+            case ValueSizeKind.UpperBound:
                 throw new NotSupportedException();
             default:
                 throw new ArgumentOutOfRangeException();

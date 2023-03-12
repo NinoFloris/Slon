@@ -98,7 +98,7 @@ struct ParameterContextBuilder
         {
             _remainingBufferSize -= size.Value ?? 0;
 
-            if (size.Kind is SizeResultKind.UpperBound && (_flags & ParameterContextFlags.AnyUpperBoundByteCount) == 0)
+            if (size.Kind is ValueSizeKind.UpperBound && (_flags & ParameterContextFlags.AnyUpperBoundByteCount) == 0)
                 _flags |= ParameterContextFlags.AnyUpperBoundByteCount;
         }
 

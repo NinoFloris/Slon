@@ -143,11 +143,11 @@ class PgConverterInfo
         public bool IsDbNullValue([NotNullWhen(false)]T? value)
             => Info is { HasCachedInfo: true, _isTypeDbNullable: false } || _converter.IsDbNullValue(value, Info.Options);
 
-        public SizeResult GetAnySize(T value, int bufferLength, out object? writeState, out DataRepresentation representation, DataRepresentation? preferredRepresentation = null)
+        public ValueSize GetAnySize(T value, int bufferLength, out object? writeState, out DataRepresentation representation, DataRepresentation? preferredRepresentation = null)
         {
             writeState = null;
             representation = Info.ResolvePreferredRepresentation(_converter, preferredRepresentation ?? Info.PreferredRepresentation);
-            return _converter.GetSize(value!, bufferLength, ref writeState, representation, Info.Options);
+            return _converter.GetSize(value!, ref writeState, new(representation, bufferLength), Info.Options);
         }
 
         public void Write(PgWriter pgWriter, T value)
@@ -175,11 +175,11 @@ class PgConverterInfo
         public bool IsDbNullValue([NotNullWhen(false)]object? value)
             => (Info.HasCachedInfo || Info._isTypeDbNullable) && _converter.IsDbNullValueAsObject(value, Info.Options);
 
-        public SizeResult GetAnySize(object value, int bufferLength, out object? writeState, out DataRepresentation representation, DataRepresentation? preferredRepresentation = null)
+        public ValueSize GetAnySize(object value, int bufferLength, out object? writeState, out DataRepresentation representation, DataRepresentation? preferredRepresentation = null)
         {
             writeState = null;
             representation = Info.ResolvePreferredRepresentation(_converter, preferredRepresentation ?? Info.PreferredRepresentation);
-            return _converter.GetSizeAsObject(value!, bufferLength, ref writeState, representation, Info.Options);
+            return _converter.GetSizeAsObject(value!, ref writeState, new(representation, bufferLength), Info.Options);
         }
 
         public void Write(PgWriter pgWriter, object value)
@@ -193,14 +193,17 @@ class PgConverterInfo
 
     internal readonly struct Reader<T>
     {
-        readonly PgConverterInfo _info;
         readonly PgConverter<T> _converter;
+        readonly PgConverterInfo _info;
 
         public Reader(PgConverterResolution<T> resolution, PgConverterInfo info)
         {
             _converter = resolution.Converter;
             _info = info;
+            EffectiveType = resolution.EffectiveType;
         }
+
+        public Type EffectiveType { get; }
 
         public T Read(PgReader reader)
             => _converter.Read(reader, _info.Options);
@@ -211,14 +214,17 @@ class PgConverterInfo
 
     internal readonly struct Reader
     {
-        readonly PgConverterInfo _info;
         readonly PgConverter _converter;
+        readonly PgConverterInfo _info;
 
         public Reader(PgConverterResolution resolution, PgConverterInfo info)
         {
             _converter = resolution.Converter;
             _info = info;
+            EffectiveType = resolution.EffectiveType;
         }
+
+        public Type EffectiveType { get; }
 
         public object? Read(PgReader reader)
             => _converter.ReadAsObject(reader, _info.Options);
@@ -256,28 +262,38 @@ class PgConverterInfo
 
 readonly struct PgConverterResolution<T>
 {
-    public PgConverterResolution(PgConverter<T> converter, PgTypeId pgTypeId)
+    readonly Type? _effectiveType;
+
+    public PgConverterResolution(PgConverter<T> converter, PgTypeId pgTypeId, Type? effectiveType = null)
     {
+        DebugShim.Assert(effectiveType is null || converter.TypeToConvert == typeof(object), "effectiveType can only be set for object polymorphic converters.");
         Converter = converter;
         PgTypeId = pgTypeId;
+        _effectiveType = effectiveType;
     }
 
     public PgConverter<T> Converter { get; }
     public PgTypeId PgTypeId { get; }
+    public Type EffectiveType => _effectiveType ?? Converter.TypeToConvert;
 
     public PgConverterResolution ToConverterResolution() => new(Converter, PgTypeId);
 }
 
 readonly struct PgConverterResolution
 {
-    public PgConverterResolution(PgConverter converter, PgTypeId pgTypeId)
+    readonly Type? _effectiveType;
+
+    public PgConverterResolution(PgConverter converter, PgTypeId pgTypeId, Type? effectiveType = null)
     {
+        DebugShim.Assert(effectiveType is null || converter.TypeToConvert == typeof(object));
         Converter = converter;
         PgTypeId = pgTypeId;
+        _effectiveType = effectiveType;
     }
 
     public PgConverter Converter { get; }
     public PgTypeId PgTypeId { get; }
+    public Type EffectiveType => _effectiveType ?? Converter.TypeToConvert;
 
     public PgConverterResolution<T> ToConverterResolution<T>() => new((PgConverter<T>)Converter, PgTypeId);
 }

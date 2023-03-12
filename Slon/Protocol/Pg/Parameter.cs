@@ -10,7 +10,7 @@ namespace Slon.Protocol.Pg;
 
 readonly struct Parameter
 {
-    public Parameter(object? value, PgConverterInfo.Writer writer, SizeResult? size, DataRepresentation dataRepresentation = DataRepresentation.Binary, object? writeState = null)
+    public Parameter(object? value, PgConverterInfo.Writer writer, ValueSize? size, DataRepresentation dataRepresentation = DataRepresentation.Binary, object? writeState = null)
     {
         Value = value;
         Writer = writer;
@@ -25,7 +25,7 @@ readonly struct Parameter
     /// Value can be an instance of IParameterSession or a direct parameter value.
     public object? Value { get; init; }
     /// Size set to null represents a db null.
-    public SizeResult? Size { get; init; }
+    public ValueSize? Size { get; init; }
     public PgTypeId PgTypeId { get; init; }
 
     public PgConverterInfo.Writer Writer { get; init; }
@@ -83,7 +83,7 @@ static class PgConverterInfoExtensions
         readonly int _bufferLength;
         readonly bool _nullStructValueIsDbNull;
         readonly DataRepresentation? _preferredRepresentation;
-        public SizeResult? Size { get; private set; }
+        public ValueSize? Size { get; private set; }
         DataRepresentation _representation;
         public DataRepresentation Representation => _representation;
         object? _writeState;

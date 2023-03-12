@@ -65,6 +65,9 @@ abstract class PgConverterResolver<T> : PgConverterResolver
     /// </remarks>
     public virtual PgConverterResolution<T> Get(Field field) => GetDefault(field.PgTypeId);
 
+    protected ArgumentOutOfRangeException CreateUnsupportedPgTypeIdException(PgTypeId pgTypeId)
+        => new(nameof(pgTypeId), pgTypeId, "Unsupported PgTypeId.");
+
     internal sealed override Type TypeToConvert => typeof(T);
 
     internal PgConverterResolution<T> GetInternal(T? value, PgTypeId? expectedPgTypeId, bool requirePortableIds)

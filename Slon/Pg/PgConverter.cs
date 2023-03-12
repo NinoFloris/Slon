@@ -33,7 +33,7 @@ abstract class PgConverter
     internal abstract object? ReadAsObject(PgReader reader, PgConverterOptions options);
     internal abstract ValueTask<object?> ReadAsObjectAsync(PgReader reader, PgConverterOptions options, CancellationToken cancellationToken = default);
 
-    internal abstract SizeResult GetSizeAsObject(object value, int bufferLength, ref object? writeState, DataRepresentation representation, PgConverterOptions options);
+    internal abstract ValueSize GetSizeAsObject(object value, [NotNullIfNotNull(nameof(writeState))]ref object? writeState, SizeContext context, PgConverterOptions options);
     internal abstract void WriteAsObject(PgWriter writer, object value, PgConverterOptions options);
     internal abstract ValueTask WriteAsObjectAsync(PgWriter writer, object value, PgConverterOptions options, CancellationToken cancellationToken = default);
 
@@ -52,6 +52,18 @@ abstract class PgConverter
             DbNullPredicate.Polymorphic when GetDbNullPredicate(DbNullPredicate.Default, type) is DbNullPredicate.Default => DbNullPredicate.Default,
             _ => delegatedPredicate
         };
+}
+
+readonly struct SizeContext
+{
+    public SizeContext(DataRepresentation representation, int bufferLength)
+    {
+        Representation = representation;
+        BufferLength = bufferLength;
+    }
+
+    public DataRepresentation Representation { get; }
+    public int BufferLength { get; }
 }
 
 abstract class PgConverter<T> : PgConverter
@@ -80,7 +92,7 @@ abstract class PgConverter<T> : PgConverter
     public virtual ValueTask<T> ReadAsync(PgReader reader, PgConverterOptions options, CancellationToken cancellationToken = default)
         => new(Read(reader, options));
 
-    public abstract SizeResult GetSize(T value, int bufferLength, ref object? writeState, DataRepresentation representation, PgConverterOptions options);
+    public abstract ValueSize GetSize(T value, [NotNullIfNotNull(nameof(writeState))]ref object? writeState, SizeContext context, PgConverterOptions options);
     public abstract void Write(PgWriter writer, T value, PgConverterOptions options);
 
     public virtual ValueTask WriteAsync(PgWriter writer, T value, PgConverterOptions options, CancellationToken cancellationToken = default)
@@ -107,8 +119,8 @@ abstract class PgConverter<T> : PgConverter
         static async ValueTask<object?> Core(ValueTask<T> task) => await task;
     }
 
-    internal sealed override SizeResult GetSizeAsObject(object value, int bufferLength, ref object? writeState, DataRepresentation representation, PgConverterOptions options)
-        => GetSize((T)value, bufferLength, ref writeState, representation, options);
+    internal sealed override ValueSize GetSizeAsObject(object value, [NotNullIfNotNull(nameof(writeState))]ref object? writeState, SizeContext context, PgConverterOptions options)
+        => GetSize((T)value, ref writeState, context, options);
 
     internal sealed override void WriteAsObject(PgWriter writer, object value, PgConverterOptions options)
         => Write(writer, (T)value, options);
@@ -123,8 +135,8 @@ abstract class FixedBinarySizePgConverter<T> : PgConverter<T>
     public sealed override bool HasFixedSize(DataRepresentation representation) => representation is DataRepresentation.Binary;
     protected abstract byte BinarySize { get; }
 
-    public override SizeResult GetSize(T value, int bufferLength, ref object? writeState, DataRepresentation representation, PgConverterOptions options)
-        => representation is DataRepresentation.Binary ? SizeResult.Create(BinarySize) : throw new NotSupportedException();
+    public override ValueSize GetSize(T value, ref object? writeState, SizeContext context, PgConverterOptions options)
+        => context.Representation is DataRepresentation.Binary ? BinarySize : throw new NotSupportedException();
 
     // TODO ensure BinarySize (if reader.Representation is Binary)
     public sealed override ValueTask<T> ReadAsync(PgReader reader, PgConverterOptions options, CancellationToken cancellationToken = default)

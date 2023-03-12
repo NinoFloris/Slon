@@ -76,7 +76,7 @@ class PgConverterOptions
     public PgWriter GetBufferedWriter<TWriter>(TWriter bufferWriter, object? state) where TWriter : IBufferWriter<byte>
     {
         var bufferedWriter = (PgWriter)null!;
-        bufferedWriter.UpdateState(state, SizeResult.Unknown);
+        bufferedWriter.UpdateState(state, ValueSize.Unknown);
         return bufferedWriter;
     }
 

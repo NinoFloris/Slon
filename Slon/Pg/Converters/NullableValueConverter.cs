@@ -22,8 +22,8 @@ sealed class NullableValueConverter<T> : PgConverter<T?> where T : struct
 
     public override bool CanConvert(DataRepresentation representation) => _effectiveConverter.CanConvert(representation);
 
-    public override SizeResult GetSize(T? value, int bufferLength, ref object? writeState, DataRepresentation representation, PgConverterOptions options)
-        => _effectiveConverter.GetSize(ConvertTo(value, options), bufferLength, ref writeState, representation, options);
+    public override ValueSize GetSize(T? value, ref object? writeState, SizeContext context, PgConverterOptions options)
+        => _effectiveConverter.GetSize(ConvertTo(value, options), ref writeState, context, options);
 
     public override T? Read(PgReader reader, PgConverterOptions options)
         => ConvertFrom(_effectiveConverter.Read(reader, options), options);

@@ -17,7 +17,7 @@ abstract class PgConverterFactory : PgConverter
     internal sealed override object? ReadAsObject(PgReader reader, PgConverterOptions options) => throw new NotSupportedException();
     internal sealed override ValueTask<object?> ReadAsObjectAsync(PgReader reader, PgConverterOptions options, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     internal sealed override bool IsDbNullValueAsObject(object? value, PgConverterOptions options) => throw new NotSupportedException();
-    internal sealed override SizeResult GetSizeAsObject(object value, int bufferLength, ref object? writeState, DataRepresentation representation, PgConverterOptions options) => throw new NotSupportedException();
+    internal sealed override ValueSize GetSizeAsObject(object value, ref object? writeState, SizeContext context, PgConverterOptions options) => throw new NotSupportedException();
     internal sealed override void WriteAsObject(PgWriter writer, object? value, PgConverterOptions options) => throw new NotSupportedException();
     internal sealed override ValueTask WriteAsObjectAsync(PgWriter writer, object? value, PgConverterOptions options, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 }

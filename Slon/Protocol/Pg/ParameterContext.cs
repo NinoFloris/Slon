@@ -50,8 +50,8 @@ static class ParameterContextExtensions
             var anyUpperBoundParam = false;
             foreach (var p in context.Parameters.Span)
             {
-                Debug.Assert(p.Size?.Kind is not SizeResultKind.Unknown);
-                if (p.Size?.Kind is SizeResultKind.UpperBound)
+                Debug.Assert(p.Size?.Kind is not ValueSizeKind.Unknown);
+                if (p.Size?.Kind is ValueSizeKind.UpperBound)
                     anyUpperBoundParam = true;
             }
 
@@ -64,8 +64,8 @@ static class ParameterContextExtensions
             var anyUnknownParam = false;
             foreach (var p in context.Parameters.Span)
             {
-                Debug.Assert(p.Size?.Kind is not SizeResultKind.UpperBound);
-                if (p.Size?.Kind is SizeResultKind.Unknown)
+                Debug.Assert(p.Size?.Kind is not ValueSizeKind.UpperBound);
+                if (p.Size?.Kind is ValueSizeKind.Unknown)
                     anyUnknownParam = true;
             }
             Debug.Assert(anyUnknownParam);

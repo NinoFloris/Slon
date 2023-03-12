@@ -24,8 +24,8 @@ abstract class ValueConverter<T, TEffective>: PgConverter<T>
 
     public sealed override bool CanConvert(DataRepresentation representation) => _effectiveConverter.CanConvert(representation);
 
-    public sealed override SizeResult GetSize(T value, int bufferLength, ref object? writeState, DataRepresentation representation, PgConverterOptions options)
-        => _effectiveConverter.GetSize(ConvertTo(value, options), bufferLength, ref writeState, representation, options);
+    public sealed override ValueSize GetSize(T value, ref object? writeState, SizeContext context, PgConverterOptions options)
+        => _effectiveConverter.GetSize(ConvertTo(value, options), ref writeState, context, options);
 
     // NOTE: Not sealed as reads often need some implementation adjustment beyond a simple conversion to be optimally efficient.
     public override T Read(PgReader reader, PgConverterOptions options)

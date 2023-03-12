@@ -49,12 +49,13 @@ class PgWriter
     internal FlushMode FlushMode => _flushSuppressed ? FlushMode.None : _flushMode;
 
     public DataRepresentation DataRepresentation { get; internal set; }
+    // TODO state shouldn't live here.
     public object? State { get; private set; }
-    public SizeResult Size { get; private set; }
+    public ValueSize Size { get; private set; }
     // public int BytesWritten { get; }
 
     // These two should always be updated together, hence the separate method.
-    public void UpdateState(object? state, SizeResult size)
+    public void UpdateState(object? state, ValueSize size)
     {
         State = state;
         Size = size;

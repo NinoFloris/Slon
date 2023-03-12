@@ -15,19 +15,19 @@ sealed class ReadOnlyMemoryTextConverter: PgConverter<ReadOnlyMemory<char>>
     public override ValueTask<ReadOnlyMemory<char>> ReadAsync(PgReader reader, PgConverterOptions options, CancellationToken cancellationToken = default)
         => ReadCore(async: true, reader, options);
 
-    public override SizeResult GetSize(ReadOnlyMemory<char> value, int bufferLength, ref object? writeState, DataRepresentation representation, PgConverterOptions options)
+    public override ValueSize GetSize(ReadOnlyMemory<char> value, ref object? writeState, SizeContext context, PgConverterOptions options)
     {
         // Benchmarks indicated sizing 50 chars takes between 6 and 50ns for utf8 depending on ascii/unicode mix.
         // That is fast enough we're not bothering with upper bounds/unknown sizing for those smaller strings.
-        if (value.Length > 50 && bufferLength >= value.Length)
+        if (value.Length > 50 && context.BufferLength >= value.Length)
         {
             var upperBound = options.TextEncoding.GetMaxByteCount(value.Length);
             // Saves a traverse if it fits, we'll write the used buffer space as its length afterwards.
-            if (bufferLength > upperBound)
-                return SizeResult.CreateUpperBound(upperBound);
+            if (context.BufferLength > upperBound)
+                return ValueSize.CreateUpperBound(upperBound);
         }
 
-        return SizeResult.Create(options.TextEncoding.GetByteCount(value.Span));
+        return options.TextEncoding.GetByteCount(value.Span);
     }
 
     public override void Write(PgWriter writer, ReadOnlyMemory<char> value, PgConverterOptions options)
@@ -110,10 +110,10 @@ sealed class CharTextConverter : PgConverter<char>
         return destination[0];
     }
 
-    public override SizeResult GetSize(char value, int bufferLength, ref object? writeState, DataRepresentation representation, PgConverterOptions options)
+    public override ValueSize GetSize(char value, ref object? writeState, SizeContext context, PgConverterOptions options)
     {
         Span<char> spanValue = stackalloc char[] { value };
-        return SizeResult.Create(options.TextEncoding.GetByteCount(spanValue));
+        return options.TextEncoding.GetByteCount(spanValue);
     }
 
     public override void Write(PgWriter writer, char value, PgConverterOptions options)
