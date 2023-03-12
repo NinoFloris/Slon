@@ -323,6 +323,11 @@ public sealed partial class SlonDataReader: DbDataReader
         dtTz.Compose(new ArrayConverterResolver<DateTime>(dtTz), options.GetArrayTypeId(dtTz.PgTypeId!.Value));
         dtoTz.Compose(new ArrayConverterResolver<DateTimeOffset>(dtoTz), options.GetArrayTypeId(dtoTz.PgTypeId!.Value));
 
+        var bitArray = PgConverterInfo.Create(options, new BitArrayBitStringConverter(), DataTypeNames.Varbit);
+        var bitVector32 = PgConverterInfo.Create(options, new BitVector32BitStringConverter(), DataTypeNames.Varbit);
+        var booleanBitString = PgConverterInfo.Create(options, new BoolBitStringConverter(), DataTypeNames.Varbit);
+        var objectBitstring = PgConverterInfo.Create(options, new PolymorphicBitStringConverterResolver(DataTypeNames.Varbit), DataTypeNames.Varbit);
+
         var charArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<char>(new(new CharTextConverter(), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Bpchar.ToArrayName());
         var stringArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<string>(new(new StringTextConverter(new ReadOnlyMemoryTextConverter()), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
         var boolArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<bool>(new(new BoolConverter(), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
