@@ -257,6 +257,36 @@ namespace MStatDumper
                 Console.WriteLine();
                 Console.WriteLine("</details>");
             }
+
+            var slonTypeStats = GetTypes(types)
+                .Where(x => x.Type.Scope.Name == "Slon")
+                .OrderByDescending(x => x.Size)
+                .Take(200)
+                .ToList();
+            var slonTypeSize = slonTypeStats.Sum(x => x.Size);
+            if (markDownStyleOutput)
+            {
+                Console.WriteLine("<details>");
+                Console.WriteLine($"<summary>Top 20 Slon Types By Size {slonTypeSize:n0}</summary>");
+                Console.WriteLine();
+                Console.WriteLine("<br>");
+                Console.WriteLine();
+                Console.WriteLine("| Name | Size |");
+                Console.WriteLine("| --- | --- |");
+                foreach (var m in slonTypeStats.OrderByDescending(x => x.Size))
+                {
+                    var name = m.Type.Name
+                        .Replace("`", "\\`")
+                        .Replace("<", "&#60;")
+                        .Replace(">", "&#62;")
+                        .Replace("|", "\\|");
+                    Console.WriteLine($"| {name} | {m.Size:n0} |");
+                }
+                Console.WriteLine();
+                Console.WriteLine("</details>");
+            }
+
+            Console.WriteLine();
         }
 
         public static IEnumerable<TypeStats> GetTypes(MethodDefinition types)
