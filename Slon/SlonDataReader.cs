@@ -323,43 +323,43 @@ public sealed partial class SlonDataReader: DbDataReader
         dtTz.Compose(new ArrayConverterResolver<DateTime>(dtTz), options.GetArrayTypeId(dtTz.PgTypeId!.Value));
         dtoTz.Compose(new ArrayConverterResolver<DateTimeOffset>(dtoTz), options.GetArrayTypeId(dtoTz.PgTypeId!.Value));
 
-        var bitArray = PgConverterInfo.Create(options, new BitArrayBitStringConverter(), DataTypeNames.Varbit);
-        var bitVector32 = PgConverterInfo.Create(options, new BitVector32BitStringConverter(), DataTypeNames.Varbit);
-        var booleanBitString = PgConverterInfo.Create(options, new BoolBitStringConverter(), DataTypeNames.Varbit);
-        var objectBitstring = PgConverterInfo.Create(options, new PolymorphicBitStringConverterResolver(DataTypeNames.Varbit), DataTypeNames.Varbit);
+        var bitArray = PgConverterInfo.Create(options, new BitArrayBitStringConverter(), DataTypeNames.Varbit).GetWriter(default(BitArray));
+        var bitVector32 = PgConverterInfo.Create(options, new BitVector32BitStringConverter(), DataTypeNames.Varbit).GetWriter(default(BitVector32));
+        var booleanBitString = PgConverterInfo.Create(options, new BoolBitStringConverter(), DataTypeNames.Varbit).GetWriter(default(bool));
+        var objectBitstring = PgConverterInfo.Create(options, new PolymorphicBitStringConverterResolver(DataTypeNames.Varbit), DataTypeNames.Varbit).GetWriter(default);;
 
-        var charArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<char>(new(new CharTextConverter(), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Bpchar.ToArrayName());
-        var stringArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<string>(new(new StringTextConverter(new ReadOnlyMemoryTextConverter()), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
-        var boolArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<bool>(new(new BoolConverter(), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
-        var byteArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<byte>(new(new ByteConverter(), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
-        var sbyteArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<sbyte>(new(new SByteConverter(), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
-        var shortArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<short>(new(new Int16Converter(), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
-        var intArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<int>(new(new Int32Converter(), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
-        var longArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<long>(new(new Int64Converter(), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
-        var ushortArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<ushort>(new(new NumberValueConverter<ushort,short>(new Int16Converter()), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
-        var uintArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<uint>(new(new NumberValueConverter<uint,int>(new Int32Converter()), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
-        var ulongArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<ulong>(new(new NumberValueConverter<ulong,long>(new Int64Converter()), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
-        var decimalArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<decimal>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
-        var doubleArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<double>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
-        var floatArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<float>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
-        var bigintegerArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<BigInteger>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
-        var guidArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<Guid>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
+        var charArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<char>(new(new CharTextConverter(), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Bpchar.ToArrayName()).GetWriter(default(char));
+        var stringArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<string>(new(new StringTextConverter(new ReadOnlyMemoryTextConverter()), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown).GetWriter(default(string));
+        var boolArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<bool>(new(new BoolConverter(), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown).GetWriter(default(bool));
+        var byteArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<byte>(new(new ByteConverter(), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown).GetWriter(default(byte));
+        var sbyteArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<sbyte>(new(new SByteConverter(), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown).GetWriter(default(sbyte));
+        var shortArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<short>(new(new Int16Converter(), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown).GetWriter(default(short));
+        var intArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<int>(new(new Int32Converter(), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown).GetWriter(default(int));
+        var longArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<long>(new(new Int64Converter(), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown).GetWriter(default(long));
+        var ushortArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<ushort>(new(new NumberValueConverter<ushort,short>(new Int16Converter()), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown).GetWriter(default(ushort));
+        var uintArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<uint>(new(new NumberValueConverter<uint,int>(new Int32Converter()), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown).GetWriter(default(uint));
+        var ulongArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<ulong>(new(new NumberValueConverter<ulong,long>(new Int64Converter()), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown).GetWriter(default(ulong));
+        var decimalArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<decimal>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown).GetWriter(default(decimal));
+        var doubleArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<double>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown).GetWriter(default(double));
+        var floatArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<float>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown).GetWriter(default(float));
+        var bigintegerArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<BigInteger>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown).GetWriter(default(BigInteger));
+        var guidArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<Guid>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown).GetWriter(default(Guid));
 #if !NETSTANDARD2_0
-        var dateArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<DateOnly>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
-        var timeArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<TimeOnly>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
+        var dateArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<DateOnly>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown).GetWriter(default(DateOnly));
+        var timeArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<TimeOnly>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown).GetWriter(default(TimeOnly));
 #endif
-        var timespanArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<TimeSpan>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
-        var dateTimeArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<DateTime>(new(new DateTimeConverter(DateTimeKind.Unspecified), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
-        var dateTimeOffsetArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<DateTimeOffset>(new(new DateTimeOffsetConverter(), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
+        var timespanArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<TimeSpan>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown).GetWriter(default(TimeSpan));
+        var dateTimeArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<DateTime>(new(new DateTimeConverter(DateTimeKind.Unspecified), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown).GetWriter(default(DateTime));
+        var dateTimeOffsetArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<DateTimeOffset>(new(new DateTimeOffsetConverter(), default), ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown).GetWriter(default(DateTimeOffset));
 
-        var cidrArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<(IPAddress Address, int Subnet)>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
+        var cidrArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<(IPAddress Address, int Subnet)>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown).GetWriter(default((IPAddress, int)));
 
-        var arraySegmentArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<ArraySegment<byte>>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
-        var romArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<ReadOnlyMemory<byte>>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
-        var memoryArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<Memory<byte>>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
-        var bitvectorArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<BitVector32>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown);
+        var arraySegmentArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<ArraySegment<byte>>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown).GetWriter(default(ArraySegment<byte>));
+        var romArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<ReadOnlyMemory<byte>>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown).GetWriter(default(ReadOnlyMemory<byte>));
+        var memoryArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<Memory<byte>>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown).GetWriter(default(Memory<byte>));
+        var bitvectorArrayConverter = PgConverterInfo.Create(options, new ArrayConverter<BitVector32>(default, ArrayPool<(ValueSize, object?)>.Shared), DataTypeNames.Unknown).GetWriter(default(BitVector32));
 
-        // total: 24 instantiations
+        // total: 32 instantiations
 
         // Missing value type instantiations (13) :
         // - range
