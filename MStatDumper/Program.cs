@@ -261,13 +261,12 @@ namespace MStatDumper
             var slonTypeStats = GetTypes(types)
                 .Where(x => x.Type.Scope.Name == "Slon")
                 .OrderByDescending(x => x.Size)
-                .Take(200)
+                .Take(1000)
                 .ToList();
-            var slonTypeSize = slonTypeStats.Sum(x => x.Size);
             if (markDownStyleOutput)
             {
                 Console.WriteLine("<details>");
-                Console.WriteLine($"<summary>Top 20 Slon Types By Size {slonTypeSize:n0}</summary>");
+                Console.WriteLine($"<summary>Top 20 Slon Types By Size</summary>");
                 Console.WriteLine();
                 Console.WriteLine("<br>");
                 Console.WriteLine();
