@@ -252,41 +252,40 @@ class MultiDimArrayConverter<TElement, T> : PgConverter<T>
         throw new NotImplementedException();
     }
 }
-
-// TODO Support icollection in general.
-sealed class ArrayConverterFactory: PgConverterFactory
-{
-    [RequiresUnreferencedCode("Reflection used for pg type conversions.")]
-    public override PgConverterInfo? CreateConverterInfo(Type type, PgConverterOptions options, PgTypeId? pgTypeId = null)
-    {
-        if (!type.IsArray)
-            return null;
-
-        var elementType = type.GetElementType()!;
-        var elementInfo = options.GetConverterInfo(elementType, pgTypeId is not { } id ? null : options.GetElementTypeId(id));
-        if (elementInfo is null)
-            throw new NotSupportedException($"Cannot convert array with element type '{elementType.FullName}', no converter registered for this element type.");
-
-        // MAXDIM in pg is 6, `SELECT '{{{{{{{1}}}}}}}'::integer[]` does not allow the cast.
-
-        // TODO We may want to support this through a resolver that checks whether all array values (recursively) are of the same length
-        // and interpret the entire array as a pg multidim encoding, it sure beats working with multidims in C#.
-        if (elementType.IsArray)
-            throw new NotSupportedException("Cannot convert jagged arrays.");
-
-        var rank = type.GetArrayRank();
-        // For value dependent converters we must delay the element elementInfo work.
-        var arrayPgTypeId = pgTypeId ?? (elementInfo.PgTypeId is { } elemId ? options.GetArrayTypeId(elemId) : null);
-        return (elementInfo.IsValueDependent, rank) switch
-        {
-            (false, 1) => elementInfo.Compose((PgConverter)Activator.CreateInstance(typeof(ArrayConverter<>).MakeGenericType(elementType), elementInfo.GetResolution(null, elementInfo.PgTypeId), options.GetArrayPool<(ValueSize, object?)>(), 1)!, arrayPgTypeId.GetValueOrDefault()),
-            (false, _) => elementInfo.Compose((PgConverter)Activator.CreateInstance(typeof(MultiDimArrayConverter<,>).MakeGenericType(elementType, type), elementInfo.GetResolution(null, elementInfo.PgTypeId), rank)!, arrayPgTypeId.GetValueOrDefault()),
-
-            (true, 1) => elementInfo.Compose((PgConverterResolver)Activator.CreateInstance(typeof(ArrayConverterResolver<>).MakeGenericType(elementType), elementInfo)!, arrayPgTypeId),
-            (true, _) => elementInfo.Compose((PgConverterResolver)Activator.CreateInstance(typeof(MultiDimArrayConverterResolver<,>).MakeGenericType(elementType, type), elementInfo, rank)!, arrayPgTypeId)
-        };
-    }
-}
+// // TODO Support icollection in general.
+// sealed class ArrayConverterFactory: PgConverterFactory
+// {
+//     [RequiresUnreferencedCode("Reflection used for pg type conversions.")]
+//     public override PgConverterInfo? CreateConverterInfo(Type type, PgConverterOptions options, PgTypeId? pgTypeId = null)
+//     {
+//         if (!type.IsArray)
+//             return null;
+//
+//         var elementType = type.GetElementType()!;
+//         var elementInfo = options.GetConverterInfo(elementType, pgTypeId is not { } id ? null : options.GetElementTypeId(id));
+//         if (elementInfo is null)
+//             throw new NotSupportedException($"Cannot convert array with element type '{elementType.FullName}', no converter registered for this element type.");
+//
+//         // MAXDIM in pg is 6, `SELECT '{{{{{{{1}}}}}}}'::integer[]` does not allow the cast.
+//
+//         // TODO We may want to support this through a resolver that checks whether all array values (recursively) are of the same length
+//         // and interpret the entire array as a pg multidim encoding, it sure beats working with multidims in C#.
+//         if (elementType.IsArray)
+//             throw new NotSupportedException("Cannot convert jagged arrays.");
+//
+//         var rank = type.GetArrayRank();
+//         // For value dependent converters we must delay the element elementInfo work.
+//         var arrayPgTypeId = pgTypeId ?? (elementInfo.PgTypeId is { } elemId ? options.GetArrayTypeId(elemId) : null);
+//         return (elementInfo.IsValueDependent, rank) switch
+//         {
+//             (false, 1) => elementInfo.Compose((PgConverter)Activator.CreateInstance(typeof(ArrayConverter<>).MakeGenericType(elementType), elementInfo.GetResolution(null, elementInfo.PgTypeId), options.GetArrayPool<(ValueSize, object?)>(), 1)!, arrayPgTypeId.GetValueOrDefault()),
+//             (false, _) => elementInfo.Compose((PgConverter)Activator.CreateInstance(typeof(MultiDimArrayConverter<,>).MakeGenericType(elementType, type), elementInfo.GetResolution(null, elementInfo.PgTypeId), rank)!, arrayPgTypeId.GetValueOrDefault()),
+//
+//             (true, 1) => elementInfo.Compose((PgConverterResolver)Activator.CreateInstance(typeof(ArrayConverterResolver<>).MakeGenericType(elementType), elementInfo)!, arrayPgTypeId),
+//             (true, _) => elementInfo.Compose((PgConverterResolver)Activator.CreateInstance(typeof(MultiDimArrayConverterResolver<,>).MakeGenericType(elementType, type), elementInfo, rank)!, arrayPgTypeId)
+//         };
+//     }
+// }
 
 // TODO benchmark this unit.
 sealed class ArrayConverterResolver<T> : PgConverterResolver<T?[]>

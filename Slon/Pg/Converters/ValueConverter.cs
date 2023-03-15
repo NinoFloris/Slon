@@ -13,7 +13,7 @@ abstract class ValueConverter<T, TEffective>: PgConverter<T>
         => _effectiveConverter = effectiveConverter;
 
     protected PgConverter<TEffective> EffectiveConverter => _effectiveConverter;
-    protected abstract T ConvertFrom(TEffective value, PgConverterOptions options);
+    protected abstract T? ConvertFrom(TEffective? value, PgConverterOptions options);
     protected abstract TEffective ConvertTo(T value, PgConverterOptions options);
 
     protected sealed override bool IsDbNull(T? value, PgConverterOptions options)
@@ -28,16 +28,16 @@ abstract class ValueConverter<T, TEffective>: PgConverter<T>
         => _effectiveConverter.GetSize(ConvertTo(value, options), ref writeState, context, options);
 
     // NOTE: Not sealed as reads often need some implementation adjustment beyond a simple conversion to be optimally efficient.
-    public override T Read(PgReader reader, PgConverterOptions options)
+    public override T? Read(PgReader reader, PgConverterOptions options)
         => ConvertFrom(_effectiveConverter.Read(reader, options), options);
 
     // NOTE: Not sealed as reads often need some implementation adjustment beyond a simple conversion to be optimally efficient.
-    public override ValueTask<T> ReadAsync(PgReader reader, PgConverterOptions options, CancellationToken cancellationToken = default)
+    public override ValueTask<T?> ReadAsync(PgReader reader, PgConverterOptions options, CancellationToken cancellationToken = default)
     {
         var task = _effectiveConverter.ReadAsync(reader, options, cancellationToken);
         return task.IsCompletedSuccessfully ? new(ConvertFrom(task.GetAwaiter().GetResult(), options)) : Core(task);
 
-        async ValueTask<T> Core(ValueTask<TEffective> task) => ConvertFrom(await task, options);
+        async ValueTask<T?> Core(ValueTask<TEffective?> task) => ConvertFrom(await task, options);
     }
 
     public sealed override void Write(PgWriter writer, T value, PgConverterOptions options)

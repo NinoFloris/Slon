@@ -205,10 +205,10 @@ class PgConverterInfo
 
         public Type EffectiveType { get; }
 
-        public T Read(PgReader reader)
+        public T? Read(PgReader reader)
             => _converter.Read(reader, _info.Options);
 
-        public ValueTask<T> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
+        public ValueTask<T?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
             => _converter.ReadAsync(reader, _info.Options, cancellationToken);
     }
 

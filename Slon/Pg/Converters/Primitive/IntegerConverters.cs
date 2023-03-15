@@ -4,7 +4,7 @@ sealed class Int16Converter : FixedBinarySizePgConverter<short>
 {
     protected override byte BinarySize => sizeof(short);
     public override short Read(PgReader reader, PgConverterOptions options) => reader.ReadInt16();
-    public override void Write(PgWriter writer, short value, PgConverterOptions options) => writer.WriteInt32(value);
+    public override void Write(PgWriter writer, short value, PgConverterOptions options) => writer.WriteInt16(value);
 }
 
 sealed class Int32Converter : FixedBinarySizePgConverter<int>

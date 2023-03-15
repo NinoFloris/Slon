@@ -11,7 +11,6 @@ class DefaultConverterInfoResolver: IPgConverterInfoResolver
     static ReadOnlyMemoryTextConverter? _romTextConverter;
 
     static readonly PgConverterFactory[] ConverterFactories = {
-        new ArrayConverterFactory()
     };
 
     [RequiresUnreferencedCode("Reflection used for pg type conversions.")]

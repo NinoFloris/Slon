@@ -85,7 +85,13 @@ sealed class CharArrayTextConverter : ValueConverter<char[], ReadOnlyMemory<char
     public CharArrayTextConverter(PgConverter<ReadOnlyMemory<char>> effectiveConverter) : base(effectiveConverter) { }
 
     protected override char[] ConvertFrom(ReadOnlyMemory<char> value, PgConverterOptions options)
-        => MemoryMarshal.TryGetArray(value, out var segment) ? segment.Array! : value.ToArray();
+    {
+        if (MemoryMarshal.TryGetArray(value, out var segment))
+            // We need to return an exact sized array.
+            return segment.Array!.Length > segment.Count ? value.ToArray() : segment.Array!;
+
+        return value.ToArray();
+    }
     protected override ReadOnlyMemory<char> ConvertTo(char[] value, PgConverterOptions options) => value.AsMemory();
 }
 

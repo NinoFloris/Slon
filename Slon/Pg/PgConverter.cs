@@ -87,9 +87,9 @@ abstract class PgConverter<T> : PgConverter
     public bool IsDbNullValue([NotNullWhen(false)] T? value, PgConverterOptions options)
         => value is null || (DbNullPredicate is not DbNullPredicate.Default && IsDbNull(value, options));
 
-    public abstract T Read(PgReader reader, PgConverterOptions options);
+    public abstract T? Read(PgReader reader, PgConverterOptions options);
 
-    public virtual ValueTask<T> ReadAsync(PgReader reader, PgConverterOptions options, CancellationToken cancellationToken = default)
+    public virtual ValueTask<T?> ReadAsync(PgReader reader, PgConverterOptions options, CancellationToken cancellationToken = default)
         => new(Read(reader, options));
 
     public abstract ValueSize GetSize(T value, [NotNullIfNotNull(nameof(writeState))]ref object? writeState, SizeContext context, PgConverterOptions options);
@@ -116,7 +116,7 @@ abstract class PgConverter<T> : PgConverter
         var task = ReadAsync(reader, options, cancellationToken);
         return task.IsCompletedSuccessfully ? new(task.GetAwaiter().GetResult()) : Core(task);
 
-        static async ValueTask<object?> Core(ValueTask<T> task) => await task;
+        static async ValueTask<object?> Core(ValueTask<T?> task) => await task;
     }
 
     internal sealed override ValueSize GetSizeAsObject(object value, [NotNullIfNotNull(nameof(writeState))]ref object? writeState, SizeContext context, PgConverterOptions options)
@@ -139,7 +139,7 @@ abstract class FixedBinarySizePgConverter<T> : PgConverter<T>
         => context.Representation is DataRepresentation.Binary ? BinarySize : throw new NotSupportedException();
 
     // TODO ensure BinarySize (if reader.Representation is Binary)
-    public sealed override ValueTask<T> ReadAsync(PgReader reader, PgConverterOptions options, CancellationToken cancellationToken = default)
+    public sealed override ValueTask<T?> ReadAsync(PgReader reader, PgConverterOptions options, CancellationToken cancellationToken = default)
         => new(Read(reader, options));
 
     public sealed override ValueTask WriteAsync(PgWriter writer, T value, PgConverterOptions options, CancellationToken cancellationToken = default)

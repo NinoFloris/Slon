@@ -155,6 +155,10 @@ class PgWriter
         _writer = new StreamingWriter<IStreamingWriter<byte>>(_writer.Output);
     }
 
+    public void WriteInt16(short value)
+    {
+        _writer.WriteShort(value);
+    }
 }
 
 static class PgWriterExtensions

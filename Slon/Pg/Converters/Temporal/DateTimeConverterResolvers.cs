@@ -66,6 +66,10 @@ sealed class DateTimeOffsetUtcOnlyConverterResolver: PgConverterResolver<DateTim
     {
         // We run GetDefault first to make sure the expectedPgTypeId is known.
         var resolution = GetDefault(expectedPgTypeId ?? _timestampTz);
-        return value.Offset == TimeSpan.Zero ? resolution : throw new ArgumentException($"Cannot write DateTimeOffset with Offset={value.Offset} to PostgreSQL type 'timestamp with time zone', only offset 0 (UTC) is supported. ", nameof(value));
+        return value.Offset == TimeSpan.Zero
+            ? resolution
+            : throw new ArgumentException(
+                $"Cannot write DateTimeOffset with Offset={value.Offset} to PostgreSQL type 'timestamp with time zone', only offset 0 (UTC) is supported. ",
+                nameof(value));
     }
 }
