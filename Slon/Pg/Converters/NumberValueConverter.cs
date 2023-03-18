@@ -1,7 +1,5 @@
 using System;
 using System.Numerics;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace Slon.Pg.Converters;
 
@@ -41,17 +39,6 @@ sealed class NumberValueConverter<T, TEffective> : PgConverter<T>
     public override T? Read(PgReader reader)
         => ConvertFrom(_effectiveConverter.Read(reader));
 
-    public override ValueTask<T?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
-    {
-        var task = _effectiveConverter.ReadAsync(reader, cancellationToken);
-        return task.IsCompletedSuccessfully ? new(ConvertFrom(task.GetAwaiter().GetResult())) : Core(task);
-
-        async ValueTask<T?> Core(ValueTask<TEffective?> task) => ConvertFrom(await task);
-    }
-
     public override void Write(PgWriter writer, T value)
         => _effectiveConverter.Write(writer, ConvertTo(value));
-
-    public override ValueTask WriteAsync(PgWriter writer, T value, CancellationToken cancellationToken = default)
-        => _effectiveConverter.WriteAsync(writer, ConvertTo(value), cancellationToken);
 }

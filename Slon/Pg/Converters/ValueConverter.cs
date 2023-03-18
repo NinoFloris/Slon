@@ -5,7 +5,7 @@ using System.Threading.Tasks;
 namespace Slon.Pg.Converters;
 
 /// A composing converter that allows for custom value conversions, it delegates all remaining behavior to the effective converter.
-abstract class ValueConverter<T, TEffective>: PgConverter<T>
+abstract class ValueConverter<T, TEffective>: PgConverterAsync<T>
 {
     readonly PgConverter<TEffective> _effectiveConverter;
     protected ValueConverter(PgConverter<TEffective> effectiveConverter)

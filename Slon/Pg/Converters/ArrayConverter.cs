@@ -189,7 +189,7 @@ interface IArrayElementOperations
     ValueTask WriteAsync(PgWriter writer, Array array, int index, CancellationToken cancellationToken = default);
 }
 
-sealed class ArrayConverter<T> : PgConverter<T?[]>, IArrayElementOperations
+sealed class ArrayConverter<T> : PgConverterAsync<T?[]>, IArrayElementOperations
 {
     readonly PgConverter<T> _elemConverter;
     readonly ArrayConverter _arrayConverter;
@@ -205,6 +205,11 @@ sealed class ArrayConverter<T> : PgConverter<T?[]>, IArrayElementOperations
     public override bool CanConvert(DataFormat format) => _elemConverter.CanConvert(format);
 
     public override T?[] Read(PgReader reader)
+    {
+        throw new NotImplementedException();
+    }
+
+    public override ValueTask<T?[]?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
     {
         throw new NotImplementedException();
     }

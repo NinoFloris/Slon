@@ -13,7 +13,7 @@ await using var reader = await cmd.ExecuteReaderAsync();
 if (!await reader.ReadAsync())
     throw new Exception("Got nothing from the database");
 
-// var value = reader.GetFieldValue<string>(0);
+var value = reader.GetFieldValue<string>(0);
 var valueAsync = reader.GetFieldValueAsync<string>(0).GetAwaiter().GetResult();
-if (valueAsync != "Hello World")
+if (value != "Hello World" || valueAsync != "Hello World")
     throw new Exception($"Got {valueAsync} instead of the expected 'Hello World'");

@@ -7,9 +7,9 @@ using System.Threading.Tasks;
 
 namespace Slon.Pg.Converters;
 
-sealed class ReadOnlyMemoryTextConverter: PgConverter<ReadOnlyMemory<char>>
+sealed class ReadOnlyMemoryTextConverter: PgConverterAsync<ReadOnlyMemory<char>>
 {
-    Encoding _textEncoding;
+    readonly Encoding _textEncoding;
     public ReadOnlyMemoryTextConverter(PgConverterOptions options)
         => _textEncoding = options.TextEncoding;
 

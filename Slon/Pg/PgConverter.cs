@@ -94,18 +94,8 @@ abstract class PgConverter<T> : PgConverter
         => value is null || (DbNullPredicateKind is not (DbNullPredicate.None or DbNullPredicate.Null) && IsDbNull(value));
 
     public abstract T? Read(PgReader reader);
-
-    public virtual ValueTask<T?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
-        => new(Read(reader));
-
     public abstract ValueSize GetSize(SizeContext context, T value, [NotNullIfNotNull(nameof(writeState))]ref object? writeState);
     public abstract void Write(PgWriter writer, T value);
-
-    public virtual ValueTask WriteAsync(PgWriter writer, T value, CancellationToken cancellationToken = default)
-    {
-        Write(writer, value);
-        return new();
-    }
 
     internal sealed override Type TypeToConvert => typeof(T);
 
@@ -116,6 +106,22 @@ abstract class PgConverter<T> : PgConverter
 
     internal sealed override ValueSize GetSizeAsObject(SizeContext context, object value, [NotNullIfNotNull(nameof(writeState))]ref object? writeState)
         => GetSize(context, (T)value, ref writeState);
+
+    private protected override ValueTask<object?> ReadAsObject(bool async, PgReader reader, CancellationToken cancellationToken = default)
+        => new(Read(reader));
+
+    private protected override ValueTask WriteAsObject(bool async, PgWriter writer, object value, CancellationToken cancellationToken = default)
+    {
+        Write(writer, (T)value);
+        return new();
+    }
+}
+
+abstract class PgConverterAsync<T> : PgConverter<T>
+{
+    protected PgConverterAsync(bool extendedDbNullPredicate = false) : base(extendedDbNullPredicate) { }
+    public abstract ValueTask<T?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default);
+    public abstract ValueTask WriteAsync(PgWriter writer, T value, CancellationToken cancellationToken = default);
 
     private protected sealed override ValueTask<object?> ReadAsObject(bool async, PgReader reader, CancellationToken cancellationToken = default)
     {
@@ -138,48 +144,45 @@ abstract class PgConverter<T> : PgConverter
     }
 }
 
+static class PgConverterOfTExtensions
+{
+    public static ValueTask<T?> ReadAsync<T>(this PgConverter<T> converter, PgReader reader, CancellationToken cancellationToken)
+    {
+        if (converter is PgConverterAsync<T> asyncConverter)
+            return asyncConverter.ReadAsync(reader, cancellationToken);
+
+        return new(converter.Read(reader));
+    }
+
+    public static ValueTask WriteAsync<T>(this PgConverter<T> converter, PgWriter writer, T value, CancellationToken cancellationToken)
+    {
+        if (converter is PgConverterAsync<T> asyncConverter)
+            return asyncConverter.WriteAsync(writer, value, cancellationToken);
+
+        converter.Write(writer, value);
+        return new();
+    }
+}
+
 // Base class for converters that know their binary size up front.
 abstract class PgFixedBinarySizeConverter<T> : PgConverter<T>
 {
     protected PgFixedBinarySizeConverter(bool extendedDbNullPredicate = false) : base(extendedDbNullPredicate) { }
 
-    // public sealed override bool CanConvert(DataFormat format) => format is DataFormat.Binary;
+    public sealed override bool CanConvert(DataFormat format) => format is DataFormat.Binary;
     public sealed override bool HasFixedSize(DataFormat format) => format is DataFormat.Binary;
     protected abstract byte BinarySize { get; }
 
-    public override ValueSize GetSize(SizeContext context, T value, ref object? writeState)
+    public sealed override ValueSize GetSize(SizeContext context, T value, ref object? writeState)
         => context.Format is DataFormat.Binary ? BinarySize : throw new NotSupportedException();
 
     protected abstract T? ReadCore(PgReader reader);
 
-    protected virtual ValueTask<T?> ReadCoreAsync(PgReader reader, CancellationToken cancellationToken = default)
-        => new(ReadCore(reader));
-
-    // By default ReadAsync delegates to Read, so any text read would be able to be handled too.
     public sealed override T? Read(PgReader reader)
     {
         if (reader.Format is DataFormat.Binary && reader.Remaining < BinarySize)
             reader.WaitForData(reader.ByteCount);
 
         return ReadCore(reader);
-
-    }
-
-    public override ValueTask<T?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
-    {
-        if (reader.Format is DataFormat.Binary && reader.Remaining < BinarySize)
-            return Core(reader, cancellationToken);
-
-        return ReadCoreAsync(reader, cancellationToken);
-
-#if !NETSTANDARD2_0
-        [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
-#endif
-        async ValueTask<T?> Core(PgReader reader, CancellationToken cancellationToken)
-        {
-            await reader.WaitForDataAsync(BinarySize, cancellationToken);
-            return await ReadCoreAsync(reader, cancellationToken);
-        }
     }
 }
-

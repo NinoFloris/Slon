@@ -1,8 +1,4 @@
-using System;
-using System.Buffers;
 using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace Slon.Pg.Converters;
 
@@ -11,28 +7,28 @@ sealed class Int16Converter : PgFixedBinarySizeConverter<short>
     readonly Encoding _textEncoding;
     public Int16Converter(PgConverterOptions options) => _textEncoding = options.TextEncoding;
 
-    public override bool CanConvert(DataFormat format) => format is DataFormat.Binary or DataFormat.Text;
-
-    public override ValueSize GetSize(SizeContext context, short value, ref object? writeState)
-        => context.Format is DataFormat.Text ? _textEncoding.GetByteCount(value.ToString()) : BinarySize;
+    // public override bool CanConvert(DataFormat format) => format is DataFormat.Binary or DataFormat.Text;
+    //
+    // public override ValueSize GetSize(SizeContext context, short value, ref object? writeState)
+    //     => context.Format is DataFormat.Text ? _textEncoding.GetByteCount(value.ToString()) : BinarySize;
 
     protected override byte BinarySize => sizeof(short);
-    protected override short ReadCore(PgReader reader)
-    {
-        if (reader.Format is DataFormat.Binary)
-            return reader.ReadInt16();
-
-        return short.Parse(_textEncoding.GetChars(reader.ReadExact(reader.ByteCount).ToArray()).AsSpan().ToString());
-    }
-
-    public override ValueTask<short> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
-    {
-        if (reader.Format is DataFormat.Binary)
-            return new(Read(reader));
-
-        // *Imagine async work for text here*
-        return new(short.Parse(_textEncoding.GetChars(reader.ReadExact(reader.ByteCount).ToArray()).AsSpan().ToString()));
-    }
+    protected override short ReadCore(PgReader reader) => reader.ReadInt16();
+    // {
+    //     if (reader.Format is DataFormat.Binary)
+    //         return 
+    //
+    //     return short.Parse(_textEncoding.GetChars(reader.ReadExact(reader.ByteCount).ToArray()).AsSpan().ToString());
+    // }
+    //
+    // public override ValueTask<short> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
+    // {
+    //     if (reader.Format is DataFormat.Binary)
+    //         return new(Read(reader));
+    //
+    //     // *Imagine async work for text here*
+    //     return new(short.Parse(_textEncoding.GetChars(reader.ReadExact(reader.ByteCount).ToArray()).AsSpan().ToString()));
+    // }
 
     public override void Write(PgWriter writer, short value) => writer.WriteInt16(value);
 }
