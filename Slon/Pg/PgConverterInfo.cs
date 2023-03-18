@@ -1,30 +1,9 @@
 using System;
 using System.Diagnostics.CodeAnalysis;
-using System.Threading;
-using System.Threading.Tasks;
 using Slon.Pg.Descriptors;
 using Slon.Pg.Types;
 
 namespace Slon.Pg;
-
-readonly struct PgConverterResolution<T>
-{
-    readonly Type? _effectiveType;
-
-    public PgConverterResolution(PgConverter<T> converter, PgTypeId pgTypeId, Type? effectiveType = null)
-    {
-        DebugShim.Assert(effectiveType is null || converter.TypeToConvert == typeof(object), "effectiveType can only be set for object polymorphic converters.");
-        Converter = converter;
-        PgTypeId = pgTypeId;
-        _effectiveType = effectiveType;
-    }
-
-    public PgConverter<T> Converter { get; }
-    public PgTypeId PgTypeId { get; }
-    public Type EffectiveType => _effectiveType ?? Converter.TypeToConvert;
-
-    public PgConverterResolution ToConverterResolution() => new(Converter, PgTypeId);
-}
 
 class PgConverterInfo
 {
@@ -84,6 +63,9 @@ class PgConverterInfo
 
     public PgConverterResolution<T> GetResolution<T>(T? value, PgTypeId? expectedPgTypeId = null) => GetResolutionCore(value, expectedPgTypeId, field: null);
     public PgConverterResolution GetResolutionAsObject(object? value, PgTypeId? expectedPgTypeId = null) => GetResolutionCore(value, expectedPgTypeId, field: null);
+
+    public PgConverterResolution<T> GetResolution<T>(Field field) => GetResolutionCore<T>(field: field);
+    public PgConverterResolution GetResolutionAsObject(Field field) => GetResolutionCore(field: field);
 
     PgConverterResolution<T> GetResolutionCore<T>(T? value = default, PgTypeId? expectedPgTypeId = null, Field? field = null)
     {
@@ -145,9 +127,6 @@ class PgConverterInfo
         return size;
     }
 
-    internal Reader<T> GetReader<T>(Field field) => new(GetResolutionCore<T>(field: field), this);
-    internal Reader GetReader(Field field) => new(GetResolutionCore(field: field), this);
-
     internal PgConverterInfo Compose(PgConverter converter, PgTypeId pgTypeId)
         => new(Options, converter, pgTypeId)
         {
@@ -167,50 +146,6 @@ class PgConverterInfo
 
     public static PgConverterInfo Create(PgConverterOptions options, PgConverterResolver resolver, PgTypeId? expectedPgTypeId, bool isDefault = false, DataFormat? preferredFormat = null)
         => new PgConverterResolverInfo(options, resolver, expectedPgTypeId) { IsDefault = isDefault, PreferredFormat = preferredFormat };
-
-    internal readonly struct Reader<T>
-    {
-        readonly PgConverter<T> _converter;
-        readonly PgConverterInfo _info;
-
-        public Reader(PgConverterResolution<T> resolution, PgConverterInfo info)
-        {
-            _converter = resolution.Converter;
-            _info = info;
-            EffectiveType = resolution.EffectiveType;
-        }
-
-        public Type EffectiveType { get; }
-
-        public bool IsDbNullValue(T? value) => _converter.IsDbNullValue(value);
-
-        public T? Read(PgReader reader)
-            => _converter.Read(reader);
-
-        public ValueTask<T?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
-            => _converter.ReadAsync(reader, cancellationToken);
-    }
-
-    internal readonly struct Reader
-    {
-        readonly PgConverter _converter;
-        readonly PgConverterInfo _info;
-
-        public Reader(PgConverterResolution resolution, PgConverterInfo info)
-        {
-            _converter = resolution.Converter;
-            _info = info;
-            EffectiveType = resolution.EffectiveType;
-        }
-
-        public Type EffectiveType { get; }
-
-        public object? Read(PgReader reader)
-            => _converter.ReadAsObject(reader);
-
-        public ValueTask<object?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
-            => _converter.ReadAsObjectAsync(reader, cancellationToken);
-    }
 
     sealed class PgConverterResolverInfo : PgConverterInfo
     {
@@ -256,4 +191,23 @@ readonly struct PgConverterResolution
     public Type EffectiveType => _effectiveType ?? Converter.TypeToConvert;
 
     public PgConverterResolution<T> ToConverterResolution<T>() => new((PgConverter<T>)Converter, PgTypeId);
+}
+
+readonly struct PgConverterResolution<T>
+{
+    readonly Type? _effectiveType;
+
+    public PgConverterResolution(PgConverter<T> converter, PgTypeId pgTypeId, Type? effectiveType = null)
+    {
+        DebugShim.Assert(effectiveType is null || converter.TypeToConvert == typeof(object), "effectiveType can only be set for object polymorphic converters.");
+        Converter = converter;
+        PgTypeId = pgTypeId;
+        _effectiveType = effectiveType;
+    }
+
+    public PgConverter<T> Converter { get; }
+    public PgTypeId PgTypeId { get; }
+    public Type EffectiveType => _effectiveType ?? Converter.TypeToConvert;
+
+    public PgConverterResolution ToConverterResolution() => new(Converter, PgTypeId);
 }

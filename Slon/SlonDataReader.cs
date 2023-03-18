@@ -318,10 +318,10 @@ public sealed partial class SlonDataReader: DbDataReader
         var info = _dataSource.GetConverterInfo(typeof(T), field);
         if (typeof(T) == typeof(object) && info.Type != typeof(object))
         {
-            return (T)info.GetReader(field).Read(reader)!;
+            return (T)info.GetResolutionAsObject(field).Converter.ReadAsObject(reader)!;
         }
 
-        return info.GetReader<T>(field).Read(reader) ?? throw new InvalidOperationException("DbNull returned");
+        return info.GetResolution<T>(field).Converter.Read(reader) ?? throw new InvalidOperationException("DbNull returned");
     }
 
     public override async Task<T> GetFieldValueAsync<T>(int ordinal, CancellationToken cancellationToken)
@@ -396,10 +396,10 @@ public sealed partial class SlonDataReader: DbDataReader
         var info = _dataSource.GetConverterInfo(typeof(T), field);
         if (typeof(T) == typeof(object) && info.Type != typeof(object))
         {
-            return (T)(await info.GetReader(field).ReadAsync(reader, cancellationToken))!;
+            return (T)(await info.GetResolutionAsObject(field).Converter.ReadAsObjectAsync(reader, cancellationToken) ?? throw new InvalidOperationException("DbNull returned"));
         }
 
-        return (T)(await info.GetReader(field).ReadAsync(reader, cancellationToken))! ?? throw new InvalidOperationException("DbNull returned");
+        return await info.GetResolution<T>(field).Converter.ReadAsync(reader, cancellationToken) ?? throw new InvalidOperationException("DbNull returned");
     }
 
     public override bool GetBoolean(int ordinal)
