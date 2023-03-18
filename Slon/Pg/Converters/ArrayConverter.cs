@@ -171,11 +171,7 @@ readonly struct ArrayConverter
             if (state is not null || lastState is not null)
                 writer.UpdateState(lastState = state, ValueSize.Create(length));
 
-            if (async)
-                return elementOps.WriteAsync(writer, values, index, cancellationToken);
-
-            elementOps.Write(writer, values, index);
-            return new ValueTask();
+            return elementOps.Write(async, writer, values, index, cancellationToken);
         }
     }
 }
@@ -185,8 +181,8 @@ interface IArrayElementOperations
     bool HasFixedSize(DataFormat format);
     ValueSize GetSize(ref SizeContext context, Array array, int index);
     bool IsDbNullValue(Array array, int index);
-    void Write(PgWriter writer, Array array, int index);
-    ValueTask WriteAsync(PgWriter writer, Array array, int index, CancellationToken cancellationToken = default);
+    ValueTask Read(bool async, PgReader reader, Array array, int index, CancellationToken cancellationToken = default);
+    ValueTask Write(bool async, PgWriter writer, Array array, int index, CancellationToken cancellationToken = default);
 }
 
 sealed class ArrayConverter<T> : PgStreamingConverter<T?[]>, IArrayElementOperations
@@ -227,16 +223,35 @@ sealed class ArrayConverter<T> : PgStreamingConverter<T?[]>, IArrayElementOperat
         => _elemConverter.HasFixedSize(format);
 
     ValueSize IArrayElementOperations.GetSize(ref SizeContext context, Array array, int index)
-        => _elemConverter.GetSize(ref context, Unsafe.As<Array, T?[]>(ref array)[index]!);
+        => _elemConverter.GetSize(ref context, Unsafe.As<T?[]>(array)[index]!);
 
     bool IArrayElementOperations.IsDbNullValue(Array array, int index)
-        => _elemConverter.IsDbNullValue(Unsafe.As<Array, T?[]>(ref array)[index]);
+        => _elemConverter.IsDbNullValue(Unsafe.As<T?[]>(array)[index]);
 
-    void IArrayElementOperations.Write(PgWriter writer, Array array, int index)
-        => _elemConverter.Write(writer, Unsafe.As<Array, T?[]>(ref array)[index]!);
+    ValueTask IArrayElementOperations.Read(bool async, PgReader reader, Array array, int index, CancellationToken cancellationToken)
+    {
+        if (async)
+        {
+            var task = _elemConverter.ReadAsync(reader, cancellationToken);
+            if (task.IsCompletedSuccessfully)
+                Unsafe.As<T?[]>(array)[index] = task.GetAwaiter().GetResult();
+            return Core(array, index, task);
+        }
 
-    ValueTask IArrayElementOperations.WriteAsync(PgWriter writer, Array array, int index, CancellationToken cancellationToken)
-        => _elemConverter.WriteAsync(writer, Unsafe.As<Array, T?[]>(ref array)[index]!, cancellationToken);
+        Unsafe.As<T?[]>(array)[index] = _elemConverter.Read(reader);
+        return new();
+
+        static async ValueTask Core(Array array, int index, ValueTask<T?> task) => Unsafe.As<T?[]>(array)[index] = await task;
+    }
+
+    ValueTask IArrayElementOperations.Write(bool async, PgWriter writer, Array array, int index, CancellationToken cancellationToken)
+    {
+        if (async)
+            return _elemConverter.WriteAsync(writer, Unsafe.As<T?[]>(array)[index]!, cancellationToken);
+
+        _elemConverter.Write(writer, Unsafe.As<T?[]>(array)[index]!);
+        return new();
+    }
 }
 
 // TODO benchmark this unit.
