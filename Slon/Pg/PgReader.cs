@@ -1,5 +1,7 @@
 using System;
 using System.Buffers;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Slon.Pg;
 
@@ -9,6 +11,16 @@ class PgReader
     public int ByteCount { get; internal set; }
     public DataFormat Format { get; internal set; }
     public int Remaining { get; }
+
+    public void WaitForData(int count)
+    {
+        
+    }
+    
+    public ValueTask WaitForDataAsync(int count, CancellationToken cancellationToken = default)
+    {
+        return new();
+    }
 
     public byte ReadByte()
     {

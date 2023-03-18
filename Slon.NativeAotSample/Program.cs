@@ -14,5 +14,6 @@ if (!await reader.ReadAsync())
     throw new Exception("Got nothing from the database");
 
 var value = reader.GetFieldValue<string>(0);
-if (value != "Hello World")
+var valueAsync = reader.GetFieldValueAsync<string>(0).GetAwaiter().GetResult();
+if (value != "Hello World" || valueAsync != "Hello World")
     throw new Exception($"Got {value} instead of the expected 'Hello World'");

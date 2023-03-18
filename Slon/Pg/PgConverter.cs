@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -140,15 +141,34 @@ abstract class PgFixedBinarySizeConverter<T> : PgConverter<T>
 
     protected abstract T? ReadCore(PgReader reader);
 
+    protected virtual ValueTask<T?> ReadCoreAsync(PgReader reader, CancellationToken cancellationToken = default)
+        => new(ReadCore(reader));
+
     // By default ReadAsync delegates to Read, so any text read would be able to be handled too.
     public sealed override T? Read(PgReader reader)
     {
-        if (reader.Remaining < reader.ByteCount)
-            ThrowIORequired();
+        if (reader.Format is DataFormat.Binary && reader.Remaining < BinarySize)
+            reader.WaitForData(reader.ByteCount);
 
         return ReadCore(reader);
 
-        static void ThrowIORequired() => throw new InvalidOperationException("HasFixedSize=true for binary not respected, expected no IO to be required.");
+    }
+
+    public override ValueTask<T?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
+    {
+        if (reader.Format is DataFormat.Binary && reader.Remaining < BinarySize)
+            return Core(reader, cancellationToken);
+
+        return ReadCoreAsync(reader, cancellationToken);
+
+#if !NETSTANDARD2_0
+        [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+#endif
+        async ValueTask<T?> Core(PgReader reader, CancellationToken cancellationToken)
+        {
+            await reader.WaitForDataAsync(BinarySize, cancellationToken);
+            return await ReadCoreAsync(reader, cancellationToken);
+        }
     }
 }
 

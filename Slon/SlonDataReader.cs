@@ -388,6 +388,20 @@ public sealed partial class SlonDataReader: DbDataReader
         return info.GetReader<T>(field).Read(reader) ?? throw new InvalidOperationException("DbNull returned");
     }
 
+    public override async Task<T> GetFieldValueAsync<T>(int ordinal, CancellationToken cancellationToken)
+    {
+        var reader = new PgReader();
+        // TODO store last used converter per column for quick checking.
+        var field = new Field();
+        var info = _dataSource.GetConverterInfo(typeof(T), field);
+        if (typeof(T) == typeof(object) && info.Type != typeof(object))
+        {
+            return (T)(await info.GetReader(field).ReadAsync(reader, cancellationToken))!;
+        }
+
+        return (T)(await info.GetReader(field).ReadAsync(reader, cancellationToken))! ?? throw new InvalidOperationException("DbNull returned");
+    }
+
     public override bool GetBoolean(int ordinal)
         => GetFieldValue<bool>(ordinal);
 
