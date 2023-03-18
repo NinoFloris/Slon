@@ -49,7 +49,7 @@ class PgConverterOptions
         => RequirePortableTypeIds ? TypeCatalog.GetDataTypeName(dataTypeName) : TypeCatalog.GetOid(TypeCatalog.GetDataTypeName(dataTypeName));
 
     public PgTypeId GetTypeId(DataTypeName dataTypeName)
-        => RequirePortableTypeIds ? TypeCatalog.GetDataTypeName((PgTypeId)dataTypeName) : TypeCatalog.GetOid(dataTypeName);
+        => RequirePortableTypeIds ? TypeCatalog.GetDataTypeName(dataTypeName) : TypeCatalog.GetOid(dataTypeName);
 
     public PgTypeId GetArrayTypeId(string elementDataTypeName)
         => RequirePortableTypeIds
@@ -80,7 +80,7 @@ class PgConverterOptions
         return bufferedWriter;
     }
 
-    public BufferedOutput GetBufferedOutput<T>(PgConverter<T> converter, T value, object? state, DataRepresentation dataRepresentation)
+    public BufferedOutput GetBufferedOutput<T>(PgConverter<T> converter, T value, object? state, DataFormat dataFormat)
     {
         var writer = GetBufferedWriter<IBufferWriter<byte>>(null!, state); // TODO this should be some array pool thing.
         converter.Write(writer, value, this);

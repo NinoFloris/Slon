@@ -10,8 +10,8 @@ abstract class PgConverterFactory : PgConverter
 {
     public abstract PgConverterInfo? CreateConverterInfo(Type type, PgConverterOptions options, PgTypeId? pgTypeId = null);
 
-    public sealed override bool CanConvert(DataRepresentation representation) => false;
-    public sealed override bool IsDbNullable => throw new NotSupportedException();
+    public sealed override bool CanConvert(DataFormat format) => false;
+    internal sealed override bool IsDbNullable => throw new NotSupportedException();
 
     internal sealed override Type TypeToConvert => throw new NotSupportedException();
     internal sealed override object? ReadAsObject(PgReader reader, PgConverterOptions options) => throw new NotSupportedException();

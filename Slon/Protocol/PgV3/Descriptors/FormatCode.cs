@@ -11,11 +11,11 @@ enum FormatCode: short
 
 static class DataTypeRepresentationExtensions
 {
-    public static FormatCode ToFormatCode(this DataRepresentation repr)
+    public static FormatCode ToFormatCode(this DataFormat repr)
         => repr switch
         {
-            DataRepresentation.Binary => FormatCode.Binary,
-            DataRepresentation.Text => FormatCode.Text,
+            DataFormat.Binary => FormatCode.Binary,
+            DataFormat.Text => FormatCode.Text,
             _ => throw new ArgumentOutOfRangeException(nameof(repr), repr, null)
         };
 }

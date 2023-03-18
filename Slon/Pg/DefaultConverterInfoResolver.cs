@@ -13,7 +13,6 @@ class DefaultConverterInfoResolver: IPgConverterInfoResolver
     static readonly PgConverterFactory[] ConverterFactories = {
     };
 
-    [RequiresUnreferencedCode("Reflection used for pg type conversions.")]
     public PgConverterInfo? GetConverterInfo(Type? type, DataTypeName? dataTypeName, PgConverterOptions options)
     {
         if (type is null && dataTypeName is null)
@@ -77,7 +76,7 @@ class DefaultConverterInfoResolver: IPgConverterInfoResolver
         return null;
 
         PgConverterInfo CreateTextInfo<T>(PgConverter<T> converter)
-            => PgConverterInfo.Create(options, converter, DataTypeNames.Text, isDefaultInfo, DataRepresentation.Text);
+            => PgConverterInfo.Create(options, converter, DataTypeNames.Text, isDefaultInfo, DataFormat.Text);
 
         PgConverterInfo? CreateNumberInfo<T>(DataTypeName dataTypeName, Func<PgConverter<T>>? defaultConverterFunc)
 #if !NETSTANDARD2_0

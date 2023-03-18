@@ -22,7 +22,7 @@ abstract class ValueConverter<T, TEffective>: PgConverter<T>
         return _effectiveConverter.IsDbNullValue(ConvertTo(value, options), options);
     }
 
-    public sealed override bool CanConvert(DataRepresentation representation) => _effectiveConverter.CanConvert(representation);
+    public sealed override bool CanConvert(DataFormat format) => _effectiveConverter.CanConvert(format);
 
     public sealed override ValueSize GetSize(T value, ref object? writeState, SizeContext context, PgConverterOptions options)
         => _effectiveConverter.GetSize(ConvertTo(value, options), ref writeState, context, options);
@@ -49,15 +49,15 @@ abstract class ValueConverter<T, TEffective>: PgConverter<T>
 
 sealed class LambdaValueConverter<T, TEffective> : ValueConverter<T, TEffective>
 {
-    readonly Func<TEffective, PgConverterOptions, T> _from;
+    readonly Func<TEffective?, PgConverterOptions, T?> _from;
     readonly Func<T, PgConverterOptions, TEffective> _to;
 
-    public LambdaValueConverter(Func<TEffective, PgConverterOptions, T> from, Func<T, PgConverterOptions, TEffective> to, PgConverter<TEffective> effectiveConverter) : base(effectiveConverter)
+    public LambdaValueConverter(Func<TEffective?, PgConverterOptions, T?> from, Func<T, PgConverterOptions, TEffective> to, PgConverter<TEffective> effectiveConverter) : base(effectiveConverter)
     {
         _from = from;
         _to = to;
     }
 
-    protected override T ConvertFrom(TEffective value, PgConverterOptions options) => _from(value, options);
+    protected override T? ConvertFrom(TEffective? value, PgConverterOptions options) => _from(value, options);
     protected override TEffective ConvertTo(T value, PgConverterOptions options) => _to(value, options);
 }

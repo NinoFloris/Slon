@@ -1,6 +1,5 @@
 using System;
 using System.Buffers;
-using System.Threading.Tasks;
 
 namespace Slon.Pg;
 
@@ -8,7 +7,8 @@ namespace Slon.Pg;
 class PgReader
 {
     public int ByteCount { get; internal set; }
-    public DataRepresentation DataRepresentation { get; internal set; }
+    public DataFormat Format { get; internal set; }
+    public int Remaining { get; }
 
     public byte ReadByte()
     {

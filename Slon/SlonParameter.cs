@@ -21,7 +21,7 @@ public abstract class SlonDbParameter : DbDataParameter, IParameterSession
 
     public new SlonDbParameter Clone() => (SlonDbParameter)CloneCore();
 
-    // TODO should this be DataRepresentation?
+    // TODO should this be DataFormat?
     /// Some converters support both a textual and binary representation for the postgres type this parameter maps to.
     /// When this property is set to true a textual representation should be preferred.
     /// When its set to false a non-textual (binary) representation is preferred.

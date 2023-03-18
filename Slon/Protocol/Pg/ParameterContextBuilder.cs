@@ -57,19 +57,19 @@ struct ParameterContextBuilder
         return Parameters[_index++] = parameter;
     }
 
-    public Parameter AddParameter(IParameterSession value, PgConverterInfo? converterInfo = null, DataRepresentation? preferredRepresentation = null)
-        => AddParameterCore(value, pgTypeId: null, preferredRepresentation, converterInfo);
+    public Parameter AddParameter(IParameterSession value, PgConverterInfo? converterInfo = null, DataFormat? preferredFormat = null)
+        => AddParameterCore(value, pgTypeId: null, preferredFormat, converterInfo);
 
-    public Parameter AddParameter(IParameterSession value, PgTypeId? pgTypeId = null, DataRepresentation? preferredRepresentation = null)
-        => AddParameterCore(value, pgTypeId, preferredRepresentation, converterInfo: null);
+    public Parameter AddParameter(IParameterSession value, PgTypeId? pgTypeId = null, DataFormat? preferredFormat = null)
+        => AddParameterCore(value, pgTypeId, preferredFormat, converterInfo: null);
 
-    public Parameter AddParameter(object? value, PgConverterInfo? converterInfo = null, DataRepresentation? preferredRepresentation = null)
-        => AddParameterCore(value, pgTypeId: null, preferredRepresentation, converterInfo);
+    public Parameter AddParameter(object? value, PgConverterInfo? converterInfo = null, DataFormat? preferredFormat = null)
+        => AddParameterCore(value, pgTypeId: null, preferredFormat, converterInfo);
 
-    public Parameter AddParameter(object? value, PgTypeId? pgTypeId = null, DataRepresentation? preferredRepresentation = null)
-        => AddParameterCore(value, pgTypeId, preferredRepresentation, converterInfo: null);
+    public Parameter AddParameter(object? value, PgTypeId? pgTypeId = null, DataFormat? preferredFormat = null)
+        => AddParameterCore(value, pgTypeId, preferredFormat, converterInfo: null);
 
-    Parameter AddParameterCore(object? value, PgTypeId? pgTypeId, DataRepresentation? preferredRepresentation, PgConverterInfo? converterInfo)
+    Parameter AddParameterCore(object? value, PgTypeId? pgTypeId, DataFormat? preferredFormat, PgConverterInfo? converterInfo)
     {
         EnsureCapacity();
         var parameterKind = ParameterKind.Input;
@@ -78,14 +78,14 @@ struct ParameterContextBuilder
         if (value is IParameterSession session)
         {
             converterInfo ??= GetConverterInfo(ConverterOptions, session.ValueType, pgTypeId);
-            parameter = converterInfo.CreateParameter(value, _remainingBufferSize, NullStructValueIsDbNull, preferredRepresentation: preferredRepresentation);
+            parameter = converterInfo.CreateParameter(value, _remainingBufferSize, NullStructValueIsDbNull, preferredFormat);
             parameterKind = session.Kind;
             isSession = true;
         }
         else
         {
             converterInfo ??= GetConverterInfo(ConverterOptions, value?.GetType(), pgTypeId);
-            parameter = converterInfo.CreateParameter(value, _remainingBufferSize, NullStructValueIsDbNull, preferredRepresentation: preferredRepresentation);
+            parameter = converterInfo.CreateParameter(value, _remainingBufferSize, NullStructValueIsDbNull, preferredFormat);
         }
 
         if (parameter.Size is { Value: null })
@@ -105,7 +105,7 @@ struct ParameterContextBuilder
         if (isSession)
             _flags |= parameterKind is ParameterKind.Input ? ParameterContextFlags.AnySessions : ParameterContextFlags.AnySessions | ParameterContextFlags.AnyWritableParamSessions;
 
-        if (parameter.DataRepresentation is not DataRepresentation.Binary)
+        if (parameter.DataFormat is not DataFormat.Binary)
             _flags |= ParameterContextFlags.AnyNonBinaryWrites;
 
         return Parameters[_index++] = parameter;

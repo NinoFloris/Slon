@@ -20,7 +20,7 @@ sealed class NullableValueConverter<T> : PgConverter<T?> where T : struct
     protected override bool IsDbNull(T? value, PgConverterOptions options)
         => _effectiveConverter.IsDbNullValue(ConvertTo(value, options), options);
 
-    public override bool CanConvert(DataRepresentation representation) => _effectiveConverter.CanConvert(representation);
+    public override bool CanConvert(DataFormat format) => _effectiveConverter.CanConvert(format);
 
     public override ValueSize GetSize(T? value, ref object? writeState, SizeContext context, PgConverterOptions options)
         => _effectiveConverter.GetSize(ConvertTo(value, options), ref writeState, context, options);

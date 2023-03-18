@@ -10,12 +10,12 @@ namespace Slon.Protocol.Pg;
 
 readonly struct Parameter
 {
-    public Parameter(object? value, PgConverterInfo.Writer writer, ValueSize? size, DataRepresentation dataRepresentation = DataRepresentation.Binary, object? writeState = null)
+    public Parameter(object? value, PgConverterInfo.Writer writer, ValueSize? size, DataFormat dataFormat = DataFormat.Binary, object? writeState = null)
     {
         Value = value;
         Writer = writer;
         Size = size;
-        DataRepresentation = dataRepresentation;
+        DataFormat = dataFormat;
         WriteState = writeState;
     }
 
@@ -31,7 +31,7 @@ readonly struct Parameter
     public PgConverterInfo.Writer Writer { get; init; }
     public object? WriteState { get; init; }
 
-    public DataRepresentation DataRepresentation { get; init; }
+    public DataFormat DataFormat { get; init; }
 
     public bool TryGetParameterSession([NotNullWhen(true)]out IParameterSession? value)
     {
@@ -69,11 +69,11 @@ static class ParameterValueReaderExtensions
 
 static class PgConverterInfoExtensions
 {
-    public static Parameter CreateParameter(this PgConverterInfo converterInfo, object? parameterValue, int bufferLength, bool nullStructValueIsDbNull = true, DataRepresentation? preferredRepresentation = null)
+    public static Parameter CreateParameter(this PgConverterInfo converterInfo, object? parameterValue, int bufferLength, bool nullStructValueIsDbNull = true, DataFormat? preferredFormat = null)
     {
-        var reader = new ValueReader(converterInfo, bufferLength, nullStructValueIsDbNull, preferredRepresentation);
+        var reader = new ValueReader(converterInfo, bufferLength, nullStructValueIsDbNull, preferredFormat);
         reader.ReadParameterValue(parameterValue);
-        return new Parameter(parameterValue, reader.Writer, reader.Size, reader.Representation, reader.WriteState);
+        return new Parameter(parameterValue, reader.Writer, reader.Size, reader.Format, reader.WriteState);
     }
 
     struct ValueReader: IParameterValueReader, IBoxedParameterValueReader
@@ -82,20 +82,20 @@ static class PgConverterInfoExtensions
 
         readonly int _bufferLength;
         readonly bool _nullStructValueIsDbNull;
-        readonly DataRepresentation? _preferredRepresentation;
+        readonly DataFormat? _preferredFormat;
         public ValueSize? Size { get; private set; }
-        DataRepresentation _representation;
-        public DataRepresentation Representation => _representation;
+        DataFormat _format;
+        public DataFormat Format => _format;
         object? _writeState;
         public object? WriteState => _writeState;
         public PgConverterInfo.Writer Writer { get; private set; }
 
-        public ValueReader(PgConverterInfo converterInfo, int bufferLength, bool nullStructValueIsDbNull, DataRepresentation? preferredRepresentation)
+        public ValueReader(PgConverterInfo converterInfo, int bufferLength, bool nullStructValueIsDbNull, DataFormat? preferredFormat)
         {
             _converterInfo = converterInfo;
             _bufferLength = bufferLength;
             _nullStructValueIsDbNull = nullStructValueIsDbNull;
-            _preferredRepresentation = preferredRepresentation;
+            _preferredFormat = preferredFormat;
         }
 
         public void Read<T>(T? value)
@@ -103,14 +103,14 @@ static class PgConverterInfoExtensions
             var writer = _converterInfo.GetWriter(value);
             Writer = writer.ToWriter();
             if (!writer.IsDbNullValue(value))
-                Size = writer.GetAnySize(value, _bufferLength, out _writeState, out _representation, _preferredRepresentation);
+                Size = writer.GetAnySize(value, _bufferLength, out _writeState, out _format, _preferredFormat);
         }
 
         public void ReadAsObject(object? value)
         {
             var writer = Writer = _converterInfo.GetWriter(value);
             if ((!_nullStructValueIsDbNull || value is not null) && !writer.IsDbNullValue(value))
-                Size = writer.GetAnySize(value, _bufferLength, out _writeState, out _representation, _preferredRepresentation);
+                Size = writer.GetAnySize(value, _bufferLength, out _writeState, out _format, _preferredFormat);
         }
     }
 }
@@ -127,7 +127,7 @@ static class ParameterExtensions
         if (parameter.IsDbNull)
             return;
 
-        writer.DataRepresentation = parameter.DataRepresentation;
+        writer.DataFormat = parameter.DataFormat;
         var reader = new ValueWriter(writer, parameter.Writer, CancellationToken.None);
         reader.ReadParameterValue(parameter.Value);
 
@@ -142,7 +142,7 @@ static class ParameterExtensions
         if (parameter.IsDbNull)
             return new ValueTask();
 
-        writer.DataRepresentation = parameter.DataRepresentation;
+        writer.DataFormat = parameter.DataFormat;
         var reader = new ValueWriter(writer, parameter.Writer, cancellationToken);
         reader.ReadParameterValue(parameter.Value);
 
@@ -156,7 +156,7 @@ static class ParameterExtensions
         // TODO some array pool backed thing
         var pooledBufferWriter = (IBufferWriter<byte>)null!;
         var pgWriter = parameter.Writer.Info.Options.GetBufferedWriter(pooledBufferWriter, parameter.WriteState);
-        pgWriter.DataRepresentation = parameter.HasTextWrite() ? DataRepresentation.Text : DataRepresentation.Binary;
+        pgWriter.DataFormat = parameter.HasTextWrite() ? DataFormat.Text : DataFormat.Binary;
         var reader = new ValueWriter(pgWriter, parameter.Writer, CancellationToken.None);
         return new BufferedOutput(default);
     }
@@ -215,7 +215,7 @@ static class ParameterExtensions
         => parameter.Writer.Info.ConverterType;
 
     public static bool HasTextWrite(this Parameter parameter)
-        => parameter.DataRepresentation is DataRepresentation.Text;
+        => parameter.DataFormat is DataFormat.Text;
 }
 
 readonly struct PgTypeIdView

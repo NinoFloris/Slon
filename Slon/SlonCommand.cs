@@ -183,7 +183,7 @@ public sealed partial class SlonCommand
                 {
                     ParameterContext = parameterContext,
                     Flags = CommandFlags.ErrorBarrier,
-                    RowRepresentation = RowRepresentation.CreateForAll(DataRepresentation.Binary),
+                    RowRepresentation = RowRepresentation.CreateForAll(DataFormat.Binary),
                     State = dataSource,
                 }
             };

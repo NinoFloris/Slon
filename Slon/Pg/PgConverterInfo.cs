@@ -11,7 +11,6 @@ class PgConverterInfo
 {
     readonly bool _canBinaryConvert;
     readonly bool _canTextConvert;
-    readonly bool _isTypeDbNullable;
 
     PgConverterInfo(PgConverterOptions options, PgConverter converter, PgTypeId pgTypeId)
     {
@@ -19,9 +18,8 @@ class PgConverterInfo
         Options = options;
         Converter = converter;
         PgTypeId = options.GetCanonicalTypeId(pgTypeId);
-        _canBinaryConvert = converter.CanConvert(DataRepresentation.Binary);
-        _canTextConvert = converter.CanConvert(DataRepresentation.Text);
-        _isTypeDbNullable = converter.IsDbNullable;
+        _canBinaryConvert = converter.CanConvert(DataFormat.Binary);
+        _canTextConvert = converter.CanConvert(DataFormat.Text);
     }
 
     PgConverterInfo(PgConverterOptions options, Type type, PgConverterResolution? resolution)
@@ -35,9 +33,8 @@ class PgConverterInfo
                 throw new ArgumentException("Given type id is not in canonical form. Make sure ConverterResolver implementations close over canonical ids, e.g. by calling options.GetCanonicalTypeId(pgTypeId) on the constructor arguments.", nameof(PgTypeId));
 
             PgTypeId = res.PgTypeId;
-            _canBinaryConvert = res.Converter.CanConvert(DataRepresentation.Binary);
-            _canTextConvert = res.Converter.CanConvert(DataRepresentation.Text);
-            _isTypeDbNullable = res.Converter.IsDbNullable;
+            _canBinaryConvert = res.Converter.CanConvert(DataFormat.Binary);
+            _canTextConvert = res.Converter.CanConvert(DataFormat.Text);
         }
     }
 
@@ -48,7 +45,7 @@ class PgConverterInfo
 
     // Whether this ConverterInfo maps to the default CLR Type for the DataTypeName given to IPgConverterInfoResolver.GetConverterInfo.
     public bool IsDefault { get; private set; }
-    public DataRepresentation? PreferredRepresentation { get; private set; }
+    public DataFormat? PreferredFormat { get; private set; }
 
     PgConverter? Converter { get; }
     [MemberNotNullWhen(false, nameof(Converter))]
@@ -111,21 +108,21 @@ class PgConverterInfo
         => new(Options, converter, pgTypeId)
         {
             IsDefault = IsDefault,
-            PreferredRepresentation = PreferredRepresentation
+            PreferredFormat = PreferredFormat
         };
 
     internal PgConverterInfo Compose(PgConverterResolver resolver, PgTypeId? expectedPgTypeId)
         => new PgConverterResolverInfo(Options, resolver, expectedPgTypeId)
         {
             IsDefault = IsDefault,
-            PreferredRepresentation = PreferredRepresentation
+            PreferredFormat = PreferredFormat
         };
 
-    public static PgConverterInfo Create(PgConverterOptions options, PgConverter converter, PgTypeId pgTypeId, bool isDefault = false, DataRepresentation? preferredRepresentation = null)
-        => new(options, converter, pgTypeId) { IsDefault = isDefault, PreferredRepresentation = preferredRepresentation };
+    public static PgConverterInfo Create(PgConverterOptions options, PgConverter converter, PgTypeId pgTypeId, bool isDefault = false, DataFormat? preferredFormat = null)
+        => new(options, converter, pgTypeId) { IsDefault = isDefault, PreferredFormat = preferredFormat };
 
-    public static PgConverterInfo Create(PgConverterOptions options, PgConverterResolver resolver, PgTypeId? expectedPgTypeId, bool isDefault = false, DataRepresentation? preferredRepresentation = null)
-        => new PgConverterResolverInfo(options, resolver, expectedPgTypeId) { IsDefault = isDefault, PreferredRepresentation = preferredRepresentation };
+    public static PgConverterInfo Create(PgConverterOptions options, PgConverterResolver resolver, PgTypeId? expectedPgTypeId, bool isDefault = false, DataFormat? preferredFormat = null)
+        => new PgConverterResolverInfo(options, resolver, expectedPgTypeId) { IsDefault = isDefault, PreferredFormat = preferredFormat };
 
     internal readonly struct Writer<T>
     {
@@ -141,13 +138,13 @@ class PgConverterInfo
         }
 
         public bool IsDbNullValue([NotNullWhen(false)]T? value)
-            => Info is { HasCachedInfo: true, _isTypeDbNullable: false } || _converter.IsDbNullValue(value, Info.Options);
+            => _converter.IsDbNullValue(value, Info.Options);
 
-        public ValueSize GetAnySize(T value, int bufferLength, out object? writeState, out DataRepresentation representation, DataRepresentation? preferredRepresentation = null)
+        public ValueSize GetAnySize(T value, int bufferLength, out object? writeState, out DataFormat format, DataFormat? preferredFormat = null)
         {
             writeState = null;
-            representation = Info.ResolvePreferredRepresentation(_converter, preferredRepresentation ?? Info.PreferredRepresentation);
-            return _converter.GetSize(value!, ref writeState, new(representation, bufferLength), Info.Options);
+            format = Info.ResolvePreferredFormat(_converter, preferredFormat ?? Info.PreferredFormat);
+            return _converter.GetSize(value!, ref writeState, new(format, bufferLength), Info.Options);
         }
 
         public void Write(PgWriter pgWriter, T value)
@@ -173,13 +170,13 @@ class PgConverterInfo
         }
 
         public bool IsDbNullValue([NotNullWhen(false)]object? value)
-            => (Info.HasCachedInfo || Info._isTypeDbNullable) && _converter.IsDbNullValueAsObject(value, Info.Options);
+            => _converter.IsDbNullValueAsObject(value, Info.Options);
 
-        public ValueSize GetAnySize(object value, int bufferLength, out object? writeState, out DataRepresentation representation, DataRepresentation? preferredRepresentation = null)
+        public ValueSize GetAnySize(object value, int bufferLength, out object? writeState, out DataFormat format, DataFormat? preferredFormat = null)
         {
             writeState = null;
-            representation = Info.ResolvePreferredRepresentation(_converter, preferredRepresentation ?? Info.PreferredRepresentation);
-            return _converter.GetSizeAsObject(value!, ref writeState, new(representation, bufferLength), Info.Options);
+            format = Info.ResolvePreferredFormat(_converter, preferredFormat ?? Info.PreferredFormat);
+            return _converter.GetSizeAsObject(value!, ref writeState, new(format, bufferLength), Info.Options);
         }
 
         public void Write(PgWriter pgWriter, object value)
@@ -204,6 +201,8 @@ class PgConverterInfo
         }
 
         public Type EffectiveType { get; }
+
+        public bool IsDbNullValue(T? value) => _converter.IsDbNullValue(value, _info.Options);
 
         public T? Read(PgReader reader)
             => _converter.Read(reader, _info.Options);
@@ -246,15 +245,15 @@ class PgConverterInfo
         public PgConverterResolver ConverterResolver { get; }
     }
 
-    DataRepresentation ResolvePreferredRepresentation(PgConverter converter, DataRepresentation? preferredRepresentation = null)
+    DataFormat ResolvePreferredFormat(PgConverter converter, DataFormat? preferredFormat = null)
         // If we don't have a converter stored we must ask the retrieved one through virtual calls.
-        => preferredRepresentation switch
+        => preferredFormat switch
         {
-            DataRepresentation.Binary when (HasCachedInfo ? _canBinaryConvert : converter.CanConvert(DataRepresentation.Binary))
-                => DataRepresentation.Binary,
-            DataRepresentation.Text when (HasCachedInfo ? !_canTextConvert : !converter.CanConvert(DataRepresentation.Text))
-                => DataRepresentation.Binary,
-            _ => (HasCachedInfo ? _canBinaryConvert : converter.CanConvert(DataRepresentation.Binary)) ? DataRepresentation.Binary : DataRepresentation.Text
+            DataFormat.Binary when (HasCachedInfo ? _canBinaryConvert : converter.CanConvert(DataFormat.Binary))
+                => DataFormat.Binary,
+            DataFormat.Text when (HasCachedInfo ? !_canTextConvert : !converter.CanConvert(DataFormat.Text))
+                => DataFormat.Binary,
+            _ => (HasCachedInfo ? _canBinaryConvert : converter.CanConvert(DataFormat.Binary)) ? DataFormat.Binary : DataFormat.Text
         };
 
     void ThrowNotSupported() => throw new NotSupportedException();
@@ -285,7 +284,7 @@ readonly struct PgConverterResolution
 
     public PgConverterResolution(PgConverter converter, PgTypeId pgTypeId, Type? effectiveType = null)
     {
-        DebugShim.Assert(effectiveType is null || converter.TypeToConvert == typeof(object));
+        DebugShim.Assert(effectiveType is null || converter.TypeToConvert == typeof(object), "effectiveType can only be set for object polymorphic converters.");
         Converter = converter;
         PgTypeId = pgTypeId;
         _effectiveType = effectiveType;

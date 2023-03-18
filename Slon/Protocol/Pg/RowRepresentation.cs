@@ -5,15 +5,15 @@ namespace Slon.Protocol.Pg;
 
 readonly struct RowRepresentation
 {
-    RowRepresentation(DataRepresentation repr) => ForAll = repr;
-    RowRepresentation(ReadOnlyMemory<DataRepresentation> reprs) => PerColumn = reprs;
+    RowRepresentation(DataFormat repr) => ForAll = repr;
+    RowRepresentation(ReadOnlyMemory<DataFormat> reprs) => PerColumn = reprs;
 
     public bool IsForAll => PerColumn.IsEmpty;
     public bool IsPerColumn => !IsForAll;
 
-    public DataRepresentation ForAll { get; }
-    public ReadOnlyMemory<DataRepresentation> PerColumn { get; }
+    public DataFormat ForAll { get; }
+    public ReadOnlyMemory<DataFormat> PerColumn { get; }
 
-    public static RowRepresentation CreateForAll(DataRepresentation code) => new(code);
-    public static RowRepresentation CreatePerColumn(ReadOnlyMemory<DataRepresentation> codes) => new(codes);
+    public static RowRepresentation CreateForAll(DataFormat code) => new(code);
+    public static RowRepresentation CreatePerColumn(ReadOnlyMemory<DataFormat> codes) => new(codes);
 }

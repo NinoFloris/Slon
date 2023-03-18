@@ -3,7 +3,6 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -29,7 +28,7 @@ readonly struct ArrayConverter
         _elementOperations = elementOperations;
     }
 
-    ValueSize GetElemsSize(Array values, int bufferLength, (ValueSize, object?)[] elementStates, DataRepresentation representation, PgConverterOptions options)
+    ValueSize GetElemsSize(Array values, int bufferLength, (ValueSize, object?)[] elementStates, DataFormat format, PgConverterOptions options)
     {
         Debug.Assert(elementStates.Length == values.Length);
         var totalSize = ValueSize.Zero;
@@ -41,7 +40,7 @@ readonly struct ArrayConverter
             var sizeResult =
                 elemTypeNullable && _elementOperations.IsDbNullValue(values, i, options)
                 ? ValueSize.Zero
-                : _elementOperations.GetSize(values, i, ref elemState, new(representation, bufferLength), options);
+                : _elementOperations.GetSize(values, i, ref elemState, new(format, bufferLength), options);
 
             elemItem = (sizeResult, elemState);
             // Set it to zero on an unknown/null byte count.
@@ -51,10 +50,10 @@ readonly struct ArrayConverter
         return totalSize;
     }
 
-    ValueSize GetFixedElemsSize(Array values, DataRepresentation representation, PgConverterOptions options)
+    ValueSize GetFixedElemsSize(Array values, DataFormat format, PgConverterOptions options)
     {
         var discardedElemState = (object?)null;
-        var fixedSize = _elementOperations.GetSize(values, 0, ref discardedElemState, new(representation, 0), options).Value;
+        var fixedSize = _elementOperations.GetSize(values, 0, ref discardedElemState, new(format, 0), options).Value;
         var nonNullValues = values.Length;
         if (_elemTypeDbNullable)
         {
@@ -85,15 +84,15 @@ readonly struct ArrayConverter
             return formatSize;
 
         ValueSize elemsSize;
-        if (_elementOperations.HasFixedSize(context.Representation))
+        if (_elementOperations.HasFixedSize(context.Format))
         {
-            elemsSize = GetFixedElemsSize(values, context.Representation, options);
+            elemsSize = GetFixedElemsSize(values, context.Format, options);
             writeState = Array.Empty<(ValueSize, object?)>();
         }
         else
         {
             var stateArray = _statePool.Rent(values.Length);
-            elemsSize = GetElemsSize(values, context.BufferLength - formatSize.Value ?? 0, stateArray, context.Representation, options);
+            elemsSize = GetElemsSize(values, context.BufferLength - formatSize.Value ?? 0, stateArray, context.Format, options);
             writeState = stateArray;
         }
 
@@ -121,7 +120,7 @@ readonly struct ArrayConverter
         if (state.Length is 0)
         {
             var discardedElemState = (object?)null;
-            var length = _elementOperations.GetSize(values, 0, ref discardedElemState, new(writer.DataRepresentation, 0), options).Value.GetValueOrDefault();
+            var length = _elementOperations.GetSize(values, 0, ref discardedElemState, new(writer.DataFormat, 0), options).Value.GetValueOrDefault();
             for (var i = 0; i < values.Length; i++)
             {
                 if (elemTypeDbNullable && _elementOperations.IsDbNullValue(values, i, options))
@@ -183,7 +182,7 @@ readonly struct ArrayConverter
 
 interface IArrayElementOperations
 {
-    bool HasFixedSize(DataRepresentation representation);
+    bool HasFixedSize(DataFormat format);
     ValueSize GetSize(Array array, int index, ref object? writeState, SizeContext context, PgConverterOptions options);
     bool IsDbNullValue(Array array, int index, PgConverterOptions options);
     void Write(PgWriter writer, Array array, int index, PgConverterOptions options);
@@ -203,7 +202,7 @@ sealed class ArrayConverter<T> : PgConverter<T?[]>, IArrayElementOperations
 
     internal PgTypeId ElemTypeId => _arrayConverter.ElemTypeId;
 
-    public override bool CanConvert(DataRepresentation representation) => _elemConverter.CanConvert(representation);
+    public override bool CanConvert(DataFormat format) => _elemConverter.CanConvert(format);
 
     public override T?[] Read(PgReader reader, PgConverterOptions options)
     {

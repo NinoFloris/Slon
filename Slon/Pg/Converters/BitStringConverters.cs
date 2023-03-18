@@ -54,7 +54,7 @@ sealed class BitVector32BitStringConverter : PgConverter<BitVector32>
     }
 }
 
-sealed class BoolBitStringConverter : FixedBinarySizePgConverter<bool>
+sealed class BoolBitStringConverter : PgFixedBinarySizeConverter<bool>
 {
     public static bool ReadValue(PgReader reader, PgConverterOptions options)
     {
@@ -65,7 +65,7 @@ sealed class BoolBitStringConverter : FixedBinarySizePgConverter<bool>
     }
 
     protected override byte BinarySize => 5;
-    public override bool Read(PgReader reader, PgConverterOptions options) => ReadValue(reader, options);
+    protected override bool ReadCore(PgReader reader, PgConverterOptions options) => ReadValue(reader, options);
     public override void Write(PgWriter writer, bool value, PgConverterOptions options)
     {
         writer.WriteInt32(1);

@@ -315,7 +315,7 @@ public sealed partial class SlonDataReader: DbDataReader
             return (T)info.GetReader(field).Read(reader)!;
         }
 
-        return info.GetReader<T>(field).Read(reader);
+        return info.GetReader<T>(field).Read(reader) ?? throw new InvalidOperationException("DbNull returned");
     }
 
     public override bool GetBoolean(int ordinal)

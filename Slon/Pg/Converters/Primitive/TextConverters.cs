@@ -35,7 +35,7 @@ sealed class ReadOnlyMemoryTextConverter: PgConverter<ReadOnlyMemory<char>>
     public override ValueTask WriteAsync(PgWriter writer, ReadOnlyMemory<char> value, PgConverterOptions options, CancellationToken cancellationToken = default)
         => WriteCore(async: true, writer, value, options.TextEncoding, cancellationToken);
 
-    public override bool CanConvert(DataRepresentation representation) => representation is DataRepresentation.Binary or DataRepresentation.Text;
+    public override bool CanConvert(DataFormat format) => format is DataFormat.Binary or DataFormat.Text;
 
     ValueTask<ReadOnlyMemory<char>> ReadCore(bool async, PgReader reader, PgConverterOptions options)
     {
@@ -70,13 +70,13 @@ sealed class StringTextConverter : ValueConverter<string, ReadOnlyMemory<char>>
     protected override string ConvertFrom(ReadOnlyMemory<char> value, PgConverterOptions options) => throw new NotSupportedException();
     protected override ReadOnlyMemory<char> ConvertTo(string value, PgConverterOptions options) => value.AsMemory();
 
-    public override string Read(PgReader reader, PgConverterOptions options)
+    public override string? Read(PgReader reader, PgConverterOptions options)
         => ReadCore(async: false, reader, options).GetAwaiter().GetResult();
 
-    public override ValueTask<string> ReadAsync(PgReader reader, PgConverterOptions options, CancellationToken cancellationToken = default)
+    public override ValueTask<string?> ReadAsync(PgReader reader, PgConverterOptions options, CancellationToken cancellationToken = default)
         => ReadCore(async: true, reader, options, cancellationToken);
 
-    ValueTask<string> ReadCore(bool async, PgReader reader, PgConverterOptions options, CancellationToken cancellationToken = default)
+    ValueTask<string?> ReadCore(bool async, PgReader reader, PgConverterOptions options, CancellationToken cancellationToken = default)
         => new(options.TextEncoding.GetString(reader.ReadExact(reader.ByteCount)));
 }
 
@@ -106,7 +106,7 @@ sealed class CharArraySegmentTextConverter : ValueConverter<ArraySegment<char>, 
 
 sealed class CharTextConverter : PgConverter<char>
 {
-    public override bool CanConvert(DataRepresentation representation) => representation is DataRepresentation.Binary or DataRepresentation.Text;
+    public override bool CanConvert(DataFormat format) => format is DataFormat.Binary or DataFormat.Text;
 
     public override char Read(PgReader reader, PgConverterOptions options)
     {

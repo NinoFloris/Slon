@@ -1,6 +1,6 @@
 namespace Slon.Pg;
 
-enum DataRepresentation: byte
+enum DataFormat: byte
 {
     Binary,
     Text

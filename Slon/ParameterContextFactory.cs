@@ -43,11 +43,11 @@ readonly struct ParameterContextFactory
         return AddParameter(ref builder, slonParameter.Value, cachedConverterInfo);
     }
 
-    DataRepresentation? GetRepresentation(bool? preferTextualRepresentation) =>
+    DataFormat? GetRepresentation(bool? preferTextualRepresentation) =>
         preferTextualRepresentation switch
         {
-            true => DataRepresentation.Text,
-            false => DataRepresentation.Binary,
+            true => DataFormat.Text,
+            false => DataFormat.Binary,
             null => null
         };
 

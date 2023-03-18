@@ -134,17 +134,17 @@ public class SlonParameterTests
         Assert.AreEqual(parameter.Size, cachedParameter.Size);
         Assert.AreEqual(parameter.PgTypeId, cachedParameter.PgTypeId);
         Assert.AreEqual(parameter.IsDbNull, cachedParameter.IsDbNull);
-        Assert.AreEqual(parameter.DataRepresentation, cachedParameter.DataRepresentation);
+        Assert.AreEqual(parameter.DataFormat, cachedParameter.DataFormat);
         Assert.AreEqual(parameter.WriteState is null, cachedParameter.WriteState is null); // Instances will be unique, can't expect equality.
 
         // Check the original against a freshly created parameter.
-        var expectedP = parameter.Writer.Info.CreateParameter(parameter.Value, DefaultBufferSize, true, parameter.DataRepresentation);
+        var expectedP = parameter.Writer.Info.CreateParameter(parameter.Value, DefaultBufferSize, true, parameter.DataFormat);
         Assert.AreEqual(expectedP.Writer.Info, parameter.Writer.Info);
         Assert.AreEqual(expectedP.Value, parameter.Value);
         Assert.AreEqual(expectedP.Size, parameter.Size);
         Assert.AreEqual(expectedP.PgTypeId, parameter.PgTypeId);
         Assert.AreEqual(expectedP.IsDbNull, parameter.IsDbNull);
-        Assert.AreEqual(expectedP.DataRepresentation, parameter.DataRepresentation);
+        Assert.AreEqual(expectedP.DataFormat, parameter.DataFormat);
         Assert.AreEqual(expectedP.WriteState is null, parameter.WriteState is null); // Instances will be unique, can't expect equality.
     }
 }
