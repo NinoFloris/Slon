@@ -81,7 +81,7 @@ public class SlonParameterTests
         CheckCommonParameterDataCongruence<int>(parameter, cacheItem);
 
         // Check all the inference lookup happened correctly.
-        var dataTypeName = parameter.Writer.Info.Options.TypeCatalog.GetDataTypeName(parameter.PgTypeId);
+        var dataTypeName = parameter.ConverterInfo.Options.TypeCatalog.GetDataTypeName(parameter.PgTypeId);
         Assert.True(cacheItem.IsInferredDbType);
         Assert.True(dbParameter.HasInferredSlonDbType);
         Assert.AreEqual(new SlonDbType(dataTypeName), cacheItem.DbType);
@@ -130,7 +130,7 @@ public class SlonParameterTests
             Assert.Null(cachedParameter.Value);
         else
             Assert.AreEqual(parameter.Value, cachedParameter.Value);
-        Assert.AreEqual(parameter.Writer.Info, cachedParameter.Writer.Info);
+        Assert.AreEqual(parameter.ConverterInfo, cachedParameter.ConverterInfo);
         Assert.AreEqual(parameter.Size, cachedParameter.Size);
         Assert.AreEqual(parameter.PgTypeId, cachedParameter.PgTypeId);
         Assert.AreEqual(parameter.IsDbNull, cachedParameter.IsDbNull);
@@ -138,8 +138,8 @@ public class SlonParameterTests
         Assert.AreEqual(parameter.WriteState is null, cachedParameter.WriteState is null); // Instances will be unique, can't expect equality.
 
         // Check the original against a freshly created parameter.
-        var expectedP = parameter.Writer.Info.CreateParameter(parameter.Value, DefaultBufferSize, true, parameter.DataFormat);
-        Assert.AreEqual(expectedP.Writer.Info, parameter.Writer.Info);
+        var expectedP = parameter.ConverterInfo.CreateParameter(parameter.Value, DefaultBufferSize, true, parameter.DataFormat);
+        Assert.AreEqual(expectedP.ConverterInfo, parameter.ConverterInfo);
         Assert.AreEqual(expectedP.Value, parameter.Value);
         Assert.AreEqual(expectedP.Size, parameter.Size);
         Assert.AreEqual(expectedP.PgTypeId, parameter.PgTypeId);

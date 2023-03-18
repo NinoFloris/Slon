@@ -10,10 +10,12 @@ namespace Slon.Protocol.Pg;
 
 readonly struct Parameter
 {
-    public Parameter(object? value, PgConverterInfo.Writer writer, ValueSize? size, DataFormat dataFormat = DataFormat.Binary, object? writeState = null)
+    public Parameter(object? value, PgConverterInfo converterInfo, PgConverterResolution converterResolution, ValueSize? size, DataFormat dataFormat = DataFormat.Binary, object? writeState = null)
     {
         Value = value;
-        Writer = writer;
+        ConverterInfo = converterInfo;
+        Converter = converterResolution.Converter;
+        PgTypeId = converterResolution.PgTypeId;
         Size = size;
         DataFormat = dataFormat;
         WriteState = writeState;
@@ -24,11 +26,13 @@ readonly struct Parameter
 
     /// Value can be an instance of IParameterSession or a direct parameter value.
     public object? Value { get; init; }
+
     /// Size set to null represents a db null.
     public ValueSize? Size { get; init; }
     public PgTypeId PgTypeId { get; init; }
 
-    public PgConverterInfo.Writer Writer { get; init; }
+    public PgConverterInfo ConverterInfo { get; }
+    public PgConverter Converter { get; init; }
     public object? WriteState { get; init; }
 
     public DataFormat DataFormat { get; init; }
@@ -73,12 +77,12 @@ static class PgConverterInfoExtensions
     {
         var reader = new ValueReader(converterInfo, bufferLength, nullStructValueIsDbNull, preferredFormat);
         reader.ReadParameterValue(parameterValue);
-        return new Parameter(parameterValue, reader.Writer, reader.Size, reader.Format, reader.WriteState);
+        return new Parameter(parameterValue, converterInfo, reader.ConverterResolution, reader.Size, reader.Format, reader.WriteState);
     }
 
     struct ValueReader: IParameterValueReader, IBoxedParameterValueReader
     {
-        readonly PgConverterInfo _converterInfo;
+        readonly PgConverterInfo _info;
 
         readonly int _bufferLength;
         readonly bool _nullStructValueIsDbNull;
@@ -88,11 +92,11 @@ static class PgConverterInfoExtensions
         public DataFormat Format => _format;
         object? _writeState;
         public object? WriteState => _writeState;
-        public PgConverterInfo.Writer Writer { get; private set; }
+        public PgConverterResolution ConverterResolution { get; private set; }
 
-        public ValueReader(PgConverterInfo converterInfo, int bufferLength, bool nullStructValueIsDbNull, DataFormat? preferredFormat)
+        public ValueReader(PgConverterInfo info, int bufferLength, bool nullStructValueIsDbNull, DataFormat? preferredFormat)
         {
-            _converterInfo = converterInfo;
+            _info = info;
             _bufferLength = bufferLength;
             _nullStructValueIsDbNull = nullStructValueIsDbNull;
             _preferredFormat = preferredFormat;
@@ -100,17 +104,17 @@ static class PgConverterInfoExtensions
 
         public void Read<T>(T? value)
         {
-            var writer = _converterInfo.GetWriter(value);
-            Writer = writer.ToWriter();
-            if (!writer.IsDbNullValue(value))
-                Size = writer.GetAnySize(value, _bufferLength, out _writeState, out _format, _preferredFormat);
+            var resolution = _info.GetResolution(value);
+            ConverterResolution = resolution.ToConverterResolution();
+            Size = _info.GetPreferredSize(resolution, value, _bufferLength, out _writeState, out _format, _preferredFormat);
         }
 
         public void ReadAsObject(object? value)
         {
-            var writer = Writer = _converterInfo.GetWriter(value);
-            if ((!_nullStructValueIsDbNull || value is not null) && !writer.IsDbNullValue(value))
-                Size = writer.GetAnySize(value, _bufferLength, out _writeState, out _format, _preferredFormat);
+            var resolution = _info.GetResolutionAsObject(value);
+            ConverterResolution = resolution;
+            if (!_nullStructValueIsDbNull || value is not null)
+                Size = _info.GetPreferredSizeAsObject(resolution, value, _bufferLength, out _writeState, out _format, _preferredFormat);
         }
     }
 }
@@ -128,7 +132,7 @@ static class ParameterExtensions
             return;
 
         writer.Format = parameter.DataFormat;
-        var reader = new ValueWriter(writer, parameter.Writer, CancellationToken.None);
+        var reader = new ValueWriter(writer, parameter.ConverterInfo, parameter.Converter, CancellationToken.None);
         reader.ReadParameterValue(parameter.Value);
 
         static void ThrowNotSupported() => throw new NotSupportedException("Cannot write with a non-blocking pgWriter.");
@@ -143,7 +147,7 @@ static class ParameterExtensions
             return new ValueTask();
 
         writer.Format = parameter.DataFormat;
-        var reader = new ValueWriter(writer, parameter.Writer, cancellationToken);
+        var reader = new ValueWriter(writer, parameter.ConverterInfo, parameter.Converter, cancellationToken);
         reader.ReadParameterValue(parameter.Value);
 
         return reader.Result;
@@ -155,22 +159,24 @@ static class ParameterExtensions
     {
         // TODO some array pool backed thing
         var pooledBufferWriter = (IBufferWriter<byte>)null!;
-        var pgWriter = parameter.Writer.Info.Options.GetBufferedWriter(pooledBufferWriter, parameter.WriteState);
+        var pgWriter = parameter.ConverterInfo.Options.GetBufferedWriter(pooledBufferWriter, parameter.WriteState);
         pgWriter.Format = parameter.HasTextWrite() ? DataFormat.Text : DataFormat.Binary;
-        var reader = new ValueWriter(pgWriter, parameter.Writer, CancellationToken.None);
+        var reader = new ValueWriter(pgWriter, parameter.ConverterInfo, parameter.Converter, CancellationToken.None);
         return new BufferedOutput(default);
     }
 
     struct ValueWriter : IParameterValueReader, IBoxedParameterValueReader
     {
         readonly PgWriter _pgWriter;
-        readonly PgConverterInfo.Writer _writer;
+        readonly PgConverterInfo _info;
+        readonly PgConverter _converter;
         readonly CancellationToken _cancellationToken;
 
-        public ValueWriter(PgWriter pgWriter, PgConverterInfo.Writer writer, CancellationToken cancellationToken)
+        public ValueWriter(PgWriter pgWriter, PgConverterInfo info, PgConverter converter, CancellationToken cancellationToken)
         {
             _pgWriter = pgWriter;
-            _writer = writer;
+            _info = info;
+            _converter = converter;
             _cancellationToken = cancellationToken;
         }
 
@@ -180,12 +186,13 @@ static class ParameterExtensions
         {
             DebugShim.Assert(value is not null);
             var pgWriter = _pgWriter;
+            var converter = (PgConverter<T>)_converter;
             if (pgWriter.FlushMode is not FlushMode.NonBlocking)
-                _writer.ToWriter<T>().Write(pgWriter, value);
+                converter.Write(pgWriter, value);
             else
                 try
                 {
-                    Result = _writer.ToWriter<T>().WriteAsync(pgWriter, value, _cancellationToken);
+                    Result = converter.WriteAsync(pgWriter, value, _cancellationToken);
                 }
                 catch (Exception ex)
                 {
@@ -197,12 +204,13 @@ static class ParameterExtensions
         {
             DebugShim.Assert(value is not null);
             var pgWriter = _pgWriter;
+            var converter = _converter;
             if (pgWriter.FlushMode is not FlushMode.NonBlocking)
-                _writer.Write(pgWriter, value);
+                converter.WriteAsObject(pgWriter, value);
             else
                 try
                 {
-                    Result = _writer.WriteAsync(pgWriter, value, _cancellationToken);
+                    Result = converter.WriteAsObjectAsync(pgWriter, value, _cancellationToken);
                 }
                 catch (Exception ex)
                 {
@@ -212,7 +220,7 @@ static class ParameterExtensions
     }
 
     public static Type GetConverterType(this Parameter parameter)
-        => parameter.Writer.Info.ConverterType;
+        => parameter.ConverterInfo.ConverterType;
 
     public static bool HasTextWrite(this Parameter parameter)
         => parameter.DataFormat is DataFormat.Text;

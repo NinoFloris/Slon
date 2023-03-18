@@ -7,6 +7,25 @@ using Slon.Pg.Types;
 
 namespace Slon.Pg;
 
+readonly struct PgConverterResolution<T>
+{
+    readonly Type? _effectiveType;
+
+    public PgConverterResolution(PgConverter<T> converter, PgTypeId pgTypeId, Type? effectiveType = null)
+    {
+        DebugShim.Assert(effectiveType is null || converter.TypeToConvert == typeof(object), "effectiveType can only be set for object polymorphic converters.");
+        Converter = converter;
+        PgTypeId = pgTypeId;
+        _effectiveType = effectiveType;
+    }
+
+    public PgConverter<T> Converter { get; }
+    public PgTypeId PgTypeId { get; }
+    public Type EffectiveType => _effectiveType ?? Converter.TypeToConvert;
+
+    public PgConverterResolution ToConverterResolution() => new(Converter, PgTypeId);
+}
+
 class PgConverterInfo
 {
     readonly bool _canBinaryConvert;
@@ -64,7 +83,7 @@ class PgConverterInfo
     }
 
     public PgConverterResolution<T> GetResolution<T>(T? value, PgTypeId? expectedPgTypeId = null) => GetResolutionCore(value, expectedPgTypeId, field: null);
-    public PgConverterResolution GetResolution(object? value, PgTypeId? expectedPgTypeId = null) => GetResolutionCore(value, expectedPgTypeId, field: null);
+    public PgConverterResolution GetResolutionAsObject(object? value, PgTypeId? expectedPgTypeId = null) => GetResolutionCore(value, expectedPgTypeId, field: null);
 
     PgConverterResolution<T> GetResolutionCore<T>(T? value = default, PgTypeId? expectedPgTypeId = null, Field? field = null)
     {
@@ -98,8 +117,33 @@ class PgConverterInfo
         }
     }
 
-    internal Writer<T> GetWriter<T>(T? value) => new(GetResolutionCore(value, PgTypeId), this);
-    internal Writer GetWriter(object? value) => new(GetResolutionCore(value, PgTypeId), this);
+    public ValueSize? GetPreferredSize<T>(PgConverterResolution<T> resolution, T? value, int bufferLength, out object? writeState, out DataFormat format, DataFormat? preferredFormat = null)
+    {
+        format = ResolvePreferredFormat(resolution.Converter, preferredFormat ?? PreferredFormat);
+        var context = new SizeContext(format, bufferLength);
+        if (resolution.Converter.IsDbNullValue(value))
+        {
+            writeState = null;
+            return null;
+        }
+        var size = resolution.Converter.GetSize(ref context, value);
+        writeState = context.WriteState;
+        return size;
+    }
+
+    public ValueSize? GetPreferredSizeAsObject(PgConverterResolution resolution, object? value, int bufferLength, out object? writeState, out DataFormat format, DataFormat? preferredFormat = null)
+    {
+        format = ResolvePreferredFormat(resolution.Converter, preferredFormat ?? PreferredFormat);
+        var context = new SizeContext(format, bufferLength);
+        if (resolution.Converter.IsDbNullValueAsObject(value))
+        {
+            writeState = null;
+            return null;
+        }
+        var size = resolution.Converter.GetSizeAsObject(ref context, value);
+        writeState = context.WriteState;
+        return size;
+    }
 
     internal Reader<T> GetReader<T>(Field field) => new(GetResolutionCore<T>(field: field), this);
     internal Reader GetReader(Field field) => new(GetResolutionCore(field: field), this);
@@ -123,76 +167,6 @@ class PgConverterInfo
 
     public static PgConverterInfo Create(PgConverterOptions options, PgConverterResolver resolver, PgTypeId? expectedPgTypeId, bool isDefault = false, DataFormat? preferredFormat = null)
         => new PgConverterResolverInfo(options, resolver, expectedPgTypeId) { IsDefault = isDefault, PreferredFormat = preferredFormat };
-
-    internal readonly struct Writer<T>
-    {
-        readonly PgConverter<T> _converter;
-        readonly PgTypeId _pgTypeId;
-        public PgConverterInfo Info { get; }
-
-        public Writer(PgConverterResolution<T> resolution, PgConverterInfo info)
-        {
-            _converter = resolution.Converter;
-            _pgTypeId = resolution.PgTypeId;
-            Info = info;
-        }
-
-        public bool IsDbNullValue([NotNullWhen(false)]T? value)
-            => _converter.IsDbNullValue(value);
-
-        public ValueSize GetAnySize([DisallowNull]T value, int bufferLength, out object? writeState, out DataFormat format, DataFormat? preferredFormat = null)
-        {
-            writeState = null;
-            format = Info.ResolvePreferredFormat(_converter, preferredFormat ?? Info.PreferredFormat);
-            var context = new SizeContext(format, bufferLength);
-            var size = _converter.GetSize(ref context, value);
-            writeState = context.WriteState;
-            return size;
-        }
-
-        public void Write(PgWriter pgWriter, [DisallowNull]T value)
-            => _converter.Write(pgWriter, value);
-
-        public ValueTask WriteAsync(PgWriter pgWriter, [DisallowNull]T value, CancellationToken cancellationToken = default)
-            => _converter.WriteAsync(pgWriter, value, cancellationToken);
-
-        public Writer ToWriter() => new(new(_converter, _pgTypeId), Info);
-    }
-
-    internal readonly struct Writer
-    {
-        readonly PgConverter _converter;
-        readonly PgTypeId _pgTypeId;
-        public PgConverterInfo Info { get; }
-
-        public Writer(PgConverterResolution resolution, PgConverterInfo info)
-        {
-            _converter = resolution.Converter;
-            _pgTypeId = resolution.PgTypeId;
-            Info = info;
-        }
-
-        public bool IsDbNullValue([NotNullWhen(false)]object? value)
-            => _converter.IsDbNullValueAsObject(value);
-
-        public ValueSize GetAnySize(object value, int bufferLength, out object? writeState, out DataFormat format, DataFormat? preferredFormat = null)
-        {
-            writeState = null;
-            format = Info.ResolvePreferredFormat(_converter, preferredFormat ?? Info.PreferredFormat);
-            var context = new SizeContext(format, bufferLength);
-            var size = _converter.GetSizeAsObject(ref context, value);
-            writeState = context.WriteState;
-            return size;
-        }
-
-        public void Write(PgWriter pgWriter, object value)
-            => _converter.WriteAsObject(pgWriter, value);
-
-        public ValueTask WriteAsync(PgWriter pgWriter, object value, CancellationToken cancellationToken)
-            => _converter.WriteAsObjectAsync(pgWriter, value, cancellationToken);
-
-        public Writer<T> ToWriter<T>() => new(new((PgConverter<T>)_converter, _pgTypeId), Info);
-    }
 
     internal readonly struct Reader<T>
     {
@@ -263,25 +237,6 @@ class PgConverterInfo
         };
 
     void ThrowNotSupported() => throw new NotSupportedException();
-}
-
-readonly struct PgConverterResolution<T>
-{
-    readonly Type? _effectiveType;
-
-    public PgConverterResolution(PgConverter<T> converter, PgTypeId pgTypeId, Type? effectiveType = null)
-    {
-        DebugShim.Assert(effectiveType is null || converter.TypeToConvert == typeof(object), "effectiveType can only be set for object polymorphic converters.");
-        Converter = converter;
-        PgTypeId = pgTypeId;
-        _effectiveType = effectiveType;
-    }
-
-    public PgConverter<T> Converter { get; }
-    public PgTypeId PgTypeId { get; }
-    public Type EffectiveType => _effectiveType ?? Converter.TypeToConvert;
-
-    public PgConverterResolution ToConverterResolution() => new(Converter, PgTypeId);
 }
 
 readonly struct PgConverterResolution

@@ -94,7 +94,7 @@ readonly struct ParameterContextFactory
             else
             {
                 cacheItem.DbType = new SlonDbType(_frontendTypeCatalog.GetDataTypeName(parameter.PgTypeId));
-                dbParameter.SetInferredDbType(cacheItem.DbType, parameter.Writer.Info.IsValueDependent);
+                dbParameter.SetInferredDbType(cacheItem.DbType, parameter.ConverterInfo.IsValueDependent);
             }
         }
 
@@ -134,7 +134,7 @@ readonly struct ParameterContextFactory
                         {
                             dbParameter = (SlonDbParameter)enumerator.Current.Value!;
                             if (cacheItem.IsInferredDbType && dbParameter.HasInferredSlonDbType == false && dbParameter.SlonDbType == SlonDbType.Infer)
-                                dbParameter.SetInferredDbType(cacheItem.DbType, cachedParameter.Writer.Info.IsValueDependent);
+                                dbParameter.SetInferredDbType(cacheItem.DbType, cachedParameter.ConverterInfo.IsValueDependent);
 
                             // If our value is an SlonDbParameter we have to use our fresh session as the value.
                             cachedParameter = cachedParameter with { Value = lastSession };
@@ -295,7 +295,7 @@ struct ParameterCacheItem
         if (parameterEquality is ParameterEquality.ConverterInfo)
         {
             cachedParameter = default;
-            cachedConverterInfo = Parameter.Writer.Info;
+            cachedConverterInfo = Parameter.ConverterInfo;
             return ParameterEquality.ConverterInfo;
         }
 
