@@ -111,13 +111,8 @@ abstract class PgConverter<T> : PgConverter
     internal sealed override object? ReadAsObject(PgReader reader)
         => Read(reader);
 
-    internal sealed override ValueTask<object?> ReadAsObjectAsync(PgReader reader, CancellationToken cancellationToken = default)
-    {
-        var task = ReadAsync(reader, cancellationToken);
-        return task.IsCompletedSuccessfully ? new(task.GetAwaiter().GetResult()) : Core(task);
-
-        static async ValueTask<object?> Core(ValueTask<T?> task) => await task;
-    }
+    internal sealed override async ValueTask<object?> ReadAsObjectAsync(PgReader reader, CancellationToken cancellationToken = default)
+        => await ReadAsync(reader, cancellationToken);
 
     internal sealed override ValueSize GetSizeAsObject(SizeContext context, object value, [NotNullIfNotNull(nameof(writeState))]ref object? writeState)
         => GetSize(context, (T)value, ref writeState);
