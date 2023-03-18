@@ -26,7 +26,7 @@ abstract class PgConverter
 
     public virtual bool CanConvert(DataFormat format) => format is DataFormat.Binary;
 
-    /// This method returns true when GetSize can be called with a default value for the type and the given format without throwing.
+    /// This method returns true when GetSize can be called with a default value for the type and the given representation without throwing.
     public virtual bool HasFixedSize(DataFormat format) => false;
 
     internal abstract object? ReadAsObject(PgReader reader, PgConverterOptions options);
