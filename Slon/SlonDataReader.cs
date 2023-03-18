@@ -312,7 +312,21 @@ public sealed partial class SlonDataReader: DbDataReader
 
     public override T GetFieldValue<T>(int ordinal)
     {
-        var options = new PgConverterOptions()
+        var reader = new PgReader();
+        // TODO store last used converter per column for quick checking.
+        var field = new Field();
+        var info = _dataSource.GetConverterInfo(typeof(T), field);
+        if (typeof(T) == typeof(object) && info.Type != typeof(object))
+        {
+            return (T)info.GetReader(field).Read(reader)!;
+        }
+
+        return info.GetReader<T>(field).Read(reader) ?? throw new InvalidOperationException("DbNull returned");
+    }
+
+    public override async Task<T> GetFieldValueAsync<T>(int ordinal, CancellationToken cancellationToken)
+    {
+                var options = new PgConverterOptions()
         {
             TextEncoding = Encoding.UTF8,
             ConverterInfoResolver = null!,
@@ -376,20 +390,6 @@ public sealed partial class SlonDataReader: DbDataReader
         // - tid
         // - lsn
 
-        var reader = new PgReader();
-        // TODO store last used converter per column for quick checking.
-        var field = new Field();
-        var info = _dataSource.GetConverterInfo(typeof(T), field);
-        if (typeof(T) == typeof(object) && info.Type != typeof(object))
-        {
-            return (T)info.GetReader(field).Read(reader)!;
-        }
-
-        return info.GetReader<T>(field).Read(reader) ?? throw new InvalidOperationException("DbNull returned");
-    }
-
-    public override async Task<T> GetFieldValueAsync<T>(int ordinal, CancellationToken cancellationToken)
-    {
         var reader = new PgReader();
         // TODO store last used converter per column for quick checking.
         var field = new Field();
