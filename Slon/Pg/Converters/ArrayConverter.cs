@@ -17,13 +17,15 @@ readonly struct ArrayConverter
     public PgTypeId ElemTypeId { get; }
     readonly ArrayPool<(ValueSize, object?)> _statePool;
     readonly bool _elemTypeDbNullable;
+    readonly Type _elementType;
     readonly int _pgLowerBound;
 
-    public ArrayConverter(IArrayElementOperations elementOperations, bool elemTypeDbNullable, PgTypeId elemTypeId, ArrayPool<(ValueSize, object?)> statePool, int pgLowerBound = 1)
+    public ArrayConverter(IArrayElementOperations elementOperations, bool elemTypeDbNullable, Type elementType, PgTypeId elemTypeId, ArrayPool<(ValueSize, object?)> statePool, int pgLowerBound = 1)
     {
         ElemTypeId = elemTypeId;
         _statePool = statePool;
         _elemTypeDbNullable = elemTypeDbNullable;
+        _elementType = elementType;
         _pgLowerBound = pgLowerBound;
         _elementOperations = elementOperations;
     }
@@ -97,6 +99,53 @@ readonly struct ArrayConverter
         }
 
         return formatSize.Combine(elemsSize);
+    }
+
+    public async ValueTask<Array> ReadCore(bool async, PgReader reader, int expectedDimensions, CancellationToken cancellationToken = default)
+    {
+        var dimensions = reader.ReadInt32();
+        var containsNulls = reader.ReadInt32() == 1;
+        reader.ReadUInt32(); // Element OID. Ignored.
+
+        var returnType =
+            // readAsObject
+            // ? ArrayNullabilityMode switch
+            // {
+            //     ArrayNullabilityMode.Never => IsNonNullable && containsNulls
+            //         ? throw new InvalidOperationException(ReadNonNullableCollectionWithNullsExceptionMessage)
+            //         : ElementType,
+            //     ArrayNullabilityMode.Always => nullableElementType,
+            //     ArrayNullabilityMode.PerInstance => containsNulls
+            //         ? nullableElementType
+            //         : ElementType,
+            //     _ => throw new ArgumentOutOfRangeException()
+            // }
+            // :
+            _elemTypeDbNullable && containsNulls
+                ? throw new InvalidOperationException()
+                : _elementType;
+
+        if (dimensions == 0)
+            return expectedDimensions > 1
+                ? Array.CreateInstance(returnType, new int[expectedDimensions])
+                : _elementOperations.CreateArray(0);
+
+        if (dimensions == 1 && returnType == _elementType)
+        {
+            var arrayLength = reader.ReadInt32();
+
+            reader.ReadInt32(); // Lower bound
+
+            var oneDimensional = _elementOperations.CreateArray(arrayLength);
+            for (var i = 0; i < arrayLength; i++)
+            {
+                reader.ByteCount = reader.ReadInt32();
+                await _elementOperations.Read(async, reader, oneDimensional, i, cancellationToken);
+            }
+            return oneDimensional;
+        }
+
+        throw new NotSupportedException();
     }
 
     public async ValueTask WriteCore(bool async, PgWriter writer, Array values, CancellationToken cancellationToken)
@@ -178,6 +227,7 @@ readonly struct ArrayConverter
 
 interface IArrayElementOperations
 {
+    Array CreateArray(int capacity);
     bool HasFixedSize(DataFormat format);
     ValueSize GetSize(ref SizeContext context, Array array, int index);
     bool IsDbNullValue(Array array, int index);
@@ -193,22 +243,17 @@ sealed class ArrayConverter<T> : PgStreamingConverter<T?[]>, IArrayElementOperat
     public ArrayConverter(PgConverterResolution<T> resolution, ArrayPool<(ValueSize, object?)> statePool, int pgLowerBound = 1)
     {
         _elemConverter = resolution.Converter;
-        _arrayConverter = new ArrayConverter(this, _elemConverter.IsDbNullable, resolution.PgTypeId, statePool, pgLowerBound);
+        _arrayConverter = new ArrayConverter(this, _elemConverter.IsDbNullable, typeof(T), resolution.PgTypeId, statePool, pgLowerBound);
     }
 
     internal PgTypeId ElemTypeId => _arrayConverter.ElemTypeId;
 
     public override bool CanConvert(DataFormat format) => _elemConverter.CanConvert(format);
 
-    public override T?[] Read(PgReader reader)
-    {
-        throw new NotImplementedException();
-    }
+    public override T?[] Read(PgReader reader) => (T?[])_arrayConverter.ReadCore(async: false, reader, 1).Result;
 
-    public override ValueTask<T?[]?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
-    {
-        throw new NotImplementedException();
-    }
+    public override async ValueTask<T?[]?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
+        => (T?[])await _arrayConverter.ReadCore(async: false, reader, 1, cancellationToken);
 
     public override ValueSize GetSize(ref SizeContext context, T?[] values)
         => _arrayConverter.GetSize(ref context, values);
@@ -218,6 +263,8 @@ sealed class ArrayConverter<T> : PgStreamingConverter<T?[]>, IArrayElementOperat
 
     public override ValueTask WriteAsync(PgWriter writer, T?[] values, CancellationToken cancellationToken = default)
         => _arrayConverter.WriteCore(async: true, writer, values, cancellationToken);
+
+    public Array CreateArray(int capacity) => Array.Empty<T>();
 
     bool IArrayElementOperations.HasFixedSize(DataFormat format)
         => _elemConverter.HasFixedSize(format);

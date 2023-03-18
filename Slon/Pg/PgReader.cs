@@ -46,4 +46,9 @@ class PgReader
     {
         throw new NotImplementedException();
     }
+
+    public void ReadUInt32()
+    {
+        throw new NotImplementedException();
+    }
 }
