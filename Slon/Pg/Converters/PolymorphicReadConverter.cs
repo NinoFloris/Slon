@@ -1,20 +1,25 @@
 using System;
+using System.Threading;
+using System.Threading.Tasks;
 using Slon.Pg.Descriptors;
 using Slon.Pg.Types;
 
 namespace Slon.Pg.Converters;
 
 // TODO would we ever support polymorphic writing, why?
-abstract class PolymorphicReadConverter : PgConverter<object>
+abstract class PolymorphicReadConverter : PgStreamingConverter<object>
 {
     protected PolymorphicReadConverter(Type effectiveType) => EffectiveType = effectiveType;
 
     public Type EffectiveType { get; }
 
-    public override ValueSize GetSize(SizeContext context, object value, ref object? writeState)
+    public sealed override ValueSize GetSize(ref SizeContext context, object value)
         => throw new NotSupportedException("Polymorphic writing is not supported.");
 
-    public override void Write(PgWriter writer, object value)
+    public sealed override void Write(PgWriter writer, object value)
+        => throw new NotSupportedException("Polymorphic writing is not supported.");
+
+    public sealed override ValueTask WriteAsync(PgWriter writer, object value, CancellationToken cancellationToken = default)
         => throw new NotSupportedException("Polymorphic writing is not supported.");
 }
 

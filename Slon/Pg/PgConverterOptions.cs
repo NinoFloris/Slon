@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Slon.Pg.Types;
@@ -80,7 +81,7 @@ class PgConverterOptions
         return bufferedWriter;
     }
 
-    public BufferedOutput GetBufferedOutput<T>(PgConverter<T> converter, T value, object? state, DataFormat dataFormat)
+    public BufferedOutput GetBufferedOutput<T>(PgConverter<T> converter, [DisallowNull]T value, object? state, DataFormat dataFormat)
     {
         var writer = GetBufferedWriter<IBufferWriter<byte>>(null!, state); // TODO this should be some array pool thing.
         converter.Write(writer, value);

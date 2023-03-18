@@ -2,12 +2,14 @@ using System;
 using System.Buffers;
 using System.Collections;
 using System.Collections.Specialized;
+using System.Threading;
+using System.Threading.Tasks;
 using Slon.Pg.Descriptors;
 using Slon.Pg.Types;
 
 namespace Slon.Pg.Converters;
 
-sealed class BitArrayBitStringConverter : PgConverter<BitArray>
+sealed class BitArrayBitStringConverter : PgStreamingConverter<BitArray>
 {
     readonly ArrayPool<byte> _arrayPool;
     public BitArrayBitStringConverter(PgConverterOptions options) => _arrayPool = options.GetArrayPool<byte>();
@@ -16,8 +18,7 @@ sealed class BitArrayBitStringConverter : PgConverter<BitArray>
         => new(reader.ReadExact((reader.ReadInt32() + 7) / 8).ToArray());
 
     public override BitArray Read(PgReader reader) => ReadValue(reader);
-    public override ValueSize GetSize(SizeContext context, BitArray value, ref object? writeState)
-        => sizeof(int) + (value.Length + 7) / 8;
+    public override ValueSize GetSize(ref SizeContext context, BitArray value) => sizeof(int) + (value.Length + 7) / 8;
 
     public override void Write(PgWriter writer, BitArray value)
     {
@@ -29,11 +30,21 @@ sealed class BitArrayBitStringConverter : PgConverter<BitArray>
 
         _arrayPool.Return(array);
     }
+
+    public override ValueTask<BitArray?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
+    {
+        throw new NotImplementedException();
+    }
+
+    public override ValueTask WriteAsync(PgWriter writer, BitArray value, CancellationToken cancellationToken = default)
+    {
+        throw new NotImplementedException();
+    }
 }
 
-sealed class BitVector32BitStringConverter : PgConverter<BitVector32>
+sealed class BitVector32BitStringConverter : PgBufferedConverter<BitVector32>
 {
-    public override BitVector32 Read(PgReader reader)
+    protected override BitVector32 ReadCore(PgReader reader)
     {
         if (reader.ByteCount > sizeof(int) + sizeof(int))
             throw new InvalidCastException("Can't read a BIT(N) with more than 32 bits to BitVector32, only up to BIT(32).");
@@ -41,7 +52,7 @@ sealed class BitVector32BitStringConverter : PgConverter<BitVector32>
         return new(reader.ReadInt32() is 0 ? 0 : reader.ReadInt32());
     }
 
-    public override ValueSize GetSize(SizeContext context, BitVector32 value, ref object? writeState)
+    public override ValueSize GetSize(ref SizeContext context, BitVector32 value)
         => value.Data is 0 ? 4 : 8;
 
     public override void Write(PgWriter writer, BitVector32 value)
@@ -56,7 +67,7 @@ sealed class BitVector32BitStringConverter : PgConverter<BitVector32>
     }
 }
 
-sealed class BoolBitStringConverter : PgFixedBinarySizeConverter<bool>
+sealed class BoolBitStringConverter : PgBufferedConverter<bool>
 {
     public static bool ReadValue(PgReader reader)
     {
@@ -66,8 +77,9 @@ sealed class BoolBitStringConverter : PgFixedBinarySizeConverter<bool>
         return (reader.ReadByte() & 128) is not 0;
     }
 
-    protected override byte BinarySize => 5;
     protected override bool ReadCore(PgReader reader) => ReadValue(reader);
+
+    public override ValueSize GetSize(ref SizeContext context, bool value) => 5;
     public override void Write(PgWriter writer, bool value)
     {
         writer.WriteInt32(1);
@@ -97,5 +109,8 @@ sealed class PolymorphicBitStringConverterResolver : PolymorphicReadConverterRes
             => typeof(TEffective) == typeof(bool)
                 ? BoolBitStringConverter.ReadValue(reader)
                 : BitArrayBitStringConverter.ReadValue(reader);
+
+        public override ValueTask<object?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
+            => new(Read(reader));
     }
 }

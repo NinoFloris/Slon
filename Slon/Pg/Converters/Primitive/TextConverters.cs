@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace Slon.Pg.Converters;
 
-sealed class ReadOnlyMemoryTextConverter: PgConverterAsync<ReadOnlyMemory<char>>
+sealed class ReadOnlyMemoryTextConverter: PgStreamingConverter<ReadOnlyMemory<char>>
 {
     readonly Encoding _textEncoding;
     public ReadOnlyMemoryTextConverter(PgConverterOptions options)
@@ -19,7 +19,7 @@ sealed class ReadOnlyMemoryTextConverter: PgConverterAsync<ReadOnlyMemory<char>>
     public override ValueTask<ReadOnlyMemory<char>> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
         => ReadCore(async: true, reader);
 
-    public override ValueSize GetSize(SizeContext context, ReadOnlyMemory<char> value, ref object? writeState)
+    public override ValueSize GetSize(ref SizeContext context, ReadOnlyMemory<char> value)
     {
         // Benchmarks indicated sizing 50 chars takes between 6 and 50ns for utf8 depending on ascii/unicode mix.
         // That is fast enough we're not bothering with upper bounds/unknown sizing for those smaller strings.
@@ -112,14 +112,14 @@ sealed class CharArraySegmentTextConverter : ValueConverter<ArraySegment<char>, 
     protected override ReadOnlyMemory<char> ConvertTo(ArraySegment<char> value) => value.AsMemory();
 }
 
-sealed class CharTextConverter : PgConverter<char>
+sealed class CharTextConverter : PgBufferedConverter<char>
 {
     readonly Encoding _textEncoding;
     public CharTextConverter(PgConverterOptions options) => _textEncoding = options.TextEncoding;
 
     public override bool CanConvert(DataFormat format) => format is DataFormat.Binary or DataFormat.Text;
 
-    public override char Read(PgReader reader)
+    protected override char ReadCore(PgReader reader)
     {
         var bytes = reader.ReadExact(Math.Min(_textEncoding.GetMaxByteCount(1), reader.ByteCount));
         Span<char> destination = stackalloc char[1];
@@ -127,8 +127,11 @@ sealed class CharTextConverter : PgConverter<char>
         return destination[0];
     }
 
-    public override ValueSize GetSize(SizeContext context, char value, ref object? writeState)
+    public override ValueSize GetSize(ref SizeContext context, char value)
     {
+        if (context.Format is DataFormat.Binary)
+            return sizeof(char);
+
         Span<char> spanValue = stackalloc char[] { value };
         return _textEncoding.GetByteCount(spanValue);
     }

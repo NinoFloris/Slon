@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -7,10 +8,10 @@ namespace Slon.Pg.Converters;
 // NOTE: We don't inherit from ValueConverter to be able to avoid the virtual calls for ConvertFrom/ConvertTo.
 
 /// Special value converter to be able to use struct converters as System.Nullable converters, it delegates all behavior to the effective converter.
-sealed class NullableValueConverter<T> : PgConverter<T?> where T : struct
+sealed class NullableValueConverter<T> : PgBufferedConverter<T?> where T : struct
 {
-    readonly PgConverter<T> _effectiveConverter;
-    public NullableValueConverter(PgConverter<T> effectiveConverter)
+    readonly PgBufferedConverter<T> _effectiveConverter;
+    public NullableValueConverter(PgBufferedConverter<T> effectiveConverter)
         : base(effectiveConverter.DbNullPredicateKind is DbNullPredicate.Extended)
         => _effectiveConverter = effectiveConverter;
 
@@ -22,11 +23,10 @@ sealed class NullableValueConverter<T> : PgConverter<T?> where T : struct
 
     public override bool CanConvert(DataFormat format) => _effectiveConverter.CanConvert(format);
 
-    public override ValueSize GetSize(SizeContext context, T? value, ref object? writeState)
-        => _effectiveConverter.GetSize(context, ConvertTo(value), ref writeState);
+    public override ValueSize GetSize(ref SizeContext context, [DisallowNull]T? value)
+        => _effectiveConverter.GetSize(ref context, ConvertTo(value));
 
-    public override T? Read(PgReader reader)
-        => ConvertFrom(_effectiveConverter.Read(reader));
+    protected override T? ReadCore(PgReader reader) => ConvertFrom(_effectiveConverter.Read(reader));
 
     public override void Write(PgWriter writer, T? value)
         => _effectiveConverter.Write(writer, ConvertTo(value));

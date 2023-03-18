@@ -48,7 +48,7 @@ class PgWriter
 
     internal FlushMode FlushMode => _flushSuppressed ? FlushMode.None : _flushMode;
 
-    public DataFormat DataFormat { get; internal set; }
+    public DataFormat Format { get; internal set; }
     // TODO state shouldn't live here.
     public object? State { get; private set; }
     public ValueSize Size { get; private set; }

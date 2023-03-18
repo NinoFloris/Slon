@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Numerics;
 
 namespace Slon.Pg.Converters;
@@ -18,11 +19,13 @@ sealed class NumberValueConverter<T, TEffective> : PgConverter<T>
 
 #if !NETSTANDARD2_0
     T? ConvertFrom(TEffective? value) => T.CreateChecked(value);
-    TEffective ConvertTo(T value) => TEffective.CreateChecked(value)!;
+    [return: NotNull]
+    TEffective ConvertTo([DisallowNull]T value) => TEffective.CreateChecked(value)!;
 #else
 // TODO
     T? ConvertFrom(TEffective? value) => throw new NotImplementedException();
-    TEffective ConvertTo(T value) => throw new NotImplementedException();
+    [return: NotNull]
+    TEffective ConvertTo([DisallowNull]T value) => throw new NotImplementedException();
 #endif
 
     protected override bool IsDbNull(T? value)
@@ -33,12 +36,12 @@ sealed class NumberValueConverter<T, TEffective> : PgConverter<T>
 
     public override bool CanConvert(DataFormat format) => _effectiveConverter.CanConvert(format);
 
-    public override ValueSize GetSize(SizeContext context, T value, ref object? writeState)
-        => _effectiveConverter.GetSize(context, ConvertTo(value), ref writeState);
+    public override ValueSize GetSize(ref SizeContext context, [DisallowNull]T value)
+        => _effectiveConverter.GetSize(ref context, ConvertTo(value));
 
     public override T? Read(PgReader reader)
         => ConvertFrom(_effectiveConverter.Read(reader));
 
-    public override void Write(PgWriter writer, T value)
+    public override void Write(PgWriter writer, [DisallowNull]T value)
         => _effectiveConverter.Write(writer, ConvertTo(value));
 }

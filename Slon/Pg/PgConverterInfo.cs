@@ -140,17 +140,20 @@ class PgConverterInfo
         public bool IsDbNullValue([NotNullWhen(false)]T? value)
             => _converter.IsDbNullValue(value);
 
-        public ValueSize GetAnySize(T value, int bufferLength, out object? writeState, out DataFormat format, DataFormat? preferredFormat = null)
+        public ValueSize GetAnySize([DisallowNull]T value, int bufferLength, out object? writeState, out DataFormat format, DataFormat? preferredFormat = null)
         {
             writeState = null;
             format = Info.ResolvePreferredFormat(_converter, preferredFormat ?? Info.PreferredFormat);
-            return _converter.GetSize(new(format, bufferLength), value!, ref writeState);
+            var context = new SizeContext(format, bufferLength);
+            var size = _converter.GetSize(ref context, value);
+            writeState = context.WriteState;
+            return size;
         }
 
-        public void Write(PgWriter pgWriter, T value)
+        public void Write(PgWriter pgWriter, [DisallowNull]T value)
             => _converter.Write(pgWriter, value);
 
-        public ValueTask WriteAsync(PgWriter pgWriter, T value, CancellationToken cancellationToken = default)
+        public ValueTask WriteAsync(PgWriter pgWriter, [DisallowNull]T value, CancellationToken cancellationToken = default)
             => _converter.WriteAsync(pgWriter, value, cancellationToken);
 
         public Writer ToWriter() => new(new(_converter, _pgTypeId), Info);
@@ -176,7 +179,10 @@ class PgConverterInfo
         {
             writeState = null;
             format = Info.ResolvePreferredFormat(_converter, preferredFormat ?? Info.PreferredFormat);
-            return _converter.GetSizeAsObject(new(format, bufferLength), value!, ref writeState);
+            var context = new SizeContext(format, bufferLength);
+            var size = _converter.GetSizeAsObject(ref context, value);
+            writeState = context.WriteState;
+            return size;
         }
 
         public void Write(PgWriter pgWriter, object value)

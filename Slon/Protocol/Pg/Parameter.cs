@@ -127,7 +127,7 @@ static class ParameterExtensions
         if (parameter.IsDbNull)
             return;
 
-        writer.DataFormat = parameter.DataFormat;
+        writer.Format = parameter.DataFormat;
         var reader = new ValueWriter(writer, parameter.Writer, CancellationToken.None);
         reader.ReadParameterValue(parameter.Value);
 
@@ -142,7 +142,7 @@ static class ParameterExtensions
         if (parameter.IsDbNull)
             return new ValueTask();
 
-        writer.DataFormat = parameter.DataFormat;
+        writer.Format = parameter.DataFormat;
         var reader = new ValueWriter(writer, parameter.Writer, cancellationToken);
         reader.ReadParameterValue(parameter.Value);
 
@@ -156,7 +156,7 @@ static class ParameterExtensions
         // TODO some array pool backed thing
         var pooledBufferWriter = (IBufferWriter<byte>)null!;
         var pgWriter = parameter.Writer.Info.Options.GetBufferedWriter(pooledBufferWriter, parameter.WriteState);
-        pgWriter.DataFormat = parameter.HasTextWrite() ? DataFormat.Text : DataFormat.Binary;
+        pgWriter.Format = parameter.HasTextWrite() ? DataFormat.Text : DataFormat.Binary;
         var reader = new ValueWriter(pgWriter, parameter.Writer, CancellationToken.None);
         return new BufferedOutput(default);
     }
