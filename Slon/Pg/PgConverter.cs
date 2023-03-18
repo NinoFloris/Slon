@@ -22,19 +22,19 @@ abstract class PgConverter
 
     internal abstract Type TypeToConvert { get; }
     internal abstract bool IsDbNullable { get; }
-    internal abstract bool IsDbNullValueAsObject([NotNullWhen(false)]object? value, PgConverterOptions options);
+    internal abstract bool IsDbNullValueAsObject([NotNullWhen(false)]object? value);
 
     public virtual bool CanConvert(DataFormat format) => format is DataFormat.Binary;
 
     /// This method returns true when GetSize can be called with a default value for the type and the given representation without throwing.
     public virtual bool HasFixedSize(DataFormat format) => false;
 
-    internal abstract object? ReadAsObject(PgReader reader, PgConverterOptions options);
-    internal abstract ValueTask<object?> ReadAsObjectAsync(PgReader reader, PgConverterOptions options, CancellationToken cancellationToken = default);
+    internal abstract object? ReadAsObject(PgReader reader);
+    internal abstract ValueTask<object?> ReadAsObjectAsync(PgReader reader, CancellationToken cancellationToken = default);
 
-    internal abstract ValueSize GetSizeAsObject(object value, [NotNullIfNotNull(nameof(writeState))]ref object? writeState, SizeContext context, PgConverterOptions options);
-    internal abstract void WriteAsObject(PgWriter writer, object value, PgConverterOptions options);
-    internal abstract ValueTask WriteAsObjectAsync(PgWriter writer, object value, PgConverterOptions options, CancellationToken cancellationToken = default);
+    internal abstract ValueSize GetSizeAsObject(SizeContext context, object value, [NotNullIfNotNull(nameof(writeState))]ref object? writeState);
+    internal abstract void WriteAsObject(PgWriter writer, object value);
+    internal abstract ValueTask WriteAsObjectAsync(PgWriter writer, object value, CancellationToken cancellationToken = default);
 
     private protected static DbNullPredicate GetDbNullPredicate(DbNullPredicate dbNullPredicate, Type type)
         => dbNullPredicate switch
@@ -78,23 +78,23 @@ abstract class PgConverter<T> : PgConverter
     protected PgConverter(DbNullPredicate dbNullPredicate = DbNullPredicate.Default)
         => DbNullPredicate = GetDbNullPredicate(dbNullPredicate, typeof(T));
 
-    protected virtual bool IsDbNull(T? value, PgConverterOptions options)
+    protected virtual bool IsDbNull(T? value)
         => DbNullPredicate is DbNullPredicate.Polymorphic ? value is DBNull : throw new NotImplementedException();
 
-    public bool IsDbNullValue([NotNullWhen(false)] T? value, PgConverterOptions options)
-        => value is null || (DbNullPredicate is not DbNullPredicate.Default && IsDbNull(value, options));
+    public bool IsDbNullValue([NotNullWhen(false)] T? value)
+        => value is null || (DbNullPredicate is not DbNullPredicate.Default && IsDbNull(value));
 
-    public abstract T? Read(PgReader reader, PgConverterOptions options);
+    public abstract T? Read(PgReader reader);
 
-    public virtual ValueTask<T?> ReadAsync(PgReader reader, PgConverterOptions options, CancellationToken cancellationToken = default)
-        => new(Read(reader, options));
+    public virtual ValueTask<T?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
+        => new(Read(reader));
 
-    public abstract ValueSize GetSize(T value, [NotNullIfNotNull(nameof(writeState))]ref object? writeState, SizeContext context, PgConverterOptions options);
-    public abstract void Write(PgWriter writer, T value, PgConverterOptions options);
+    public abstract ValueSize GetSize(SizeContext context, T value, [NotNullIfNotNull(nameof(writeState))]ref object? writeState);
+    public abstract void Write(PgWriter writer, T value);
 
-    public virtual ValueTask WriteAsync(PgWriter writer, T value, PgConverterOptions options, CancellationToken cancellationToken = default)
+    public virtual ValueTask WriteAsync(PgWriter writer, T value, CancellationToken cancellationToken = default)
     {
-        Write(writer, value, options);
+        Write(writer, value);
         return new();
     }
 
@@ -104,28 +104,28 @@ abstract class PgConverter<T> : PgConverter
 
     // Object null semantics as follows, if T is a struct (so excluding nullable) report false for null values, don't throw on the cast.
     // As a result this creates symmetry with IsDbNullValue when we're dealing with a struct T, as it cannot be passed null at all.
-    internal sealed override bool IsDbNullValueAsObject([NotNullWhen(false)]object? value, PgConverterOptions options)
-        => (default(T) is null || value is not null) && IsDbNullValue((T?)value, options);
+    internal sealed override bool IsDbNullValueAsObject([NotNullWhen(false)]object? value)
+        => (default(T) is null || value is not null) && IsDbNullValue((T?)value);
 
-    internal sealed override object? ReadAsObject(PgReader reader, PgConverterOptions options)
-        => Read(reader, options);
+    internal sealed override object? ReadAsObject(PgReader reader)
+        => Read(reader);
 
-    internal sealed override ValueTask<object?> ReadAsObjectAsync(PgReader reader, PgConverterOptions options, CancellationToken cancellationToken = default)
+    internal sealed override ValueTask<object?> ReadAsObjectAsync(PgReader reader, CancellationToken cancellationToken = default)
     {
-        var task = ReadAsync(reader, options, cancellationToken);
+        var task = ReadAsync(reader, cancellationToken);
         return task.IsCompletedSuccessfully ? new(task.GetAwaiter().GetResult()) : Core(task);
 
         static async ValueTask<object?> Core(ValueTask<T?> task) => await task;
     }
 
-    internal sealed override ValueSize GetSizeAsObject(object value, [NotNullIfNotNull(nameof(writeState))]ref object? writeState, SizeContext context, PgConverterOptions options)
-        => GetSize((T)value, ref writeState, context, options);
+    internal sealed override ValueSize GetSizeAsObject(SizeContext context, object value, [NotNullIfNotNull(nameof(writeState))]ref object? writeState)
+        => GetSize(context, (T)value, ref writeState);
 
-    internal sealed override void WriteAsObject(PgWriter writer, object value, PgConverterOptions options)
-        => Write(writer, (T)value, options);
+    internal sealed override void WriteAsObject(PgWriter writer, object value)
+        => Write(writer, (T)value);
 
-    internal sealed override ValueTask WriteAsObjectAsync(PgWriter writer, object value, PgConverterOptions options, CancellationToken cancellationToken = default)
-        => WriteAsync(writer, (T)value, options, cancellationToken);
+    internal sealed override ValueTask WriteAsObjectAsync(PgWriter writer, object value, CancellationToken cancellationToken = default)
+        => WriteAsync(writer, (T)value, cancellationToken);
 }
 
 // Base class for converters that know their binary size up front.
@@ -135,18 +135,18 @@ abstract class PgFixedBinarySizeConverter<T> : PgConverter<T>
     public sealed override bool HasFixedSize(DataFormat format) => format is DataFormat.Binary;
     protected abstract byte BinarySize { get; }
 
-    public override ValueSize GetSize(T value, ref object? writeState, SizeContext context, PgConverterOptions options)
+    public override ValueSize GetSize(SizeContext context, T value, ref object? writeState)
         => context.Format is DataFormat.Binary ? BinarySize : throw new NotSupportedException();
 
-    protected abstract T? ReadCore(PgReader reader, PgConverterOptions options);
+    protected abstract T? ReadCore(PgReader reader);
 
     // By default ReadAsync delegates to Read, so any text read would be able to be handled too.
-    public sealed override T? Read(PgReader reader, PgConverterOptions options)
+    public sealed override T? Read(PgReader reader)
     {
         if (reader.Remaining < reader.ByteCount)
             ThrowIORequired();
 
-        return ReadCore(reader, options);
+        return ReadCore(reader);
 
         static void ThrowIORequired() => throw new InvalidOperationException("HasFixedSize=true for binary not respected, expected no IO to be required.");
     }

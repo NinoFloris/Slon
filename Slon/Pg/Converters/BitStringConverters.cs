@@ -9,29 +9,31 @@ namespace Slon.Pg.Converters;
 
 sealed class BitArrayBitStringConverter : PgConverter<BitArray>
 {
-    public static BitArray ReadValue(PgReader reader, PgConverterOptions options)
+    readonly ArrayPool<byte> _arrayPool;
+    public BitArrayBitStringConverter(PgConverterOptions options) => _arrayPool = options.GetArrayPool<byte>();
+
+    public static BitArray ReadValue(PgReader reader)
         => new(reader.ReadExact((reader.ReadInt32() + 7) / 8).ToArray());
 
-    public override BitArray Read(PgReader reader, PgConverterOptions options) => ReadValue(reader, options);
-    public override ValueSize GetSize(BitArray value, ref object? writeState, SizeContext context, PgConverterOptions options)
+    public override BitArray Read(PgReader reader) => ReadValue(reader);
+    public override ValueSize GetSize(SizeContext context, BitArray value, ref object? writeState)
         => sizeof(int) + (value.Length + 7) / 8;
 
-    public override void Write(PgWriter writer, BitArray value, PgConverterOptions options)
+    public override void Write(PgWriter writer, BitArray value)
     {
-        var pool = options.GetArrayPool<byte>();
-        var array = pool.Rent((value.Length + 7) / 8);
+        var array = _arrayPool.Rent((value.Length + 7) / 8);
         value.CopyTo(array, 0);
 
         writer.WriteInt32(value.Length);
         writer.WriteRaw(new ReadOnlySequence<byte>(array));
 
-        pool.Return(array);
+        _arrayPool.Return(array);
     }
 }
 
 sealed class BitVector32BitStringConverter : PgConverter<BitVector32>
 {
-    public override BitVector32 Read(PgReader reader, PgConverterOptions options)
+    public override BitVector32 Read(PgReader reader)
     {
         if (reader.ByteCount > sizeof(int) + sizeof(int))
             throw new InvalidCastException("Can't read a BIT(N) with more than 32 bits to BitVector32, only up to BIT(32).");
@@ -39,10 +41,10 @@ sealed class BitVector32BitStringConverter : PgConverter<BitVector32>
         return new(reader.ReadInt32() is 0 ? 0 : reader.ReadInt32());
     }
 
-    public override ValueSize GetSize(BitVector32 value, ref object? writeState, SizeContext context, PgConverterOptions options)
+    public override ValueSize GetSize(SizeContext context, BitVector32 value, ref object? writeState)
         => value.Data is 0 ? 4 : 8;
 
-    public override void Write(PgWriter writer, BitVector32 value, PgConverterOptions options)
+    public override void Write(PgWriter writer, BitVector32 value)
     {
         if (value.Data == 0)
             writer.WriteInt32(0);
@@ -56,7 +58,7 @@ sealed class BitVector32BitStringConverter : PgConverter<BitVector32>
 
 sealed class BoolBitStringConverter : PgFixedBinarySizeConverter<bool>
 {
-    public static bool ReadValue(PgReader reader, PgConverterOptions options)
+    public static bool ReadValue(PgReader reader)
     {
         if (reader.ReadInt32() > 1)
             throw new InvalidCastException("Can't read a BIT(N) type to bool, only BIT(1).");
@@ -65,8 +67,8 @@ sealed class BoolBitStringConverter : PgFixedBinarySizeConverter<bool>
     }
 
     protected override byte BinarySize => 5;
-    protected override bool ReadCore(PgReader reader, PgConverterOptions options) => ReadValue(reader, options);
-    public override void Write(PgWriter writer, bool value, PgConverterOptions options)
+    protected override bool ReadCore(PgReader reader) => ReadValue(reader);
+    public override void Write(PgWriter writer, bool value)
     {
         writer.WriteInt32(1);
         writer.WriteByte(value ? (byte)128 : (byte)0);
@@ -91,9 +93,9 @@ sealed class PolymorphicBitStringConverterResolver : PolymorphicReadConverterRes
     {
         public PolymorphicBitStringConverter() : base(typeof(TEffective)) { }
 
-        public override object Read(PgReader reader, PgConverterOptions options)
+        public override object Read(PgReader reader)
             => typeof(TEffective) == typeof(bool)
-                ? BoolBitStringConverter.ReadValue(reader, options)
-                : BitArrayBitStringConverter.ReadValue(reader, options);
+                ? BoolBitStringConverter.ReadValue(reader)
+                : BitArrayBitStringConverter.ReadValue(reader);
     }
 }

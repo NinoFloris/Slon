@@ -28,7 +28,7 @@ readonly struct ArrayConverter
         _elementOperations = elementOperations;
     }
 
-    ValueSize GetElemsSize(Array values, int bufferLength, (ValueSize, object?)[] elementStates, DataFormat format, PgConverterOptions options)
+    ValueSize GetElemsSize(Array values, int bufferLength, (ValueSize, object?)[] elementStates, DataFormat format)
     {
         Debug.Assert(elementStates.Length == values.Length);
         var totalSize = ValueSize.Zero;
@@ -38,9 +38,9 @@ readonly struct ArrayConverter
             ref var elemItem = ref elementStates[i];
             var elemState = (object?)null;
             var sizeResult =
-                elemTypeNullable && _elementOperations.IsDbNullValue(values, i, options)
+                elemTypeNullable && _elementOperations.IsDbNullValue(values, i)
                 ? ValueSize.Zero
-                : _elementOperations.GetSize(values, i, ref elemState, new(format, bufferLength), options);
+                : _elementOperations.GetSize(new(format, bufferLength), values, i, ref elemState);
 
             elemItem = (sizeResult, elemState);
             // Set it to zero on an unknown/null byte count.
@@ -50,17 +50,17 @@ readonly struct ArrayConverter
         return totalSize;
     }
 
-    ValueSize GetFixedElemsSize(Array values, DataFormat format, PgConverterOptions options)
+    ValueSize GetFixedElemsSize(Array values, DataFormat format)
     {
         var discardedElemState = (object?)null;
-        var fixedSize = _elementOperations.GetSize(values, 0, ref discardedElemState, new(format, 0), options).Value;
+        var fixedSize = _elementOperations.GetSize(new(format, 0), values, 0, ref discardedElemState).Value;
         var nonNullValues = values.Length;
         if (_elemTypeDbNullable)
         {
             var nulls = 0;
             for (var i = 0; i < values.Length; i++)
             {
-                if (_elementOperations.IsDbNullValue(values, i, options))
+                if (_elementOperations.IsDbNullValue(values, i))
                     nulls++;
             }
 
@@ -70,7 +70,7 @@ readonly struct ArrayConverter
         return ValueSize.Create(nonNullValues * fixedSize.GetValueOrDefault());
     }
 
-    public ValueSize GetSize(Array values, ref object? writeState, SizeContext context, PgConverterOptions options)
+    public ValueSize GetSize(SizeContext context, Array values, ref object? writeState)
     {
         var formatSize = ValueSize.Create(
             4 + // Dimensions
@@ -86,20 +86,20 @@ readonly struct ArrayConverter
         ValueSize elemsSize;
         if (_elementOperations.HasFixedSize(context.Format))
         {
-            elemsSize = GetFixedElemsSize(values, context.Format, options);
+            elemsSize = GetFixedElemsSize(values, context.Format);
             writeState = Array.Empty<(ValueSize, object?)>();
         }
         else
         {
             var stateArray = _statePool.Rent(values.Length);
-            elemsSize = GetElemsSize(values, context.BufferLength - formatSize.Value ?? 0, stateArray, context.Format, options);
+            elemsSize = GetElemsSize(values, context.BufferLength - formatSize.Value ?? 0, stateArray, context.Format);
             writeState = stateArray;
         }
 
         return formatSize.Combine(elemsSize);
     }
 
-    public async ValueTask WriteCore(bool async, PgWriter writer, Array values, PgConverterOptions options, CancellationToken cancellationToken)
+    public async ValueTask WriteCore(bool async, PgWriter writer, Array values, CancellationToken cancellationToken)
     {
         if (writer.State is not (ValueSize, object?)[] state)
             throw new InvalidOperationException($"Invalid state, expected {typeof((ValueSize, object?)[]).FullName}.");
@@ -120,10 +120,10 @@ readonly struct ArrayConverter
         if (state.Length is 0)
         {
             var discardedElemState = (object?)null;
-            var length = _elementOperations.GetSize(values, 0, ref discardedElemState, new(writer.DataFormat, 0), options).Value.GetValueOrDefault();
+            var length = _elementOperations.GetSize(new(writer.DataFormat, 0), values, 0, ref discardedElemState).Value.GetValueOrDefault();
             for (var i = 0; i < values.Length; i++)
             {
-                if (elemTypeDbNullable && _elementOperations.IsDbNullValue(values, i, options))
+                if (elemTypeDbNullable && _elementOperations.IsDbNullValue(values, i))
                     writer.WriteInt32(-1);
                 else
                     await WriteValue(_elementOperations, i, length, null).ConfigureAwait(false);
@@ -132,7 +132,7 @@ readonly struct ArrayConverter
         else
             for (var i = 0; i < values.Length && i < state.Length; i++)
             {
-                if (elemTypeDbNullable && _elementOperations.IsDbNullValue(values, i, options))
+                if (elemTypeDbNullable && _elementOperations.IsDbNullValue(values, i))
                 {
                     writer.WriteInt32(-1);
                     continue;
@@ -172,9 +172,9 @@ readonly struct ArrayConverter
                 writer.UpdateState(lastState = state, ValueSize.Create(length));
 
             if (async)
-                return elementOps.WriteAsync(writer, values, index, options, cancellationToken);
+                return elementOps.WriteAsync(writer, values, index, cancellationToken);
 
-            elementOps.Write(writer, values, index, options);
+            elementOps.Write(writer, values, index);
             return new ValueTask();
         }
     }
@@ -183,10 +183,10 @@ readonly struct ArrayConverter
 interface IArrayElementOperations
 {
     bool HasFixedSize(DataFormat format);
-    ValueSize GetSize(Array array, int index, ref object? writeState, SizeContext context, PgConverterOptions options);
-    bool IsDbNullValue(Array array, int index, PgConverterOptions options);
-    void Write(PgWriter writer, Array array, int index, PgConverterOptions options);
-    ValueTask WriteAsync(PgWriter writer, Array array, int index, PgConverterOptions options, CancellationToken cancellationToken = default);
+    ValueSize GetSize(SizeContext context, Array array, int index, ref object? writeState);
+    bool IsDbNullValue(Array array, int index);
+    void Write(PgWriter writer, Array array, int index);
+    ValueTask WriteAsync(PgWriter writer, Array array, int index, CancellationToken cancellationToken = default);
 }
 
 sealed class ArrayConverter<T> : PgConverter<T?[]>, IArrayElementOperations
@@ -204,31 +204,31 @@ sealed class ArrayConverter<T> : PgConverter<T?[]>, IArrayElementOperations
 
     public override bool CanConvert(DataFormat format) => _elemConverter.CanConvert(format);
 
-    public override T?[] Read(PgReader reader, PgConverterOptions options)
+    public override T?[] Read(PgReader reader)
     {
         throw new NotImplementedException();
     }
 
-    public override ValueSize GetSize(T?[] values, ref object? writeState, SizeContext context, PgConverterOptions options)
-        => _arrayConverter.GetSize(values, ref writeState, context, options);
+    public override ValueSize GetSize(SizeContext context, T?[] values, ref object? writeState)
+        => _arrayConverter.GetSize(context, values, ref writeState);
 
-    public override void Write(PgWriter writer, T?[] values, PgConverterOptions options)
-        => _arrayConverter.WriteCore(async: false, writer, values, options, CancellationToken.None).GetAwaiter().GetResult();
+    public override void Write(PgWriter writer, T?[] values)
+        => _arrayConverter.WriteCore(async: false, writer, values, CancellationToken.None).GetAwaiter().GetResult();
 
-    public override ValueTask WriteAsync(PgWriter writer, T?[] values, PgConverterOptions options, CancellationToken cancellationToken = default)
-        => _arrayConverter.WriteCore(async: true, writer, values, options, cancellationToken);
+    public override ValueTask WriteAsync(PgWriter writer, T?[] values, CancellationToken cancellationToken = default)
+        => _arrayConverter.WriteCore(async: true, writer, values, cancellationToken);
 
-    ValueSize IArrayElementOperations.GetSize(Array array, int index, ref object? writeState, SizeContext context, PgConverterOptions options)
-        => _elemConverter.GetSize(Unsafe.As<Array, T?[]>(ref array)[index]!, ref writeState, context, options);
+    ValueSize IArrayElementOperations.GetSize(SizeContext context, Array array, int index, ref object? writeState)
+        => _elemConverter.GetSize(context, Unsafe.As<Array, T?[]>(ref array)[index]!, ref writeState);
 
-    bool IArrayElementOperations.IsDbNullValue(Array array, int index, PgConverterOptions options)
-        => _elemConverter.IsDbNullValue(Unsafe.As<Array, T?[]>(ref array)[index], options);
+    bool IArrayElementOperations.IsDbNullValue(Array array, int index)
+        => _elemConverter.IsDbNullValue(Unsafe.As<Array, T?[]>(ref array)[index]);
 
-    void IArrayElementOperations.Write(PgWriter writer, Array array, int index, PgConverterOptions options)
-        => _elemConverter.Write(writer, Unsafe.As<Array, T?[]>(ref array)[index]!, options);
+    void IArrayElementOperations.Write(PgWriter writer, Array array, int index)
+        => _elemConverter.Write(writer, Unsafe.As<Array, T?[]>(ref array)[index]!);
 
-    ValueTask IArrayElementOperations.WriteAsync(PgWriter writer, Array array, int index, PgConverterOptions options, CancellationToken cancellationToken)
-        => _elemConverter.WriteAsync(writer, Unsafe.As<Array, T?[]>(ref array)[index]!, options, cancellationToken);
+    ValueTask IArrayElementOperations.WriteAsync(PgWriter writer, Array array, int index, CancellationToken cancellationToken)
+        => _elemConverter.WriteAsync(writer, Unsafe.As<Array, T?[]>(ref array)[index]!, cancellationToken);
 }
 
 class MultiDimArrayConverter<TElement, T> : PgConverter<T>
@@ -236,17 +236,17 @@ class MultiDimArrayConverter<TElement, T> : PgConverter<T>
     readonly PgConverter<TElement> _elementConverter;
     protected MultiDimArrayConverter(PgConverterResolution<TElement> resolution, int rank) => _elementConverter = resolution.Converter;
 
-    public override T Read(PgReader reader, PgConverterOptions options)
+    public override T Read(PgReader reader)
     {
         throw new NotImplementedException();
     }
 
-    public override ValueSize GetSize(T value, ref object? writeState, SizeContext context, PgConverterOptions options)
+    public override ValueSize GetSize(SizeContext context, T value, ref object? writeState)
     {
         throw new NotImplementedException();
     }
 
-    public override void Write(PgWriter writer, T value, PgConverterOptions options)
+    public override void Write(PgWriter writer, T value)
     {
         throw new NotImplementedException();
     }

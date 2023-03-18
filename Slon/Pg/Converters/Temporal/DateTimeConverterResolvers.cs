@@ -19,9 +19,9 @@ sealed class DateTimeConverterResolver: PgConverterResolver<DateTime>
     public override PgConverterResolution<DateTime> GetDefault(PgTypeId pgTypeId)
     {
         if (pgTypeId == _timestampTz)
-            return new(_tzConverter ??= new DateTimeConverter(DateTimeKind.Utc), _timestampTz);
+            return new(_tzConverter ??= new DateTimeConverter(null!, DateTimeKind.Utc), _timestampTz);
         if (pgTypeId == _timestamp)
-            return new(_converter ??= new DateTimeConverter(DateTimeKind.Unspecified), _timestamp); 
+            return new(_converter ??= new DateTimeConverter(null!, DateTimeKind.Unspecified), _timestamp);
 
         throw CreateUnsupportedPgTypeIdException(pgTypeId);
     }
@@ -53,7 +53,7 @@ sealed class DateTimeConverterResolver: PgConverterResolver<DateTime>
 sealed class DateTimeOffsetUtcOnlyConverterResolver: PgConverterResolver<DateTimeOffset>
 {
     readonly PgTypeId _timestampTz;
-    readonly PgConverter<DateTimeOffset> _converter = new DateTimeOffsetConverter();
+    readonly PgConverter<DateTimeOffset> _converter = new DateTimeOffsetConverter(null!);
 
     public DateTimeOffsetUtcOnlyConverterResolver(PgTypeId timestampTz) => _timestampTz = timestampTz;
 

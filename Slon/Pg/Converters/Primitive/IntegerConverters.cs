@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -7,42 +8,45 @@ namespace Slon.Pg.Converters;
 
 sealed class Int16Converter : PgFixedBinarySizeConverter<short>
 {
+    readonly Encoding _textEncoding;
+    public Int16Converter(PgConverterOptions options) => _textEncoding = options.TextEncoding;
+
     public override bool CanConvert(DataFormat format) => format is DataFormat.Binary or DataFormat.Text;
 
-    public override ValueSize GetSize(short value, ref object? writeState, SizeContext context, PgConverterOptions options)
-        => context.Format is DataFormat.Text ? options.TextEncoding.GetByteCount(value.ToString()) : BinarySize;
+    public override ValueSize GetSize(SizeContext context, short value, ref object? writeState)
+        => context.Format is DataFormat.Text ? _textEncoding.GetByteCount(value.ToString()) : BinarySize;
 
     protected override byte BinarySize => sizeof(short);
-    protected override short ReadCore(PgReader reader, PgConverterOptions options)
+    protected override short ReadCore(PgReader reader)
     {
         if (reader.Format is DataFormat.Binary)
             return reader.ReadInt16();
 
-        return short.Parse(options.TextEncoding.GetChars(reader.ReadExact(reader.ByteCount).ToArray()).AsSpan().ToString());
+        return short.Parse(_textEncoding.GetChars(reader.ReadExact(reader.ByteCount).ToArray()).AsSpan().ToString());
     }
 
-    public override ValueTask<short> ReadAsync(PgReader reader, PgConverterOptions options, CancellationToken cancellationToken = default)
+    public override ValueTask<short> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
     {
         if (reader.Format is DataFormat.Binary)
-            return new(Read(reader, options));
+            return new(Read(reader));
 
         // *Imagine async work for text here*
-        return new(short.Parse(options.TextEncoding.GetChars(reader.ReadExact(reader.ByteCount).ToArray()).AsSpan().ToString()));
+        return new(short.Parse(_textEncoding.GetChars(reader.ReadExact(reader.ByteCount).ToArray()).AsSpan().ToString()));
     }
 
-    public override void Write(PgWriter writer, short value, PgConverterOptions options) => writer.WriteInt16(value);
+    public override void Write(PgWriter writer, short value) => writer.WriteInt16(value);
 }
 
 sealed class Int32Converter : PgFixedBinarySizeConverter<int>
 {
     protected override byte BinarySize => sizeof(int);
-    protected override int ReadCore(PgReader reader, PgConverterOptions options) => reader.ReadInt32();
-    public override void Write(PgWriter writer, int value, PgConverterOptions options) => writer.WriteInt32(value);
+    protected override int ReadCore(PgReader reader) => reader.ReadInt32();
+    public override void Write(PgWriter writer, int value) => writer.WriteInt32(value);
 }
 
 sealed class Int64Converter : PgFixedBinarySizeConverter<long>
 {
     protected override byte BinarySize => sizeof(long);
-    protected override long ReadCore(PgReader reader, PgConverterOptions options) => reader.ReadInt64();
-    public override void Write(PgWriter writer, long value, PgConverterOptions options) => writer.WriteInt64(value);
+    protected override long ReadCore(PgReader reader) => reader.ReadInt64();
+    public override void Write(PgWriter writer, long value) => writer.WriteInt64(value);
 }

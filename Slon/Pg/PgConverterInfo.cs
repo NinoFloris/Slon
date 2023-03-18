@@ -138,20 +138,20 @@ class PgConverterInfo
         }
 
         public bool IsDbNullValue([NotNullWhen(false)]T? value)
-            => _converter.IsDbNullValue(value, Info.Options);
+            => _converter.IsDbNullValue(value);
 
         public ValueSize GetAnySize(T value, int bufferLength, out object? writeState, out DataFormat format, DataFormat? preferredFormat = null)
         {
             writeState = null;
             format = Info.ResolvePreferredFormat(_converter, preferredFormat ?? Info.PreferredFormat);
-            return _converter.GetSize(value!, ref writeState, new(format, bufferLength), Info.Options);
+            return _converter.GetSize(new(format, bufferLength), value!, ref writeState);
         }
 
         public void Write(PgWriter pgWriter, T value)
-            => _converter.Write(pgWriter, value, Info.Options);
+            => _converter.Write(pgWriter, value);
 
         public ValueTask WriteAsync(PgWriter pgWriter, T value, CancellationToken cancellationToken = default)
-            => _converter.WriteAsync(pgWriter, value, Info.Options, cancellationToken);
+            => _converter.WriteAsync(pgWriter, value, cancellationToken);
 
         public Writer ToWriter() => new(new(_converter, _pgTypeId), Info);
     }
@@ -170,20 +170,20 @@ class PgConverterInfo
         }
 
         public bool IsDbNullValue([NotNullWhen(false)]object? value)
-            => _converter.IsDbNullValueAsObject(value, Info.Options);
+            => _converter.IsDbNullValueAsObject(value);
 
         public ValueSize GetAnySize(object value, int bufferLength, out object? writeState, out DataFormat format, DataFormat? preferredFormat = null)
         {
             writeState = null;
             format = Info.ResolvePreferredFormat(_converter, preferredFormat ?? Info.PreferredFormat);
-            return _converter.GetSizeAsObject(value!, ref writeState, new(format, bufferLength), Info.Options);
+            return _converter.GetSizeAsObject(new(format, bufferLength), value!, ref writeState);
         }
 
         public void Write(PgWriter pgWriter, object value)
-            => _converter.WriteAsObject(pgWriter, value, Info.Options);
+            => _converter.WriteAsObject(pgWriter, value);
 
         public ValueTask WriteAsync(PgWriter pgWriter, object value, CancellationToken cancellationToken)
-            => _converter.WriteAsObjectAsync(pgWriter, value, Info.Options, cancellationToken);
+            => _converter.WriteAsObjectAsync(pgWriter, value, cancellationToken);
 
         public Writer<T> ToWriter<T>() => new(new((PgConverter<T>)_converter, _pgTypeId), Info);
     }
@@ -202,13 +202,13 @@ class PgConverterInfo
 
         public Type EffectiveType { get; }
 
-        public bool IsDbNullValue(T? value) => _converter.IsDbNullValue(value, _info.Options);
+        public bool IsDbNullValue(T? value) => _converter.IsDbNullValue(value);
 
         public T? Read(PgReader reader)
-            => _converter.Read(reader, _info.Options);
+            => _converter.Read(reader);
 
         public ValueTask<T?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
-            => _converter.ReadAsync(reader, _info.Options, cancellationToken);
+            => _converter.ReadAsync(reader, cancellationToken);
     }
 
     internal readonly struct Reader
@@ -226,10 +226,10 @@ class PgConverterInfo
         public Type EffectiveType { get; }
 
         public object? Read(PgReader reader)
-            => _converter.ReadAsObject(reader, _info.Options);
+            => _converter.ReadAsObject(reader);
 
         public ValueTask<object?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
-            => _converter.ReadAsObjectAsync(reader, _info.Options, cancellationToken);
+            => _converter.ReadAsObjectAsync(reader, cancellationToken);
     }
 
     sealed class PgConverterResolverInfo : PgConverterInfo

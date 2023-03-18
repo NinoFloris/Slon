@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics.CodeAnalysis;
 using System.Numerics;
 using Slon.Pg.Converters;
 using Slon.Pg.Types;
@@ -9,9 +8,6 @@ namespace Slon.Pg;
 class DefaultConverterInfoResolver: IPgConverterInfoResolver
 {
     static ReadOnlyMemoryTextConverter? _romTextConverter;
-
-    static readonly PgConverterFactory[] ConverterFactories = {
-    };
 
     public PgConverterInfo? GetConverterInfo(Type? type, DataTypeName? dataTypeName, PgConverterOptions options)
     {
@@ -46,7 +42,7 @@ class DefaultConverterInfoResolver: IPgConverterInfoResolver
         {
             _ when type == typeof(int) => CreateNumberInfo<int>(dataTypeName!.Value, () => new Int32Converter()),
             _ when type == typeof(long) => CreateNumberInfo<long>(dataTypeName!.Value, () => new Int64Converter()),
-            _ when type == typeof(short) => CreateNumberInfo<short>(dataTypeName!.Value, () => new Int16Converter()),
+            _ when type == typeof(short) => CreateNumberInfo<short>(dataTypeName!.Value, () => new Int16Converter(options)),
             _ when type == typeof(byte) => CreateNumberInfo<byte>(dataTypeName ?? DataTypeNames.Int2, null),
             _ => null
         };
@@ -56,22 +52,15 @@ class DefaultConverterInfoResolver: IPgConverterInfoResolver
         // Text converters.
         var textInfo = type switch
         {
-            _ when type == typeof(string) => CreateTextInfo(new StringTextConverter(_romTextConverter ??= new ReadOnlyMemoryTextConverter())),
-            _ when type == typeof(char[]) => CreateTextInfo(new CharArrayTextConverter(_romTextConverter ??= new ReadOnlyMemoryTextConverter())),
-            _ when type == typeof(ReadOnlyMemory<char>) => CreateTextInfo(_romTextConverter ??= new ReadOnlyMemoryTextConverter()),
-            _ when type == typeof(ArraySegment<char>) => CreateTextInfo(new CharArraySegmentTextConverter(_romTextConverter ??= new ReadOnlyMemoryTextConverter())),
-            _ when type == typeof(char) => CreateTextInfo(new CharTextConverter()),
+            _ when type == typeof(string) => CreateTextInfo(new StringTextConverter(_romTextConverter ??= new ReadOnlyMemoryTextConverter(options), options)),
+            _ when type == typeof(char[]) => CreateTextInfo(new CharArrayTextConverter(_romTextConverter ??= new ReadOnlyMemoryTextConverter(options))),
+            _ when type == typeof(ReadOnlyMemory<char>) => CreateTextInfo(_romTextConverter ??= new ReadOnlyMemoryTextConverter(options)),
+            _ when type == typeof(ArraySegment<char>) => CreateTextInfo(new CharArraySegmentTextConverter(_romTextConverter ??= new ReadOnlyMemoryTextConverter(options))),
+            _ when type == typeof(char) => CreateTextInfo(new CharTextConverter(options)),
             _ => null
         };
         if (textInfo is not null)
             return textInfo;
-
-        foreach (var factory in ConverterFactories)
-            if (factory.CreateConverterInfo(type, options, dataTypeName is null ? null : new(dataTypeName.GetValueOrDefault())) is { } converterInfo)
-            {
-                // TODO validate returned info.
-                return converterInfo;
-            }
 
         return null;
 
@@ -100,7 +89,7 @@ class DefaultConverterInfoResolver: IPgConverterInfoResolver
         // Explicit conversions.
         converter ??= dataTypeName switch
         {
-            _ when dataTypeName == DataTypeNames.Int2 => new NumberValueConverter<T, short>(new Int16Converter()),
+            _ when dataTypeName == DataTypeNames.Int2 => new NumberValueConverter<T, short>(new Int16Converter(options)),
             _ when dataTypeName == DataTypeNames.Int4 => new NumberValueConverter<T, int>(new Int32Converter()),
             // TODO
             // DataTypeNames.Float4

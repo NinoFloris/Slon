@@ -13,51 +13,51 @@ abstract class ValueConverter<T, TEffective>: PgConverter<T>
         => _effectiveConverter = effectiveConverter;
 
     protected PgConverter<TEffective> EffectiveConverter => _effectiveConverter;
-    protected abstract T? ConvertFrom(TEffective? value, PgConverterOptions options);
-    protected abstract TEffective ConvertTo(T value, PgConverterOptions options);
+    protected abstract T? ConvertFrom(TEffective? value);
+    protected abstract TEffective ConvertTo(T value);
 
-    protected sealed override bool IsDbNull(T? value, PgConverterOptions options)
+    protected sealed override bool IsDbNull(T? value)
     {
         DebugShim.Assert(value is not null);
-        return _effectiveConverter.IsDbNullValue(ConvertTo(value, options), options);
+        return _effectiveConverter.IsDbNullValue(ConvertTo(value));
     }
 
     public sealed override bool CanConvert(DataFormat format) => _effectiveConverter.CanConvert(format);
 
-    public sealed override ValueSize GetSize(T value, ref object? writeState, SizeContext context, PgConverterOptions options)
-        => _effectiveConverter.GetSize(ConvertTo(value, options), ref writeState, context, options);
+    public sealed override ValueSize GetSize(SizeContext context, T value, ref object? writeState)
+        => _effectiveConverter.GetSize(context, ConvertTo(value), ref writeState);
 
     // NOTE: Not sealed as reads often need some implementation adjustment beyond a simple conversion to be optimally efficient.
-    public override T? Read(PgReader reader, PgConverterOptions options)
-        => ConvertFrom(_effectiveConverter.Read(reader, options), options);
+    public override T? Read(PgReader reader)
+        => ConvertFrom(_effectiveConverter.Read(reader));
 
     // NOTE: Not sealed as reads often need some implementation adjustment beyond a simple conversion to be optimally efficient.
-    public override ValueTask<T?> ReadAsync(PgReader reader, PgConverterOptions options, CancellationToken cancellationToken = default)
+    public override ValueTask<T?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
     {
-        var task = _effectiveConverter.ReadAsync(reader, options, cancellationToken);
-        return task.IsCompletedSuccessfully ? new(ConvertFrom(task.GetAwaiter().GetResult(), options)) : Core(task);
+        var task = _effectiveConverter.ReadAsync(reader, cancellationToken);
+        return task.IsCompletedSuccessfully ? new(ConvertFrom(task.GetAwaiter().GetResult())) : Core(task);
 
-        async ValueTask<T?> Core(ValueTask<TEffective?> task) => ConvertFrom(await task, options);
+        async ValueTask<T?> Core(ValueTask<TEffective?> task) => ConvertFrom(await task);
     }
 
-    public sealed override void Write(PgWriter writer, T value, PgConverterOptions options)
-        => _effectiveConverter.Write(writer, ConvertTo(value, options), options);
+    public sealed override void Write(PgWriter writer, T value)
+        => _effectiveConverter.Write(writer, ConvertTo(value));
 
-    public sealed override ValueTask WriteAsync(PgWriter writer, T value, PgConverterOptions options, CancellationToken cancellationToken = default)
-        => _effectiveConverter.WriteAsync(writer, ConvertTo(value, options), options, cancellationToken);
+    public sealed override ValueTask WriteAsync(PgWriter writer, T value, CancellationToken cancellationToken = default)
+        => _effectiveConverter.WriteAsync(writer, ConvertTo(value), cancellationToken);
 }
 
 sealed class LambdaValueConverter<T, TEffective> : ValueConverter<T, TEffective>
 {
-    readonly Func<TEffective?, PgConverterOptions, T?> _from;
-    readonly Func<T, PgConverterOptions, TEffective> _to;
+    readonly Func<TEffective?, T?> _from;
+    readonly Func<T, TEffective> _to;
 
-    public LambdaValueConverter(Func<TEffective?, PgConverterOptions, T?> from, Func<T, PgConverterOptions, TEffective> to, PgConverter<TEffective> effectiveConverter) : base(effectiveConverter)
+    public LambdaValueConverter(Func<TEffective?, T?> from, Func<T, TEffective> to, PgConverter<TEffective> effectiveConverter) : base(effectiveConverter)
     {
         _from = from;
         _to = to;
     }
 
-    protected override T? ConvertFrom(TEffective? value, PgConverterOptions options) => _from(value, options);
-    protected override TEffective ConvertTo(T value, PgConverterOptions options) => _to(value, options);
+    protected override T? ConvertFrom(TEffective? value) => _from(value);
+    protected override TEffective ConvertTo(T value) => _to(value);
 }

@@ -83,7 +83,7 @@ class PgConverterOptions
     public BufferedOutput GetBufferedOutput<T>(PgConverter<T> converter, T value, object? state, DataFormat dataFormat)
     {
         var writer = GetBufferedWriter<IBufferWriter<byte>>(null!, state); // TODO this should be some array pool thing.
-        converter.Write(writer, value, this);
+        converter.Write(writer, value);
 
         return new BufferedOutput(default);
     }

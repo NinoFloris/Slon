@@ -11,10 +11,10 @@ abstract class PolymorphicReadConverter : PgConverter<object>
 
     public Type EffectiveType { get; }
 
-    public override ValueSize GetSize(object value, ref object? writeState, SizeContext context, PgConverterOptions options)
+    public override ValueSize GetSize(SizeContext context, object value, ref object? writeState)
         => throw new NotSupportedException("Polymorphic writing is not supported.");
 
-    public override void Write(PgWriter writer, object value, PgConverterOptions options)
+    public override void Write(PgWriter writer, object value)
         => throw new NotSupportedException("Polymorphic writing is not supported.");
 }
 
