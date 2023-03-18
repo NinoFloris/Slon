@@ -11,7 +11,7 @@ sealed class NullableValueConverter<T> : PgConverter<T?> where T : struct
 {
     readonly PgConverter<T> _effectiveConverter;
     public NullableValueConverter(PgConverter<T> effectiveConverter)
-        : base(FromDelegatedDbNullPredicate(effectiveConverter.DbNullPredicate, typeof(T)))
+        : base(effectiveConverter.DbNullPredicateKind is DbNullPredicate.Extended)
         => _effectiveConverter = effectiveConverter;
 
     T? ConvertFrom(T value) => value;

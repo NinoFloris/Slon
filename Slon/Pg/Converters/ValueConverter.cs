@@ -9,7 +9,7 @@ abstract class ValueConverter<T, TEffective>: PgConverter<T>
 {
     readonly PgConverter<TEffective> _effectiveConverter;
     protected ValueConverter(PgConverter<TEffective> effectiveConverter)
-        : base(FromDelegatedDbNullPredicate(effectiveConverter.DbNullPredicate, typeof(T)))
+        : base(effectiveConverter.DbNullPredicateKind is DbNullPredicate.Extended)
         => _effectiveConverter = effectiveConverter;
 
     protected PgConverter<TEffective> EffectiveConverter => _effectiveConverter;

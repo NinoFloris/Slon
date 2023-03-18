@@ -15,7 +15,7 @@ sealed class NumberValueConverter<T, TEffective> : PgConverter<T>
 {
     readonly PgConverter<TEffective> _effectiveConverter;
     public NumberValueConverter(PgConverter<TEffective> effectiveConverter)
-        : base(FromDelegatedDbNullPredicate(effectiveConverter.DbNullPredicate, typeof(T)))
+        : base(effectiveConverter.DbNullPredicateKind is DbNullPredicate.Extended)
         => _effectiveConverter = effectiveConverter;
 
 #if !NETSTANDARD2_0
