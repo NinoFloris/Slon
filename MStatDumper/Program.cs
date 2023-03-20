@@ -184,7 +184,7 @@ namespace MStatDumper
                     .Where(x => x.Method.DeclaringType.Scope.Name == "Slon")
                     .GroupBy(x => GetClassName(x.Method))
                     .OrderByDescending(x => x.Sum(x => x.Size + x.GcInfoSize + x.EhInfoSize))
-                    .Take(100)
+                    .Take(200)
                     .ToList();
 
                 static string GetClassName(MethodReference methodReference)
@@ -194,7 +194,7 @@ namespace MStatDumper
                 }
 
                 Console.WriteLine("<details>");
-                Console.WriteLine("<summary>Top 100 Slon Classes By Methods Size</summary>");
+                Console.WriteLine("<summary>Top 200 Slon Classes By Methods Size</summary>");
                 Console.WriteLine();
                 Console.WriteLine("<br>");
                 Console.WriteLine();
@@ -261,10 +261,10 @@ namespace MStatDumper
                     .Where(x => x.Type.Scope.Name == "Slon")
                     .GroupBy(x => x.Type.Name)
                     .OrderByDescending(x => x.Sum(x => x.Size))
-                    .Take(100)
+                    .Take(200)
                     .ToList();
                 Console.WriteLine("<details>");
-                Console.WriteLine($"<summary>Top 100 Slon Types By Size</summary>");
+                Console.WriteLine($"<summary>Top 200 Slon Types By Size</summary>");
                 Console.WriteLine();
                 Console.WriteLine("<br>");
                 Console.WriteLine();
