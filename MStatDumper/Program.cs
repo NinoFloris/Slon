@@ -259,25 +259,29 @@ namespace MStatDumper
 
                 var filteredTypeStats = GetTypes(types)
                     .Where(x => x.Type.Scope.Name == "Slon")
-                    .GroupBy(x => x.Type.Name)
-                    .OrderByDescending(x => x.Sum(x => x.Size))
-                    .Take(200)
+                    // .GroupBy(x => x.Type.Name)
+                    .OrderByDescending(x => x.Size)
+                    .Take(1000)
                     .ToList();
                 Console.WriteLine("<details>");
                 Console.WriteLine($"<summary>Top 200 Slon Types By Size</summary>");
                 Console.WriteLine();
                 Console.WriteLine("<br>");
                 Console.WriteLine();
-                Console.WriteLine("| Name | Size | Instantiations |");
-                Console.WriteLine("| --- | --- | --- |");
+                Console.WriteLine("| Name | Size |");
+                Console.WriteLine("| --- | --- |");
                 foreach (var m in filteredTypeStats)
                 {
-                    var name = m.Key
-                        .Replace("`", "\\`")
+                    var name = m.Type.Name;
+                    if (m.Type.IsGenericInstance)
+                        name += ((GenericInstanceType)m.Type).GenericArguments.Aggregate(" <",
+                            (s, arg) => s + arg.Name) + ">";
+
+                    name = name.Replace("`", "\\`")
                         .Replace("<", "&#60;")
                         .Replace(">", "&#62;")
                         .Replace("|", "\\|");
-                    Console.WriteLine($"| {name} | {m.Sum(x => x.Size):n0} | {m.Count()} |");
+                    Console.WriteLine($"| {name} | {m.Size:n0} |");
                 }
                 Console.WriteLine();
                 Console.WriteLine("</details>");

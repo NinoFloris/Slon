@@ -65,8 +65,8 @@ abstract class PgConverter
             return DbNullPredicate.Null;
         }
 
-        if (type.GetGenericTypeDefinition() == typeof(Nullable<>))
-            return DbNullPredicate.Null;
+        // if (type.GetGenericTypeDefinition() == typeof(Nullable<>))
+        //     return DbNullPredicate.Null;
 
         return DbNullPredicate.None;
     }
