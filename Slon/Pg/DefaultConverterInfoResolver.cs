@@ -43,7 +43,7 @@ class DefaultConverterInfoResolver: IPgConverterInfoResolver
         var numberInfo = type switch
         {
             _ when type == typeof(int) => CreateNumberInfo<int>(dataTypeName!.Value),
-            // _ when type == typeof(long) => CreateNumberInfo<long>(dataTypeName!.Value),
+            _ when type == typeof(long) => CreateNumberInfo<long>(dataTypeName!.Value),
             // _ when type == typeof(short) => CreateNumberInfo<short>(dataTypeName!.Value),
             // _ when type == typeof(float) => CreateNumberInfo<float>(dataTypeName!.Value),
             // _ when type == typeof(double) => CreateNumberInfo<double>(dataTypeName!.Value),
