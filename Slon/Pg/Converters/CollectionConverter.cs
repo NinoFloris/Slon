@@ -238,50 +238,51 @@ interface IElementOperations
     ValueTask Read(bool async, PgReader reader, object collection, int index, CancellationToken cancellationToken = default);
     ValueTask Write(bool async, PgWriter writer, object collection, int index, CancellationToken cancellationToken = default);
 }
+//
+// abstract class CollectionConverter<TElement, T> : PgStreamingConverter<T> where T : class
+// {
+//
+// }
 
-abstract class CollectionConverter<TElement, T> : PgStreamingConverter<T> where T : class
+sealed class ArrayConverter<TElement> : PgStreamingConverter<TElement?[]>, IElementOperations
 {
-    protected PgConverter<TElement> ElemConverter { get; }
+    PgConverter<TElement> ElemConverter { get; }
     readonly PgArrayConverter _pgArrayConverter;
 
-    protected CollectionConverter(PgConverterResolution<TElement> elemResolution, ArrayPool<(ValueSize, object?)> statePool, int pgLowerBound = 1)
+    public ArrayConverter(PgConverterResolution<TElement> elemResolution, ArrayPool<(ValueSize, object?)> statePool, int pgLowerBound = 1)
     {
+        // This assert exists as an additional failsafe for our cast in ReadAsync.
+        // Debug.Assert(!typeof(T).IsValueType);
         ElemConverter = elemResolution.Converter;
         _pgArrayConverter = new PgArrayConverter((this as IElementOperations)!, ElemConverter.IsDbNullable, typeof(TElement), elemResolution.PgTypeId, statePool, pgLowerBound);
     }
 
     internal PgTypeId ElemTypeId => _pgArrayConverter.ElemTypeId;
 
-    public override bool CanConvert(DataFormat format) => ElemConverter.CanConvert(format);
+    // We only support binary arrays for now.
+    public override bool CanConvert(DataFormat format) => format is DataFormat.Binary && ElemConverter.CanConvert(format);
 
-    public override T Read(PgReader reader) => (T)_pgArrayConverter.Read(async: false, reader, 1).Result;
+    public override TElement?[]? Read(PgReader reader) => (TElement?[]?)_pgArrayConverter.Read(async: false, reader, 1).Result;
 
-    public override ValueTask<T?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
+    public override ValueTask<TElement?[]?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
     {
         var task = _pgArrayConverter.Read(async: true, reader, 1, cancellationToken);
         AssertResultType(task);
-        // This is valid to do as T is constrained to class.
-        return Unsafe.As<ValueTask<object>, ValueTask<T?>>(ref task);
+        // This is valid to do as TElement?[] is constrained to class.
+        return Unsafe.As<ValueTask<object>, ValueTask<TElement?[]?>>(ref task);
     }
 
     [Conditional("DEBUG")]
-    async void AssertResultType(ValueTask<object> task) => Debug.Assert(await task is T or null);
+    async void AssertResultType(ValueTask<object> task) => Debug.Assert(await task is TElement?[] or null);
 
-    public override ValueSize GetSize(ref SizeContext context, [DisallowNull]T values)
+    public override ValueSize GetSize(ref SizeContext context, [DisallowNull]TElement?[] values)
         => _pgArrayConverter.GetSize(ref context, values);
 
-    public override void Write(PgWriter writer, [DisallowNull]T values)
+    public override void Write(PgWriter writer, [DisallowNull]TElement?[] values)
         => _pgArrayConverter.Write(async: false, writer, values, CancellationToken.None).GetAwaiter().GetResult();
 
-    public override ValueTask WriteAsync(PgWriter writer, [DisallowNull]T values, CancellationToken cancellationToken = default)
+    public override ValueTask WriteAsync(PgWriter writer, [DisallowNull]TElement?[] values, CancellationToken cancellationToken = default)
         => _pgArrayConverter.Write(async: true, writer, values, cancellationToken);
-}
-
-sealed class ArrayConverter<TElement> : CollectionConverter<TElement, TElement?[]>, IElementOperations
-{
-    public ArrayConverter(PgConverterResolution<TElement> elemResolution, ArrayPool<(ValueSize, object?)> statePool, int pgLowerBound = 1) : base(elemResolution, statePool, pgLowerBound)
-    {
-    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     TElement? GetValue(object collection, int index)
@@ -340,67 +341,67 @@ sealed class ArrayConverter<TElement> : CollectionConverter<TElement, TElement?[
         return new();
     }
 }
-
-sealed class ListConverter<TElement> : CollectionConverter<TElement, List<TElement?>>, IElementOperations
-{
-    public ListConverter(PgConverterResolution<TElement> elemResolution, ArrayPool<(ValueSize, object?)> statePool, int pgLowerBound = 1) : base(elemResolution, statePool, pgLowerBound)
-    {
-    }
-
-    TElement? GetValue(object collection, int index)
-    {
-        Debug.Assert(collection is List<TElement?>);
-        return Unsafe.As<List<TElement>>(collection)[index];
-    }
-
-    void SetValue(object collection, int index, TElement? value)
-    {
-        Debug.Assert(collection is List<TElement?>);
-        Unsafe.As<List<TElement?>>(collection)[index] = value;
-    }
-
-    object IElementOperations.CreateCollection(int capacity) => new List<TElement?>(capacity);
-
-    int IElementOperations.GetCollectionCount(object collection)
-    {
-        Debug.Assert(collection is List<TElement?>);
-        return Unsafe.As<List<TElement?>>(collection).Count;
-    }
-
-    bool IElementOperations.HasFixedSize(DataFormat format)
-        => ElemConverter.HasFixedSize(format);
-
-    ValueSize IElementOperations.GetSize(ref SizeContext context, object collection, int index)
-        => ElemConverter.GetSize(ref context, GetValue(collection, index)!);
-
-    bool IElementOperations.IsDbNullValue(object collection, int index)
-        => ElemConverter.IsDbNullValue(GetValue(collection, index));
-
-    ValueTask IElementOperations.Read(bool async, PgReader reader, object collection, int index, CancellationToken cancellationToken)
-    {
-        if (async)
-        {
-            var task = ElemConverter.ReadAsync(reader, cancellationToken);
-            if (task.IsCompletedSuccessfully)
-                SetValue(collection, index, task.GetAwaiter().GetResult());
-            return Core(collection, index, task);
-        }
-
-        SetValue(collection, index, ElemConverter.Read(reader));
-        return new();
-
-        async ValueTask Core(object collection, int index, ValueTask<TElement?> task) => SetValue(collection, index, await task);
-    }
-
-    ValueTask IElementOperations.Write(bool async, PgWriter writer, object collection, int index, CancellationToken cancellationToken)
-    {
-        if (async)
-            return ElemConverter.WriteAsync(writer, GetValue(collection, index)!, cancellationToken);
-
-        ElemConverter.Write(writer, GetValue(collection, index)!);
-        return new();
-    }
-}
+//
+// sealed class ListConverter<TElement> : CollectionConverter<TElement, List<TElement?>>, IElementOperations
+// {
+//     public ListConverter(PgConverterResolution<TElement> elemResolution, ArrayPool<(ValueSize, object?)> statePool, int pgLowerBound = 1) : base(elemResolution, statePool, pgLowerBound)
+//     {
+//     }
+//
+//     TElement? GetValue(object collection, int index)
+//     {
+//         Debug.Assert(collection is List<TElement?>);
+//         return Unsafe.As<List<TElement>>(collection)[index];
+//     }
+//
+//     void SetValue(object collection, int index, TElement? value)
+//     {
+//         Debug.Assert(collection is List<TElement?>);
+//         Unsafe.As<List<TElement?>>(collection)[index] = value;
+//     }
+//
+//     object IElementOperations.CreateCollection(int capacity) => new List<TElement?>(capacity);
+//
+//     int IElementOperations.GetCollectionCount(object collection)
+//     {
+//         Debug.Assert(collection is List<TElement?>);
+//         return Unsafe.As<List<TElement?>>(collection).Count;
+//     }
+//
+//     bool IElementOperations.HasFixedSize(DataFormat format)
+//         => ElemConverter.HasFixedSize(format);
+//
+//     ValueSize IElementOperations.GetSize(ref SizeContext context, object collection, int index)
+//         => ElemConverter.GetSize(ref context, GetValue(collection, index)!);
+//
+//     bool IElementOperations.IsDbNullValue(object collection, int index)
+//         => ElemConverter.IsDbNullValue(GetValue(collection, index));
+//
+//     ValueTask IElementOperations.Read(bool async, PgReader reader, object collection, int index, CancellationToken cancellationToken)
+//     {
+//         if (async)
+//         {
+//             var task = ElemConverter.ReadAsync(reader, cancellationToken);
+//             if (task.IsCompletedSuccessfully)
+//                 SetValue(collection, index, task.GetAwaiter().GetResult());
+//             return Core(collection, index, task);
+//         }
+//
+//         SetValue(collection, index, ElemConverter.Read(reader));
+//         return new();
+//
+//         async ValueTask Core(object collection, int index, ValueTask<TElement?> task) => SetValue(collection, index, await task);
+//     }
+//
+//     ValueTask IElementOperations.Write(bool async, PgWriter writer, object collection, int index, CancellationToken cancellationToken)
+//     {
+//         if (async)
+//             return ElemConverter.WriteAsync(writer, GetValue(collection, index)!, cancellationToken);
+//
+//         ElemConverter.Write(writer, GetValue(collection, index)!);
+//         return new();
+//     }
+// }
 
 // TODO benchmark this unit.
 sealed class ArrayConverterResolver<T> : PgConverterResolver<T?[]>
