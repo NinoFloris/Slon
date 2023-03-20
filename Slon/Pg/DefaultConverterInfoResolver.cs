@@ -40,20 +40,20 @@ class DefaultConverterInfoResolver: IPgConverterInfoResolver
         // Number converters.
         // We're using dataTypeName.Value when there is a default mapping to make sure everything stays in sync (or throws).
         // If there is no default name for the clr type we have to provide one, when making a type default be sure to replace it here with .Value.
-        // var numberInfo = type switch
-        // {
-        //     _ when type == typeof(int) => CreateNumberInfo<int>(dataTypeName!.Value),
-        //     _ when type == typeof(long) => CreateNumberInfo<long>(dataTypeName!.Value),
-        //     _ when type == typeof(short) => CreateNumberInfo<short>(dataTypeName!.Value),
-        //     _ when type == typeof(float) => CreateNumberInfo<float>(dataTypeName!.Value),
-        //     _ when type == typeof(double) => CreateNumberInfo<double>(dataTypeName!.Value),
-        //     _ when type == typeof(decimal) => CreateNumberInfo<decimal>(dataTypeName!.Value),
-        //     _ when type == typeof(byte) => CreateNumberInfo<byte>(dataTypeName ?? DataTypeNames.Int2),
-        //     _ when type == typeof(sbyte) => CreateNumberInfo<sbyte>(dataTypeName ?? DataTypeNames.Int2),
-        //     _ => null
-        // };
-        // if (numberInfo is not null)
-        //     return numberInfo;
+        var numberInfo = type switch
+        {
+            _ when type == typeof(int) => CreateNumberInfo<int>(dataTypeName!.Value),
+            // _ when type == typeof(long) => CreateNumberInfo<long>(dataTypeName!.Value),
+            // _ when type == typeof(short) => CreateNumberInfo<short>(dataTypeName!.Value),
+            // _ when type == typeof(float) => CreateNumberInfo<float>(dataTypeName!.Value),
+            // _ when type == typeof(double) => CreateNumberInfo<double>(dataTypeName!.Value),
+            // _ when type == typeof(decimal) => CreateNumberInfo<decimal>(dataTypeName!.Value),
+            // _ when type == typeof(byte) => CreateNumberInfo<byte>(dataTypeName ?? DataTypeNames.Int2),
+            // _ when type == typeof(sbyte) => CreateNumberInfo<sbyte>(dataTypeName ?? DataTypeNames.Int2),
+            _ => null
+        };
+        if (numberInfo is not null)
+            return numberInfo;
 
         // Text converters.
         var textInfo = type switch
@@ -72,50 +72,50 @@ class DefaultConverterInfoResolver: IPgConverterInfoResolver
 
         PgConverterInfo CreateTextInfo<T>(PgConverter<T> converter)
             => PgConverterInfo.Create(options, converter, DataTypeNames.Text, isDefaultInfo, DataFormat.Text);
-//
-//         PgConverterInfo? CreateNumberInfo<T>(DataTypeName dataTypeName)
-// #if !NETSTANDARD2_0
-//         where T : struct, INumberBase<T>
-// # else
-//             where T : struct
-// #endif
-//             => this.CreateNumberInfo<T>(dataTypeName, isDefaultInfo, options);
+
+        PgConverterInfo? CreateNumberInfo<T>(DataTypeName dataTypeName)
+#if !NETSTANDARD2_0
+        where T : struct, INumberBase<T>
+# else
+            where T : struct
+#endif
+            => this.CreateNumberInfo<T>(dataTypeName, isDefaultInfo, options);
     }
-//
-//     PgConverterInfo? CreateNumberInfo<T>(DataTypeName dataTypeName, bool isDefaultInfo, PgConverterOptions options)
-// #if !NETSTANDARD2_0
-//         where T : struct, INumberBase<T>
-// # else
-//         where T : struct
-// #endif
-//     {
-//         PgConverter<T>? converter = null;
-//         switch (dataTypeName)
-//         {
-//             case var _ when dataTypeName == DataTypeNames.Int2:
-// #if NETSTANDARD2_0
-//                 if (TypeSupport.IsSupported(Int16Converter.SupportedTypes, typeof(T)))
-// #endif
-//                     converter = new Int16Converter<T>();
-//                 break;
-//             case var _ when dataTypeName == DataTypeNames.Int4:
-// #if NETSTANDARD2_0
-//                 if (TypeSupport.IsSupported(Int32Converter.SupportedTypes, typeof(T)))
-// #endif
-//                     converter = new Int32Converter<T>();
-//                 break;
-//             case var _ when dataTypeName == DataTypeNames.Int8:
-// #if NETSTANDARD2_0
-//                 if (TypeSupport.IsSupported(Int64Converter.SupportedTypes, typeof(T)))
-// #endif
-//                     converter = new Int64Converter<T>();
-//                 break;
-//             // TODO
-//             // DataTypeNames.Float4
-//             // DataTypeNames.Float8
-//             // DataTypeNames.Numeric
-//         }
-//
-//         return converter is not null ? PgConverterInfo.Create(options, converter, dataTypeName, isDefaultInfo) : null;
-//     }
+
+    PgConverterInfo? CreateNumberInfo<T>(DataTypeName dataTypeName, bool isDefaultInfo, PgConverterOptions options)
+#if !NETSTANDARD2_0
+        where T : struct, INumberBase<T>
+# else
+        where T : struct
+#endif
+    {
+        PgConverter<T>? converter = null;
+        switch (dataTypeName)
+        {
+            case var _ when dataTypeName == DataTypeNames.Int2:
+#if NETSTANDARD2_0
+                if (TypeSupport.IsSupported(Int16Converter.SupportedTypes, typeof(T)))
+#endif
+                    converter = new Int16Converter<T>();
+                break;
+            case var _ when dataTypeName == DataTypeNames.Int4:
+#if NETSTANDARD2_0
+                if (TypeSupport.IsSupported(Int32Converter.SupportedTypes, typeof(T)))
+#endif
+                    converter = new Int32Converter<T>();
+                break;
+            case var _ when dataTypeName == DataTypeNames.Int8:
+#if NETSTANDARD2_0
+                if (TypeSupport.IsSupported(Int64Converter.SupportedTypes, typeof(T)))
+#endif
+                    converter = new Int64Converter<T>();
+                break;
+            // TODO
+            // DataTypeNames.Float4
+            // DataTypeNames.Float8
+            // DataTypeNames.Numeric
+        }
+
+        return converter is not null ? PgConverterInfo.Create(options, converter, dataTypeName, isDefaultInfo) : null;
+    }
 }
