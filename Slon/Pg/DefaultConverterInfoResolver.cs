@@ -11,20 +11,22 @@ class DefaultConverterInfoResolver: IPgConverterInfoResolver
 
     public PgConverterInfo? GetConverterInfo(Type? type, DataTypeName? dataTypeName, PgConverterOptions options)
     {
-        if (type is null && dataTypeName is null)
-            throw new InvalidOperationException($"At miminum one non-null {nameof(type)} or {nameof(dataTypeName)} is required.");
-
         // Default mappings.
         var (defaultType, defaultName) = (type, dataTypeName) switch
         {
-            // The typed default is important to get all the DataTypeName values lifted into a nullable. Don't simplify to default.
-            // Moving the types to the destructure also won't work because a default value is allowed to assign to a nullable of that type.
-            (null, null) => default((Type?, DataTypeName?)),
+            (null, null) => throw new InvalidOperationException($"At miminum one non-null {nameof(type)} or {nameof(dataTypeName)} is required."),
             _ when type == typeof(int) || dataTypeName == DataTypeNames.Int4 => (typeof(int), DataTypeNames.Int4),
             _ when type == typeof(long) || dataTypeName == DataTypeNames.Int8 => (typeof(long), DataTypeNames.Int8),
             _ when type == typeof(short) || dataTypeName == DataTypeNames.Int2 => (typeof(short), DataTypeNames.Int2),
+            _ when type == typeof(float) || dataTypeName == DataTypeNames.Float4 => (typeof(float), DataTypeNames.Float4),
+            _ when type == typeof(double) || dataTypeName == DataTypeNames.Float8 => (typeof(double), DataTypeNames.Float8),
+            _ when type == typeof(bool) || dataTypeName == DataTypeNames.Bool => (typeof(bool), DataTypeNames.Bool),
+            _ when type == typeof(decimal) || dataTypeName == DataTypeNames.Numeric => (typeof(decimal), DataTypeNames.Numeric),
             _ when type == typeof(string) || dataTypeName == DataTypeNames.Text => (typeof(string), DataTypeNames.Text),
-            _ => default
+
+            // The typed default is important to get all the DataTypeName values lifted into a nullable. Don't simplify to default.
+            // Moving the types to the destructure also won't work because a default value is allowed to assign to a nullable of that type.
+            _ => default((Type?, DataTypeName?))
         };
         type ??= defaultType;
         dataTypeName ??= defaultName;
@@ -35,19 +37,23 @@ class DefaultConverterInfoResolver: IPgConverterInfoResolver
         // So (null, DataTypeName.Int4), (typeof(int), null), (typeof(int), DataTypeName.Int4) should all return a default info.
         var isDefaultInfo = dataTypeName is null ? type == defaultType : type == defaultType && dataTypeName == defaultName;
 
-        // Numeric converters.
+        // Number converters.
         // We're using dataTypeName.Value when there is a default mapping to make sure everything stays in sync (or throws).
         // If there is no default name for the clr type we have to provide one, when making a type default be sure to replace it here with .Value.
-        var numericInfo = type switch
-        {
-            _ when type == typeof(int) => CreateNumberInfo<int>(dataTypeName!.Value, () => new Int32Converter()),
-            _ when type == typeof(long) => CreateNumberInfo<long>(dataTypeName!.Value, () => new Int64Converter()),
-            _ when type == typeof(short) => CreateNumberInfo<short>(dataTypeName!.Value, () => new Int16Converter(options)),
-            _ when type == typeof(byte) => CreateNumberInfo<byte>(dataTypeName ?? DataTypeNames.Int2, null),
-            _ => null
-        };
-        if (numericInfo is not null)
-            return numericInfo;
+        // var numberInfo = type switch
+        // {
+        //     _ when type == typeof(int) => CreateNumberInfo<int>(dataTypeName!.Value),
+        //     _ when type == typeof(long) => CreateNumberInfo<long>(dataTypeName!.Value),
+        //     _ when type == typeof(short) => CreateNumberInfo<short>(dataTypeName!.Value),
+        //     _ when type == typeof(float) => CreateNumberInfo<float>(dataTypeName!.Value),
+        //     _ when type == typeof(double) => CreateNumberInfo<double>(dataTypeName!.Value),
+        //     _ when type == typeof(decimal) => CreateNumberInfo<decimal>(dataTypeName!.Value),
+        //     _ when type == typeof(byte) => CreateNumberInfo<byte>(dataTypeName ?? DataTypeNames.Int2),
+        //     _ when type == typeof(sbyte) => CreateNumberInfo<sbyte>(dataTypeName ?? DataTypeNames.Int2),
+        //     _ => null
+        // };
+        // if (numberInfo is not null)
+        //     return numberInfo;
 
         // Text converters.
         var textInfo = type switch
@@ -66,38 +72,50 @@ class DefaultConverterInfoResolver: IPgConverterInfoResolver
 
         PgConverterInfo CreateTextInfo<T>(PgConverter<T> converter)
             => PgConverterInfo.Create(options, converter, DataTypeNames.Text, isDefaultInfo, DataFormat.Text);
-
-        PgConverterInfo? CreateNumberInfo<T>(DataTypeName dataTypeName, Func<PgConverter<T>>? defaultConverterFunc)
-#if !NETSTANDARD2_0
-            where T : INumberBase<T>
-#endif
-            => this.CreateNumberInfo(dataTypeName, defaultConverterFunc, isDefaultInfo, options);
+//
+//         PgConverterInfo? CreateNumberInfo<T>(DataTypeName dataTypeName)
+// #if !NETSTANDARD2_0
+//         where T : struct, INumberBase<T>
+// # else
+//             where T : struct
+// #endif
+//             => this.CreateNumberInfo<T>(dataTypeName, isDefaultInfo, options);
     }
-
-    PgConverterInfo? CreateNumberInfo<T>(DataTypeName dataTypeName, Func<PgConverter<T>>? defaultConverterFunc, bool isDefaultInfo, PgConverterOptions options)
-#if !NETSTANDARD2_0
-        where T : INumberBase<T>
-#endif
-    {
-        if (isDefaultInfo && defaultConverterFunc is null)
-            throw new InvalidOperationException();
-
-        PgConverter<T>? converter = null;
-        if (isDefaultInfo)
-            converter = defaultConverterFunc!();
-
-        // Explicit conversions.
-        converter ??= dataTypeName switch
-        {
-            _ when dataTypeName == DataTypeNames.Int2 => new NumberValueConverter<T, short>(new Int16Converter(options)),
-            _ when dataTypeName == DataTypeNames.Int4 => new NumberValueConverter<T, int>(new Int32Converter()),
-            // TODO
-            // DataTypeNames.Float4
-            // DataTypeNames.Float8
-            // DataTypeNames.Numeric
-            _ => null
-        };
-
-        return converter is not null ? PgConverterInfo.Create(options, converter, dataTypeName, isDefaultInfo) : null;
-    }
+//
+//     PgConverterInfo? CreateNumberInfo<T>(DataTypeName dataTypeName, bool isDefaultInfo, PgConverterOptions options)
+// #if !NETSTANDARD2_0
+//         where T : struct, INumberBase<T>
+// # else
+//         where T : struct
+// #endif
+//     {
+//         PgConverter<T>? converter = null;
+//         switch (dataTypeName)
+//         {
+//             case var _ when dataTypeName == DataTypeNames.Int2:
+// #if NETSTANDARD2_0
+//                 if (TypeSupport.IsSupported(Int16Converter.SupportedTypes, typeof(T)))
+// #endif
+//                     converter = new Int16Converter<T>();
+//                 break;
+//             case var _ when dataTypeName == DataTypeNames.Int4:
+// #if NETSTANDARD2_0
+//                 if (TypeSupport.IsSupported(Int32Converter.SupportedTypes, typeof(T)))
+// #endif
+//                     converter = new Int32Converter<T>();
+//                 break;
+//             case var _ when dataTypeName == DataTypeNames.Int8:
+// #if NETSTANDARD2_0
+//                 if (TypeSupport.IsSupported(Int64Converter.SupportedTypes, typeof(T)))
+// #endif
+//                     converter = new Int64Converter<T>();
+//                 break;
+//             // TODO
+//             // DataTypeNames.Float4
+//             // DataTypeNames.Float8
+//             // DataTypeNames.Numeric
+//         }
+//
+//         return converter is not null ? PgConverterInfo.Create(options, converter, dataTypeName, isDefaultInfo) : null;
+//     }
 }
