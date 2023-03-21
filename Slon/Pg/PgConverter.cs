@@ -128,12 +128,19 @@ abstract class PgStreamingConverter<T> : PgConverter<T>
 
     private protected sealed override ValueTask<object?> ReadAsObject(bool async, PgReader reader, CancellationToken cancellationToken = default)
     {
-        return async ? ReadAsyncCast(reader, cancellationToken) : new(Read(reader));
+        if (!async)
+            return new(Read(reader));
+
+        return ReadAsyncBox(reader, cancellationToken);
+        // return typeof(T).IsValueType
+        //     ? 
+        //     
+        //     : Unsafe.As<ValueTask<T?>, ValueTask<object?>>(ref Unsafe.AsRef(ReadAsync(reader, cancellationToken)));
 
 #if !NETSTANDARD2_0
         [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
 #endif
-        async ValueTask<object?> ReadAsyncCast(PgReader reader, CancellationToken cancellationToken)
+        async ValueTask<object?> ReadAsyncBox(PgReader reader, CancellationToken cancellationToken)
             => await ReadAsync(reader, cancellationToken);
     }
 
