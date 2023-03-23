@@ -53,7 +53,17 @@ abstract class PgConverter
     // Shared sync/async abstract to reduce virtual method table size overhead and code size for each NpgsqlConverter<T> instantiation.
     private protected abstract ValueTask WriteAsObject(bool async, PgWriter writer, object value, CancellationToken cancellationToken = default);
 
-    internal virtual ValueTask<object?> BoxResult(Task task) => throw new NotSupportedException();
+    private protected virtual ValueTask<object?> BoxResult(Task task) => throw new NotSupportedException();
+
+    // Split out from the generic class to amortize the huge size penalty per async state machine, which would otherwise be per instantiation.
+#if !NETSTANDARD2_0
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+#endif
+    private protected async ValueTask<object?> AwaitReadTask(Task task)
+    {
+        await task;
+        return BoxResult(task);
+    }
 
     static DbNullPredicate GetDbNullPredicateForType(DbNullPredicate? dbNullPredicate, Type type)
     {
@@ -122,26 +132,13 @@ abstract class PgConverter<T> : PgConverter
     }
 }
 
-static class PgStreamingConverterExtensions
-{
-    // Split out from the generic class to amortize the huge size penalty per async state machine, which would otherwise be per instantiation.
-#if !NETSTANDARD2_0
-    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
-#endif
-    public static async ValueTask<object?> AwaitReadTask(this PgConverter instance, Task task)
-    {
-        await task;
-        return instance.BoxResult(task);
-    }
-}
-
 abstract class PgStreamingConverter<T> : PgConverter<T>
 {
     protected PgStreamingConverter(bool extendedDbNullPredicate = false) : base(extendedDbNullPredicate) { }
     public abstract ValueTask<T?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default);
     public abstract ValueTask WriteAsync(PgWriter writer, [DisallowNull]T value, CancellationToken cancellationToken = default);
 
-    internal sealed override ValueTask<object?> BoxResult(Task task) => new(new ValueTask<object?>((Task<T>)task).Result);
+    private protected sealed override ValueTask<object?> BoxResult(Task task) => new(new ValueTask<object?>((Task<T>)task).Result);
     private protected sealed override ValueTask<object?> ReadAsObject(bool async, PgReader reader, CancellationToken cancellationToken = default)
     {
         if (!async)
@@ -151,7 +148,7 @@ abstract class PgStreamingConverter<T> : PgConverter<T>
         if (task.IsCompletedSuccessfully)
             return new(task.Result);
 
-        return this.AwaitReadTask(task.AsTask());
+        return AwaitReadTask(task.AsTask());
     }
 
     private protected sealed override ValueTask WriteAsObject(bool async, PgWriter writer, object value, CancellationToken cancellationToken = default)

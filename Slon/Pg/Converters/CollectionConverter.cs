@@ -329,16 +329,19 @@ sealed class ArrayConverter<TElement> : CollectionConverter, IElementOperations
 
     ValueTask IElementOperations.Read(bool async, PgReader reader, object collection, int index, CancellationToken cancellationToken)
     {
-        if (async)
+        TElement? result;
+        if (!async)
+            result = _elemConverter.Read(reader);
+        else
         {
             var task = _elemConverter.ReadAsync(reader, cancellationToken);
-            if (task.IsCompletedSuccessfully)
-                SetValue(collection, index, task.Result);
-            else
+            if (!task.IsCompletedSuccessfully)
                 return AwaitReadTask(task.AsTask(), collection, index);
+
+            result = task.Result;
         }
 
-        SetValue(collection, index, _elemConverter.Read(reader));
+        SetValue(collection, index, result);
         return new();
     }
 
