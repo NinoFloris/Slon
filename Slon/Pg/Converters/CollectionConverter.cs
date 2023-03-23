@@ -240,15 +240,17 @@ interface IElementOperations
 
 abstract class CollectionConverter : PgStreamingConverter<object>
 {
-    protected abstract PgConverter ElemConverter { get; }
     readonly PgArrayConverter _pgArrayConverter;
 
-    protected CollectionConverter(PgConverterResolution elemResolution, ArrayPool<(ValueSize, object?)> statePool, int pgLowerBound = 1)
+    private protected CollectionConverter(PgConverterResolution elemResolution, ArrayPool<(ValueSize, object?)> statePool, int pgLowerBound = 1)
     {
         _pgArrayConverter = new PgArrayConverter((IElementOperations)this, elemResolution.Converter.IsDbNullable, elemResolution.Converter.TypeToConvert, elemResolution.PgTypeId, statePool, pgLowerBound);
     }
 
     internal PgTypeId ElemTypeId => _pgArrayConverter.ElemTypeId;
+
+    protected abstract PgConverter ElemConverter { get; }
+    protected abstract void SetResult(Task task, object collection, int index);
 
     // We only support binary arrays for now.
     public override bool CanConvert(DataFormat format) => format is DataFormat.Binary && ElemConverter.CanConvert(format);
@@ -266,6 +268,16 @@ abstract class CollectionConverter : PgStreamingConverter<object>
 
     public override ValueTask WriteAsync(PgWriter writer, object values, CancellationToken cancellationToken = default)
         => _pgArrayConverter.Write(async: true, writer, values, cancellationToken);
+
+    // Split out from the generic class to amortize the huge size penalty per async state machine, which would otherwise be per instantiation.
+#if !NETSTANDARD2_0
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
+#endif
+    protected async ValueTask AwaitReadTask(Task task, object collection, int index)
+    {
+        await task;
+        SetResult(task, collection, index);
+    }
 }
 
 sealed class ArrayConverter<TElement> : CollectionConverter, IElementOperations
@@ -291,6 +303,11 @@ sealed class ArrayConverter<TElement> : CollectionConverter, IElementOperations
         Debug.Assert(collection is TElement?[]);
         Unsafe.As<TElement?[]>(collection)[index] = value;
     }
+    protected override PgConverter ElemConverter => _elemConverter;
+
+    // Using valuetask to get the task result which is equivalent to GetAwaiter().GetResult for ValueTask, this removes TaskAwaiter<TElement> rooting.
+    protected override void SetResult(Task task, object collection, int index)
+        => SetValue(collection, index, new ValueTask<TElement>((Task<TElement>)task).Result);
 
     object IElementOperations.CreateCollection(int capacity)
         => capacity is 0 ? Array.Empty<TElement?>() : new TElement?[capacity];
@@ -316,14 +333,13 @@ sealed class ArrayConverter<TElement> : CollectionConverter, IElementOperations
         {
             var task = _elemConverter.ReadAsync(reader, cancellationToken);
             if (task.IsCompletedSuccessfully)
-                SetValue(collection, index, task.GetAwaiter().GetResult());
-            return Core(collection, index, task);
+                SetValue(collection, index, task.Result);
+            else
+                return AwaitReadTask(task.AsTask(), collection, index);
         }
 
         SetValue(collection, index, _elemConverter.Read(reader));
         return new();
-
-        async ValueTask Core(object collection, int index, ValueTask<TElement?> task) => SetValue(collection, index, await task);
     }
 
     ValueTask IElementOperations.Write(bool async, PgWriter writer, object collection, int index, CancellationToken cancellationToken)
@@ -334,8 +350,6 @@ sealed class ArrayConverter<TElement> : CollectionConverter, IElementOperations
         _elemConverter.Write(writer, GetValue(collection, index)!);
         return new();
     }
-
-    protected override PgConverter ElemConverter => _elemConverter;
 }
 //
 // sealed class ListConverter<TElement> : CollectionConverter<TElement, List<TElement?>>, IElementOperations
