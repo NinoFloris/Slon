@@ -53,6 +53,8 @@ abstract class PgConverter
     // Shared sync/async abstract to reduce virtual method table size overhead and code size for each NpgsqlConverter<T> instantiation.
     private protected abstract ValueTask WriteAsObject(bool async, PgWriter writer, object value, CancellationToken cancellationToken = default);
 
+    internal virtual ValueTask<object?> BoxResult(Task task) => throw new NotSupportedException();
+
     static DbNullPredicate GetDbNullPredicateForType(DbNullPredicate? dbNullPredicate, Type type)
     {
         if (dbNullPredicate is { } value)
@@ -65,8 +67,8 @@ abstract class PgConverter
             return DbNullPredicate.Null;
         }
 
-        // if (type.GetGenericTypeDefinition() == typeof(Nullable<>))
-        //     return DbNullPredicate.Null;
+        if (type.GetGenericTypeDefinition() == typeof(Nullable<>))
+            return DbNullPredicate.Null;
 
         return DbNullPredicate.None;
     }
@@ -120,28 +122,36 @@ abstract class PgConverter<T> : PgConverter
     }
 }
 
+static class PgStreamingConverterExtensions
+{
+    // Split out from the generic class to amortize the huge size penalty per async state machine, which would otherwise be per instantiation.
+#if !NETSTANDARD2_0
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+#endif
+    public static async ValueTask<object?> AwaitReadTask(this PgConverter instance, Task task)
+    {
+        await task;
+        return instance.BoxResult(task);
+    }
+}
+
 abstract class PgStreamingConverter<T> : PgConverter<T>
 {
     protected PgStreamingConverter(bool extendedDbNullPredicate = false) : base(extendedDbNullPredicate) { }
     public abstract ValueTask<T?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default);
     public abstract ValueTask WriteAsync(PgWriter writer, [DisallowNull]T value, CancellationToken cancellationToken = default);
 
+    internal sealed override ValueTask<object?> BoxResult(Task task) => new(new ValueTask<object?>((Task<T>)task).Result);
     private protected sealed override ValueTask<object?> ReadAsObject(bool async, PgReader reader, CancellationToken cancellationToken = default)
     {
         if (!async)
             return new(Read(reader));
 
-        return ReadAsyncBox(reader, cancellationToken);
-        // return typeof(T).IsValueType
-        //     ? 
-        //     
-        //     : Unsafe.As<ValueTask<T?>, ValueTask<object?>>(ref Unsafe.AsRef(ReadAsync(reader, cancellationToken)));
+        var task = ReadAsync(reader, cancellationToken);
+        if (task.IsCompletedSuccessfully)
+            return new(task.Result);
 
-#if !NETSTANDARD2_0
-        [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
-#endif
-        async ValueTask<object?> ReadAsyncBox(PgReader reader, CancellationToken cancellationToken)
-            => await ReadAsync(reader, cancellationToken);
+        return this.AwaitReadTask(task.AsTask());
     }
 
     private protected sealed override ValueTask WriteAsObject(bool async, PgWriter writer, object value, CancellationToken cancellationToken = default)
