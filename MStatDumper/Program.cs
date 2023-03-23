@@ -180,12 +180,15 @@ namespace MStatDumper
 
             if (markDownStyleOutput)
             {
-                var methodsByClass = methodStats
+                var methodsByScope = methodStats
                     .Where(x => x.Method.DeclaringType.Scope.Name == "Slon")
+                    .ToArray();
+
+                var methodsByClass = methodsByScope
                     .GroupBy(x => GetClassName(x.Method))
                     .OrderByDescending(x => x.Sum(x => x.Size + x.GcInfoSize + x.EhInfoSize))
                     .Take(200)
-                    .ToList();
+                    .ToArray();
 
                 static string GetClassName(MethodReference methodReference)
                 {
@@ -287,8 +290,11 @@ namespace MStatDumper
                     .Where(x => x.Type.Namespace.StartsWith("Slon.Pg"))
                     .ToArray();
 
-                var filteredConverterMethodStats = methodStats
-                    .Where(x => x.Method.DeclaringType.Namespace.StartsWith("Slon.Pg"))
+                var filteredConverterMethods = methodsByScope
+                    .Where(x => x.Method.DeclaringType.FullName.StartsWith("Slon.Pg"));
+
+                var filteredConverterMethodStats =
+                    filteredConverterMethods
                     .GroupBy(x => GetCanonTypeName(x.Method.DeclaringType, out _))
                     .Select(x => KeyValuePair.Create(x.Key, new { Size = x.Sum(x => x.Size + x.GcInfoSize + x.EhInfoSize), DeclaringType = x.First().Method.DeclaringType }))
                     .ToDictionary(x => x.Key, x => x.Value);
@@ -419,10 +425,10 @@ namespace MStatDumper
                     .OrderByDescending(x => x.TotalSize)
                     .ToArray();
 
-                var originalSum = filteredConverterMethodStats.Sum(x => x.Value.Size) + filteredConverterTypeStats.Sum(x => x.Size);
+                var originalSum = filteredConverterMethods.Sum(x => x.Size + x.EhInfoSize + x.GcInfoSize) + filteredConverterTypeStats.Sum(x => x.Size);
                 var actualSum = filteredConverterTotalStats.Sum(x => x.TotalSize);
                 if (originalSum != actualSum)
-                    throw new InvalidOperationException("Total size of stats is diverging after combining methods and types");
+                    throw new InvalidOperationException($"Total size of stats is diverging after combining methods and types, actual: {actualSum}, expected: {originalSum}");
 
                 Console.WriteLine("<details>");
                 Console.WriteLine($"<summary>Converter Namespace Type and Method Size {actualSum:n0}</summary>");
@@ -464,7 +470,7 @@ namespace MStatDumper
 
             string GetConcreteTypeName(TypeReference type, out bool isCanon)
             {
-                var name = type.Name;
+                var name = (type.DeclaringType is { } t ? t.Name + "." : null) + type.Name;
                 isCanon = false;
                 if (type.IsGenericInstance)
                 {
@@ -487,7 +493,7 @@ namespace MStatDumper
             string GetCanonTypeName(TypeReference type, out bool hasCanonArg)
             {
                 hasCanonArg = false;
-                var name = type.Name;
+                var name = (type.DeclaringType is { } t ? t.Name + "." : null) + type.Name;
                 if (type.IsGenericInstance)
                 {
                     var canon = hasCanonArg;
