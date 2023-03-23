@@ -287,7 +287,7 @@ namespace MStatDumper
                 Console.WriteLine("</details>");
 
                 var filteredConverterTypeStats = GetTypes(types)
-                    .Where(x => x.Type.Namespace.StartsWith("Slon.Pg"))
+                    .Where(x => x.Type.FullName.StartsWith("Slon.Pg"))
                     .ToArray();
 
                 var filteredConverterMethods = methodsByScope
@@ -428,7 +428,7 @@ namespace MStatDumper
                 var originalSum = filteredConverterMethods.Sum(x => x.Size + x.EhInfoSize + x.GcInfoSize) + filteredConverterTypeStats.Sum(x => x.Size);
                 var actualSum = filteredConverterTotalStats.Sum(x => x.TotalSize);
                 if (originalSum != actualSum)
-                    throw new InvalidOperationException($"Total size of stats is diverging after combining methods and types, actual: {actualSum}, expected: {originalSum}");
+                    Console.WriteLine($"Total size of stats is diverging after combining methods and types, actual: {actualSum}, expected: {originalSum}");
 
                 Console.WriteLine("<details>");
                 Console.WriteLine($"<summary>Converter Namespace Type and Method Size {actualSum:n0}</summary>");
@@ -463,9 +463,10 @@ namespace MStatDumper
                 }
                 Console.WriteLine();
                 Console.WriteLine("</details>");
-
-
                 Console.WriteLine();
+                // And again, but as an exceptino to make sure CI fails.
+                if (originalSum != actualSum)
+                    throw new InvalidOperationException($"Total size of stats is diverging after combining methods and types, actual: {actualSum}, expected: {originalSum}");
             }
 
             string GetConcreteTypeName(TypeReference type, out bool isCanon)
@@ -478,9 +479,10 @@ namespace MStatDumper
                     name += ((GenericInstanceType)type).GenericArguments.Aggregate(" <",
                         (s, arg) =>
                         {
+                            var result = GetConcreteTypeName(arg, out _);
                             if (canon)
-                                canon = arg.Name == "__Canon";
-                            return s + GetConcreteTypeName(arg, out _) + ", ";
+                                canon = result.Contains("__Canon");
+                            return  s + result + ", ";
                         })[..^2] + ">";
                     isCanon = canon;
                 }
@@ -502,7 +504,11 @@ namespace MStatDumper
                         {
                             var ret = s;
                             if (arg.IsValueType)
-                                ret += GetCanonTypeName(arg, out var _);
+                            {
+                                ret += GetCanonTypeName(arg, out var innercanon);
+                                if (innercanon)
+                                    canon = true;
+                            }
                             else
                             {
                                 canon = true;
