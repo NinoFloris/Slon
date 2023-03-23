@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Collections;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Diagnostics;
@@ -238,7 +239,21 @@ interface IElementOperations
     ValueTask Write(bool async, PgWriter writer, object collection, int index, CancellationToken cancellationToken = default);
 }
 
-abstract class CollectionConverter : PgStreamingConverter<object>
+static class CollectionConverter
+{
+    // Split out from the generic class to amortize the huge size penalty per async state machine, which would otherwise be per instantiation.
+#if !NETSTANDARD2_0
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
+#endif
+    public static async ValueTask AwaitReadTask(Action<Task,object,int> callback, Task task, object collection, int index)
+    {
+        await task;
+        callback(task, collection, index);
+        // SetResult(task, collection, index);
+    }
+}
+
+abstract class CollectionConverter<T> : PgStreamingConverter<T> where T : class, ICollection
 {
     readonly PgArrayConverter _pgArrayConverter;
 
@@ -250,39 +265,32 @@ abstract class CollectionConverter : PgStreamingConverter<object>
     internal PgTypeId ElemTypeId => _pgArrayConverter.ElemTypeId;
 
     protected abstract PgConverter ElemConverter { get; }
-    protected abstract void SetResult(Task task, object collection, int index);
+    // protected abstract void SetResult(Task task, object collection, int index);
 
     // We only support binary arrays for now.
     public override bool CanConvert(DataFormat format) => format is DataFormat.Binary && ElemConverter.CanConvert(format);
 
-    public override object? Read(PgReader reader) => _pgArrayConverter.Read(async: false, reader, 1).Result;
+    public override T? Read(PgReader reader) => (T?)_pgArrayConverter.Read(async: false, reader, 1).Result;
 
-    public override ValueTask<object?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
-        => _pgArrayConverter.Read(async: true, reader, 1, cancellationToken);
+    public override ValueTask<T?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
+        => Unsafe.As<ValueTask<object?>, ValueTask<T?>>(ref Unsafe.AsRef(_pgArrayConverter.Read(async: true, reader, 1, cancellationToken)));
 
-    public override ValueSize GetSize(ref SizeContext context, object values)
+    public override ValueSize GetSize(ref SizeContext context, T values)
         => _pgArrayConverter.GetSize(ref context, values);
 
-    public override void Write(PgWriter writer, object values)
+    public override void Write(PgWriter writer, T values)
         => _pgArrayConverter.Write(async: false, writer, values, CancellationToken.None).GetAwaiter().GetResult();
 
-    public override ValueTask WriteAsync(PgWriter writer, object values, CancellationToken cancellationToken = default)
+    public override ValueTask WriteAsync(PgWriter writer, T values, CancellationToken cancellationToken = default)
         => _pgArrayConverter.Write(async: true, writer, values, cancellationToken);
 
-    // Split out from the generic class to amortize the huge size penalty per async state machine, which would otherwise be per instantiation.
-#if !NETSTANDARD2_0
-    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
-#endif
-    protected async ValueTask AwaitReadTask(Task task, object collection, int index)
-    {
-        await task;
-        SetResult(task, collection, index);
-    }
+
 }
 
-sealed class ArrayConverter<TElement> : CollectionConverter, IElementOperations
+sealed class ArrayConverter<TElement> : CollectionConverter<TElement?[]>, IElementOperations
 {
     readonly PgConverter<TElement> _elemConverter;
+    static readonly Action<Task, object, int> _callback = SetResult;
 
     public ArrayConverter(PgConverterResolution<TElement> elemResolution, ArrayPool<(ValueSize, object?)> statePool, int pgLowerBound = 1)
         : base(elemResolution.ToConverterResolution(), statePool, pgLowerBound)
@@ -291,14 +299,14 @@ sealed class ArrayConverter<TElement> : CollectionConverter, IElementOperations
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    TElement? GetValue(object collection, int index)
+    static TElement? GetValue(object collection, int index)
     {
         Debug.Assert(collection is TElement?[]);
         return Unsafe.As<TElement?[]>(collection)[index];
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    void SetValue(object collection, int index, TElement? value)
+    static void SetValue(object collection, int index, TElement? value)
     {
         Debug.Assert(collection is TElement?[]);
         Unsafe.As<TElement?[]>(collection)[index] = value;
@@ -306,7 +314,7 @@ sealed class ArrayConverter<TElement> : CollectionConverter, IElementOperations
     protected override PgConverter ElemConverter => _elemConverter;
 
     // Using valuetask to get the task result which is equivalent to GetAwaiter().GetResult for ValueTask, this removes TaskAwaiter<TElement> rooting.
-    protected override void SetResult(Task task, object collection, int index)
+    static void SetResult(Task task, object collection, int index)
         => SetValue(collection, index, new ValueTask<TElement>((Task<TElement>)task).Result);
 
     object IElementOperations.CreateCollection(int capacity)
@@ -336,7 +344,7 @@ sealed class ArrayConverter<TElement> : CollectionConverter, IElementOperations
         {
             var task = _elemConverter.ReadAsync(reader, cancellationToken);
             if (!task.IsCompletedSuccessfully)
-                return AwaitReadTask(task.AsTask(), collection, index);
+                return CollectionConverter.AwaitReadTask(_callback, task.AsTask(), collection, index);
 
             result = task.Result;
         }
@@ -417,12 +425,12 @@ sealed class ArrayConverter<TElement> : CollectionConverter, IElementOperations
 // }
 
 // TODO benchmark this unit.
-sealed class ArrayConverterResolver<T> : PgConverterResolver<object>
+sealed class ArrayConverterResolver<T> : PgConverterResolver<T?[]>
 {
     readonly PgConverterInfo _elemConverterInfo;
     readonly ConcurrentDictionary<PgConverter<T>, ArrayConverter<T>> _converters = new(ReferenceEqualityComparer.Instance);
     PgConverter<T>? _lastElemConverter;
-    PgConverterResolution<object> _lastResolution;
+    PgConverterResolution<T?[]> _lastResolution;
 
     public ArrayConverterResolver(PgConverterInfo elemConverterInfo)
     {
@@ -430,11 +438,11 @@ sealed class ArrayConverterResolver<T> : PgConverterResolver<object>
     }
 
     // We don't need to check lower bounds here, only relevant for multi dim.
-    T? GetValueOrDefault(object? values) => values is T?[] v ? v[0] : default;
+    T? GetValueOrDefault(T?[]? values) => values is { } v ? v[0] : default;
 
     // TODO improve, much more should be cached (including array/element type id mappings).
-    public override PgConverterResolution<object> GetDefault(PgTypeId pgTypeId) => Get(Array.Empty<T?>(), pgTypeId);
-    public override PgConverterResolution<object> Get(object? values, PgTypeId? expectedPgTypeId)
+    public override PgConverterResolution<T?[]> GetDefault(PgTypeId pgTypeId) => Get(Array.Empty<T?>(), pgTypeId);
+    public override PgConverterResolution<T?[]> Get(T?[]? values, PgTypeId? expectedPgTypeId)
     {
         var valueOrDefault = GetValueOrDefault(values);
         // We get the pg type id for the first element to be able to pass it in for the subsequent, per element, calls of GetConverter.
@@ -462,10 +470,10 @@ sealed class ArrayConverterResolver<T> : PgConverterResolver<object>
             throw new InvalidOperationException("Type id mismatch.");
 
         _lastElemConverter = expectedResolution.Converter;
-        return _lastResolution = new PgConverterResolution<object>(converter, _elemConverterInfo.Options.GetArrayTypeId(expectedResolution.PgTypeId));
+        return _lastResolution = new PgConverterResolution<T?[]>(converter, _elemConverterInfo.Options.GetArrayTypeId(expectedResolution.PgTypeId));
     }
 
-    public override PgConverterResolution<object> Get(Field field)
+    public override PgConverterResolution<T?[]> Get(Field field)
     {
         throw new NotImplementedException();
     }
