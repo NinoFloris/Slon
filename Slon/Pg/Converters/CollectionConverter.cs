@@ -239,21 +239,7 @@ interface IElementOperations
     ValueTask Write(bool async, PgWriter writer, object collection, int index, CancellationToken cancellationToken = default);
 }
 
-static class CollectionConverter
-{
-    // Split out from the generic class to amortize the huge size penalty per async state machine, which would otherwise be per instantiation.
-#if !NETSTANDARD2_0
-    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
-#endif
-    public static async ValueTask AwaitReadTask(Action<Task,object,int> callback, Task task, object collection, int index)
-    {
-        await task;
-        callback(task, collection, index);
-        // SetResult(task, collection, index);
-    }
-}
-
-abstract class CollectionConverter<T> : PgStreamingConverter<T> where T : class, ICollection
+abstract class CollectionConverter<T> : PgStreamingConverter<T> where T : class
 {
     readonly PgArrayConverter _pgArrayConverter;
 
@@ -265,7 +251,7 @@ abstract class CollectionConverter<T> : PgStreamingConverter<T> where T : class,
     internal PgTypeId ElemTypeId => _pgArrayConverter.ElemTypeId;
 
     protected abstract PgConverter ElemConverter { get; }
-    // protected abstract void SetResult(Task task, object collection, int index);
+    protected abstract void SetResult(Task task, object collection, int index);
 
     // We only support binary arrays for now.
     public override bool CanConvert(DataFormat format) => format is DataFormat.Binary && ElemConverter.CanConvert(format);
@@ -284,13 +270,20 @@ abstract class CollectionConverter<T> : PgStreamingConverter<T> where T : class,
     public override ValueTask WriteAsync(PgWriter writer, T values, CancellationToken cancellationToken = default)
         => _pgArrayConverter.Write(async: true, writer, values, cancellationToken);
 
-
+    // Split out from the generic class to amortize the huge size penalty per async state machine, which would otherwise be per instantiation.
+#if !NETSTANDARD2_0
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
+#endif
+    protected async ValueTask AwaitReadTask(Task task, object collection, int index)
+    {
+        await task;
+        SetResult(task, collection, index);
+    }
 }
 
 sealed class ArrayConverter<TElement> : CollectionConverter<TElement?[]>, IElementOperations
 {
     readonly PgConverter<TElement> _elemConverter;
-    static readonly Action<Task, object, int> _callback = SetResult;
 
     public ArrayConverter(PgConverterResolution<TElement> elemResolution, ArrayPool<(ValueSize, object?)> statePool, int pgLowerBound = 1)
         : base(elemResolution.ToConverterResolution(), statePool, pgLowerBound)
@@ -314,7 +307,7 @@ sealed class ArrayConverter<TElement> : CollectionConverter<TElement?[]>, IEleme
     protected override PgConverter ElemConverter => _elemConverter;
 
     // Using valuetask to get the task result which is equivalent to GetAwaiter().GetResult for ValueTask, this removes TaskAwaiter<TElement> rooting.
-    static void SetResult(Task task, object collection, int index)
+    protected override void SetResult(Task task, object collection, int index)
         => SetValue(collection, index, new ValueTask<TElement>((Task<TElement>)task).Result);
 
     object IElementOperations.CreateCollection(int capacity)
@@ -344,7 +337,7 @@ sealed class ArrayConverter<TElement> : CollectionConverter<TElement?[]>, IEleme
         {
             var task = _elemConverter.ReadAsync(reader, cancellationToken);
             if (!task.IsCompletedSuccessfully)
-                return CollectionConverter.AwaitReadTask(_callback, task.AsTask(), collection, index);
+                return AwaitReadTask(task.AsTask(), collection, index);
 
             result = task.Result;
         }
