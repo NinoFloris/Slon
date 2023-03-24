@@ -258,8 +258,8 @@ abstract class CollectionConverter<T> : PgStreamingConverter<T> where T : class
 
     public override T? Read(PgReader reader) => (T?)_pgArrayConverter.Read(async: false, reader, 1).Result;
 
-    public override ValueTask<T?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
-        => Unsafe.As<ValueTask<object?>, ValueTask<T?>>(ref Unsafe.AsRef(_pgArrayConverter.Read(async: true, reader, 1, cancellationToken)));
+    public override Task<T?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
+        => Unsafe.As<Task<T?>>(_pgArrayConverter.Read(async: true, reader, 1, cancellationToken));
 
     public override ValueSize GetSize(ref SizeContext context, T values)
         => _pgArrayConverter.GetSize(ref context, values);
@@ -336,8 +336,8 @@ sealed class ArrayConverter<TElement> : CollectionConverter<TElement?[]>, IEleme
         else
         {
             var task = _elemConverter.ReadAsync(reader, cancellationToken);
-            if (!task.IsCompletedSuccessfully)
-                return AwaitReadTask(task.AsTask(), collection, index);
+            if (task.Status is not TaskStatus.RanToCompletion)
+                return AwaitReadTask(task, collection, index);
 
             result = task.Result;
         }

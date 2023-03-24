@@ -16,7 +16,7 @@ sealed class ReadOnlyMemoryTextConverter: PgStreamingConverter<ReadOnlyMemory<ch
     public override ReadOnlyMemory<char> Read(PgReader reader)
         => ReadCore(async: false, reader).GetAwaiter().GetResult();
 
-    public override ValueTask<ReadOnlyMemory<char>> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
+    public override Task<ReadOnlyMemory<char>> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
         => ReadCore(async: true, reader);
 
     public override ValueSize GetSize(ref SizeContext context, ReadOnlyMemory<char> value)
@@ -41,7 +41,7 @@ sealed class ReadOnlyMemoryTextConverter: PgStreamingConverter<ReadOnlyMemory<ch
 
     public override bool CanConvert(DataFormat format) => format is DataFormat.Binary or DataFormat.Text;
 
-    ValueTask<ReadOnlyMemory<char>> ReadCore(bool async, PgReader reader)
+    Task<ReadOnlyMemory<char>> ReadCore(bool async, PgReader reader)
     {
         var bytes = reader.ReadExact(reader.ByteCount);
         var rentedArray = ArrayPool<char>.Shared.Rent(_textEncoding.GetMaxCharCount(reader.ByteCount));
@@ -50,7 +50,7 @@ sealed class ReadOnlyMemoryTextConverter: PgStreamingConverter<ReadOnlyMemory<ch
         var arrayValue = new char[count];
         Array.Copy(rentedArray, arrayValue, count);
         ArrayPool<char>.Shared.Return(rentedArray);
-        return new(arrayValue);
+        return Task.FromResult<ReadOnlyMemory<char>>(arrayValue.AsMemory());
     }
 
     async ValueTask WriteCore(bool async, PgWriter writer, ReadOnlyMemory<char> value, Encoding encoding, CancellationToken cancellationToken)
@@ -81,11 +81,11 @@ sealed class StringTextConverter : ValueConverter<string, ReadOnlyMemory<char>>
     public override string? Read(PgReader reader)
         => ReadCore(async: false, reader).GetAwaiter().GetResult();
 
-    public override ValueTask<string?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
+    public override Task<string?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
         => ReadCore(async: true, reader, cancellationToken);
 
-    ValueTask<string?> ReadCore(bool async, PgReader reader, CancellationToken cancellationToken = default)
-        => new(_textEncoding.GetString(reader.ReadExact(reader.ByteCount)));
+    Task<string?> ReadCore(bool async, PgReader reader, CancellationToken cancellationToken = default)
+        => Task.FromResult<string?>(_textEncoding.GetString(reader.ReadExact(reader.ByteCount)));
 }
 
 sealed class CharArrayTextConverter : ValueConverter<char[], ReadOnlyMemory<char>>

@@ -34,12 +34,12 @@ abstract class ValueConverter<T, TEffective>: PgStreamingConverter<T>
         => ConvertFrom(_effectiveConverter.Read(reader));
 
     // NOTE: Not sealed as reads often need some implementation adjustment beyond a simple conversion to be optimally efficient.
-    public override ValueTask<T?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
+    public override Task<T?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
     {
         var task = _effectiveConverter.ReadAsync(reader, cancellationToken);
-        return task.IsCompletedSuccessfully ? new(ConvertFrom(task.GetAwaiter().GetResult())) : Core(task);
+        return task.Status is TaskStatus.RanToCompletion ? Task.FromResult(ConvertFrom(task.GetAwaiter().GetResult())) : Core(task);
 
-        async ValueTask<T?> Core(ValueTask<TEffective?> task) => ConvertFrom(await task);
+        async Task<T?> Core(Task<TEffective?> task) => ConvertFrom(await task);
     }
 
     public sealed override void Write(PgWriter writer, [DisallowNull]T value)
