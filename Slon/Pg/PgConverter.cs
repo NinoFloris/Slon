@@ -137,7 +137,7 @@ abstract class PgConverter<T> : PgConverter
 abstract class PgStreamingConverter<T> : PgConverter<T>
 {
     protected PgStreamingConverter(bool extendedDbNullPredicate = false) : base(extendedDbNullPredicate) { }
-    public abstract Task<T> ReadAsync(PgReader reader, CancellationToken cancellationToken = default);
+    public abstract ValueTask<T> ReadAsync(PgReader reader, CancellationToken cancellationToken = default);
     public abstract ValueTask WriteAsync(PgWriter writer, [DisallowNull]T value, CancellationToken cancellationToken = default);
 
     private protected sealed override ValueTask<object?> BoxResult(Task task) => new(new ValueTask<object?>((Task<T>)task).Result);
@@ -147,10 +147,10 @@ abstract class PgStreamingConverter<T> : PgConverter<T>
             return new(Read(reader));
 
         var task = ReadAsync(reader, cancellationToken);
-        if (task.Status is TaskStatus.RanToCompletion)
+        if (task.IsCompletedSuccessfully)
             return new(task.Result);
 
-        return AwaitReadTask(task);
+        return AwaitReadTask(task.AsTask());
     }
 
     private protected sealed override ValueTask WriteAsObject(bool async, PgWriter writer, object value, CancellationToken cancellationToken = default)
@@ -165,12 +165,12 @@ abstract class PgStreamingConverter<T> : PgConverter<T>
 
 static class PgConverterOfTExtensions
 {
-    public static Task<T> ReadAsync<T>(this PgConverter<T> converter, PgReader reader, CancellationToken cancellationToken)
+    public static ValueTask<T> ReadAsync<T>(this PgConverter<T> converter, PgReader reader, CancellationToken cancellationToken)
     {
         if (converter is PgStreamingConverter<T> asyncConverter)
             return asyncConverter.ReadAsync(reader, cancellationToken);
 
-        return Task.FromResult(converter.Read(reader));
+        return new(converter.Read(reader));
     }
 
     public static ValueTask WriteAsync<T>(this PgConverter<T> converter, PgWriter writer, [DisallowNull]T value, CancellationToken cancellationToken)

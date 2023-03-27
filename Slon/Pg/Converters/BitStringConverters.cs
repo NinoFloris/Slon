@@ -31,7 +31,7 @@ sealed class BitArrayBitStringConverter : PgStreamingConverter<BitArray>
         _arrayPool.Return(array);
     }
 
-    public override Task<BitArray> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
+    public override ValueTask<BitArray> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
     {
         throw new NotImplementedException();
     }
@@ -110,7 +110,7 @@ sealed class PolymorphicBitStringConverterResolver : PolymorphicReadConverterRes
                 ? BoolBitStringConverter.ReadValue(reader)
                 : BitArrayBitStringConverter.ReadValue(reader);
 
-        public override Task<object> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
-            => Task.FromResult(Read(reader));
+        public override ValueTask<object> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
+            => new(Read(reader));
     }
 }
