@@ -18,8 +18,8 @@ class PgConverterInfo
         Options = options;
         Converter = converter;
         PgTypeId = options.GetCanonicalTypeId(pgTypeId);
-        _canBinaryConvert = converter.CanConvert(DataFormat.Binary);
-        _canTextConvert = converter.CanConvert(DataFormat.Text);
+        _canBinaryConvert = converter.CanConvert(DataFormat.Binary, out _);
+        _canTextConvert = converter.CanConvert(DataFormat.Text, out _);
     }
 
     PgConverterInfo(PgConverterOptions options, Type type, PgConverterResolution? resolution, bool isBoxing = false)
@@ -34,8 +34,8 @@ class PgConverterInfo
                 throw new ArgumentException("Given type id is not in canonical form. Make sure ConverterResolver implementations close over canonical ids, e.g. by calling options.GetCanonicalTypeId(pgTypeId) on the constructor arguments.", nameof(PgTypeId));
 
             PgTypeId = res.PgTypeId;
-            _canBinaryConvert = res.Converter.CanConvert(DataFormat.Binary);
-            _canTextConvert = res.Converter.CanConvert(DataFormat.Text);
+            _canBinaryConvert = res.Converter.CanConvert(DataFormat.Binary, out _);
+            _canTextConvert = res.Converter.CanConvert(DataFormat.Text, out _);
         }
     }
 
@@ -186,11 +186,11 @@ class PgConverterInfo
         // If we don't have a converter stored we must ask the retrieved one through virtual calls.
         => preferredFormat switch
         {
-            DataFormat.Binary when (HasCachedInfo ? _canBinaryConvert : converter.CanConvert(DataFormat.Binary))
+            DataFormat.Binary when (HasCachedInfo ? _canBinaryConvert : converter.CanConvert(DataFormat.Binary, out _))
                 => DataFormat.Binary,
-            DataFormat.Text when (HasCachedInfo ? !_canTextConvert : !converter.CanConvert(DataFormat.Text))
+            DataFormat.Text when (HasCachedInfo ? !_canTextConvert : !converter.CanConvert(DataFormat.Text, out _))
                 => DataFormat.Binary,
-            _ => (HasCachedInfo ? _canBinaryConvert : converter.CanConvert(DataFormat.Binary)) ? DataFormat.Binary : DataFormat.Text
+            _ => (HasCachedInfo ? _canBinaryConvert : converter.CanConvert(DataFormat.Binary, out _)) ? DataFormat.Binary : DataFormat.Text
         };
 
     [MethodImpl(MethodImplOptions.NoInlining)]

@@ -39,7 +39,11 @@ sealed class ReadOnlyMemoryTextConverter: PgStreamingConverter<ReadOnlyMemory<ch
     public override ValueTask WriteAsync(PgWriter writer, ReadOnlyMemory<char> value, CancellationToken cancellationToken = default)
         => WriteCore(async: true, writer, value, _textEncoding, cancellationToken);
 
-    public override bool CanConvert(DataFormat format) => format is DataFormat.Binary or DataFormat.Text;
+    public override bool CanConvert(DataFormat format, out bool fixedSize)
+    {
+        fixedSize = false;
+        return format is DataFormat.Binary or DataFormat.Text;
+    }
 
     Task<ReadOnlyMemory<char>> ReadCore(bool async, PgReader reader)
     {
@@ -78,14 +82,14 @@ sealed class StringTextConverter : ValueConverter<string, ReadOnlyMemory<char>>
     protected override string ConvertFrom(ReadOnlyMemory<char> value) => throw new NotSupportedException();
     protected override ReadOnlyMemory<char> ConvertTo(string value) => value.AsMemory();
 
-    public override string? Read(PgReader reader)
+    public override string Read(PgReader reader)
         => ReadCore(async: false, reader).GetAwaiter().GetResult();
 
-    public override Task<string?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
+    public override Task<string> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
         => ReadCore(async: true, reader, cancellationToken);
 
-    Task<string?> ReadCore(bool async, PgReader reader, CancellationToken cancellationToken = default)
-        => Task.FromResult<string?>(_textEncoding.GetString(reader.ReadExact(reader.ByteCount)));
+    Task<string> ReadCore(bool async, PgReader reader, CancellationToken cancellationToken = default)
+        => Task.FromResult(_textEncoding.GetString(reader.ReadExact(reader.ByteCount)));
 }
 
 sealed class CharArrayTextConverter : ValueConverter<char[], ReadOnlyMemory<char>>
@@ -117,7 +121,11 @@ sealed class CharTextConverter : PgBufferedConverter<char>
     readonly Encoding _textEncoding;
     public CharTextConverter(PgConverterOptions options) => _textEncoding = options.TextEncoding;
 
-    public override bool CanConvert(DataFormat format) => format is DataFormat.Binary or DataFormat.Text;
+    public override bool CanConvert(DataFormat format, out bool fixedSize)
+    {
+        fixedSize = format is DataFormat.Binary;
+        return format is DataFormat.Binary or DataFormat.Text;
+    }
 
     protected override char ReadCore(PgReader reader)
     {

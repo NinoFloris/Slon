@@ -29,10 +29,13 @@ abstract class PgConverter
         => DbNullPredicateKind = GetDbNullPredicateForType(extendedDbNullPredicate ? DbNullPredicate.Extended : null, TypeToConvert);
 
     public bool IsDbNullable => DbNullPredicateKind is not DbNullPredicate.None;
-    public virtual bool CanConvert(DataFormat format) => format is DataFormat.Binary;
 
-    /// This method returns true when GetSize can be called with a default value for the type and the given format without throwing.
-    internal virtual bool HasFixedSize(DataFormat format) => false;
+    /// FixedSize is true when GetSize can be called with a default value for the type and the given format without throwing.
+    public virtual bool CanConvert(DataFormat format, out bool fixedSize)
+    {
+        fixedSize = false;
+        return format is DataFormat.Binary;
+    }
 
     internal object? ReadAsObject(PgReader reader)
         => ReadAsObject(async: false, reader).GetAwaiter().GetResult();
@@ -102,13 +105,12 @@ abstract class PgConverter<T> : PgConverter
 {
     private protected PgConverter(bool extendedDbNullPredicate) : base(extendedDbNullPredicate) { }
 
-    protected virtual bool IsDbNull(T? value)
-        => DbNullPredicateKind is DbNullPredicate.PolymorphicNull ? value is DBNull : throw new NotImplementedException();
+    protected virtual bool IsDbNull(T? value) => throw new NotImplementedException();
 
     public bool IsDbNullValue([NotNullWhen(false)] T? value)
-        => value is null || (DbNullPredicateKind is not (DbNullPredicate.None or DbNullPredicate.Null) && IsDbNull(value));
+        => value is null || DbNullPredicateKind is DbNullPredicate.PolymorphicNull && value is DBNull || DbNullPredicateKind is DbNullPredicate.Extended && IsDbNull(value);
 
-    public abstract T? Read(PgReader reader);
+    public abstract T Read(PgReader reader);
     public abstract ValueSize GetSize(ref SizeContext context, [DisallowNull]T value);
     public abstract void Write(PgWriter writer, [DisallowNull]T value);
 
@@ -135,7 +137,7 @@ abstract class PgConverter<T> : PgConverter
 abstract class PgStreamingConverter<T> : PgConverter<T>
 {
     protected PgStreamingConverter(bool extendedDbNullPredicate = false) : base(extendedDbNullPredicate) { }
-    public abstract Task<T?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default);
+    public abstract Task<T> ReadAsync(PgReader reader, CancellationToken cancellationToken = default);
     public abstract ValueTask WriteAsync(PgWriter writer, [DisallowNull]T value, CancellationToken cancellationToken = default);
 
     private protected sealed override ValueTask<object?> BoxResult(Task task) => new(new ValueTask<object?>((Task<T>)task).Result);
@@ -163,7 +165,7 @@ abstract class PgStreamingConverter<T> : PgConverter<T>
 
 static class PgConverterOfTExtensions
 {
-    public static Task<T?> ReadAsync<T>(this PgConverter<T> converter, PgReader reader, CancellationToken cancellationToken)
+    public static Task<T> ReadAsync<T>(this PgConverter<T> converter, PgReader reader, CancellationToken cancellationToken)
     {
         if (converter is PgStreamingConverter<T> asyncConverter)
             return asyncConverter.ReadAsync(reader, cancellationToken);
@@ -184,10 +186,11 @@ static class PgConverterOfTExtensions
 abstract class PgBufferedConverter<T> : PgConverter<T>
 {
     protected PgBufferedConverter(bool extendedDbNullPredicate = false) : base(extendedDbNullPredicate) { }
-    internal sealed override bool HasFixedSize(DataFormat format) => format is DataFormat.Binary;
 
-    protected abstract T? ReadCore(PgReader reader);
-    public sealed override T? Read(PgReader reader)
+    public override bool CanConvert(DataFormat format, out bool fixedSize) => fixedSize = format is DataFormat.Binary;
+
+    protected abstract T ReadCore(PgReader reader);
+    public sealed override T Read(PgReader reader)
     {
         if (reader.Remaining < reader.ByteCount)
             ThrowIORequired();

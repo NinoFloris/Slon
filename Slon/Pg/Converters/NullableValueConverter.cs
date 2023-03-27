@@ -21,7 +21,7 @@ sealed class NullableValueConverter<T> : PgBufferedConverter<T?> where T : struc
     protected override bool IsDbNull(T? value)
         => _effectiveConverter.IsDbNullValue(ConvertTo(value));
 
-    public override bool CanConvert(DataFormat format) => _effectiveConverter.CanConvert(format);
+    public override bool CanConvert(DataFormat format, out bool fixedSize) => _effectiveConverter.CanConvert(format, out fixedSize);
 
     public override ValueSize GetSize(ref SizeContext context, [DisallowNull]T? value)
         => _effectiveConverter.GetSize(ref context, ConvertTo(value));

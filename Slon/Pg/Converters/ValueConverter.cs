@@ -14,9 +14,8 @@ abstract class ValueConverter<T, TEffective>: PgStreamingConverter<T>
         => _effectiveConverter = effectiveConverter;
 
     protected PgConverter<TEffective> EffectiveConverter => _effectiveConverter;
-    protected abstract T? ConvertFrom(TEffective? value);
-    [return: NotNull]
-    protected abstract TEffective ConvertTo([DisallowNull]T value);
+    protected abstract T ConvertFrom(TEffective value);
+    protected abstract TEffective ConvertTo(T value);
 
     protected sealed override bool IsDbNull(T? value)
     {
@@ -24,43 +23,42 @@ abstract class ValueConverter<T, TEffective>: PgStreamingConverter<T>
         return _effectiveConverter.IsDbNullValue(ConvertTo(value));
     }
 
-    public sealed override bool CanConvert(DataFormat format) => _effectiveConverter.CanConvert(format);
+    public sealed override bool CanConvert(DataFormat format, out bool fixedSize) => _effectiveConverter.CanConvert(format, out fixedSize);
 
     public sealed override ValueSize GetSize(ref SizeContext context, [DisallowNull]T value)
-        => _effectiveConverter.GetSize(ref context, ConvertTo(value));
+        => _effectiveConverter.GetSize(ref context, ConvertTo(value)!);
 
     // NOTE: Not sealed as reads often need some implementation adjustment beyond a simple conversion to be optimally efficient.
-    public override T? Read(PgReader reader)
+    public override T Read(PgReader reader)
         => ConvertFrom(_effectiveConverter.Read(reader));
 
     // NOTE: Not sealed as reads often need some implementation adjustment beyond a simple conversion to be optimally efficient.
-    public override Task<T?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
+    public override Task<T> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
     {
         var task = _effectiveConverter.ReadAsync(reader, cancellationToken);
         return task.Status is TaskStatus.RanToCompletion ? Task.FromResult(ConvertFrom(task.GetAwaiter().GetResult())) : Core(task);
 
-        async Task<T?> Core(Task<TEffective?> task) => ConvertFrom(await task);
+        async Task<T> Core(Task<TEffective> task) => ConvertFrom(await task);
     }
 
     public sealed override void Write(PgWriter writer, [DisallowNull]T value)
-        => _effectiveConverter.Write(writer, ConvertTo(value));
+        => _effectiveConverter.Write(writer, ConvertTo(value)!);
 
     public sealed override ValueTask WriteAsync(PgWriter writer, [DisallowNull]T value, CancellationToken cancellationToken = default)
-        => _effectiveConverter.WriteAsync(writer, ConvertTo(value), cancellationToken);
+        => _effectiveConverter.WriteAsync(writer, ConvertTo(value)!, cancellationToken);
 }
 
 sealed class LambdaValueConverter<T, TEffective> : ValueConverter<T, TEffective>
 {
-    readonly Func<TEffective?, T?> _from;
+    readonly Func<TEffective, T> _from;
     readonly Func<T, TEffective> _to;
 
-    public LambdaValueConverter(Func<TEffective?, T?> from, Func<T, TEffective> to, PgConverter<TEffective> effectiveConverter) : base(effectiveConverter)
+    public LambdaValueConverter(Func<TEffective, T> from, Func<T, TEffective> to, PgConverter<TEffective> effectiveConverter) : base(effectiveConverter)
     {
         _from = from;
         _to = to;
     }
 
-    protected override T? ConvertFrom(TEffective? value) => _from(value);
-    [return: NotNull]
-    protected override TEffective ConvertTo([DisallowNull]T value) => _to(value)!;
+    protected override T ConvertFrom(TEffective value) => _from(value);
+    protected override TEffective ConvertTo(T value) => _to(value)!;
 }
