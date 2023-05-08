@@ -98,7 +98,7 @@ abstract class PgConverter
         Extended
     }
 
-    private protected static void ThrowIORequired() => throw new InvalidOperationException("HasFixedSize=true for binary not respected, expected no IO to be required.");
+    private protected static void ThrowIORequired() => throw new InvalidOperationException("Fixed sizedness for format not respected, expected no IO to be required.");
 }
 
 abstract class PgConverter<T> : PgConverter
@@ -203,7 +203,7 @@ abstract class PgBufferedConverter<T> : PgConverter<T>
     // public override void Write(PgWriter writer, T value)
     // {
     //     var state = (object?)null;
-    //     if (writer.Remaining < GetSize(new(writer.Format, 0), value, ref state).Value)
+    //     if (writer.Remaining < GetSize(default, value, ref state).Value)
     //         ThrowIORequired();
     //
     //     WriteCore(writer, value);
