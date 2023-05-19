@@ -263,8 +263,8 @@ class AnsiSqlConverterInfoResolver: IPgConverterInfoResolver
         var mappings = new ConverterInfoMappingCollection();
         AddInfos(mappings);
         var elementTypeCount = mappings.Items.Count;
-        AddArrayInfos(mappings);
-        Debug.Assert(elementTypeCount * 2 == mappings.Items.Count);
+        // AddArrayInfos(mappings);
+        // Debug.Assert(elementTypeCount * 2 == mappings.Items.Count);
         _mappings = mappings.Items.ToArray();
     }
 
