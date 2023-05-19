@@ -67,7 +67,7 @@ readonly struct ConverterInfoMappingCollection
         {
             var baseTypeInfo = elementMapping.Factory(mapping, options);
             return baseTypeInfo.ToComposedConverterInfo(
-                    new ArrayConverter<TElement>(baseTypeInfo.GetResolution<TElement>(default, elementMapping.DataTypeName),
+                    new ArrayConverter<TElement>(baseTypeInfo.GetResolutionAsObject(null, elementMapping.DataTypeName),
                         baseTypeInfo.Options.GetArrayPool<(ValueSize, object?)>()),
                     baseTypeInfo.Options.GetArrayTypeId(baseTypeInfo.PgTypeId.GetValueOrDefault()));
         }
@@ -120,18 +120,18 @@ readonly struct ConverterInfoMappingCollection
         {
             var elementInfo = elementMapping.Factory(mapping, options);
             return elementInfo.ToComposedConverterInfo(
-                    new ArrayConverter<TElement>(elementInfo.GetResolution<TElement>(default, elementMapping.DataTypeName),
-                        elementInfo.Options.GetArrayPool<(ValueSize, object?)>()),
-                    elementInfo.Options.GetArrayTypeId(elementInfo.PgTypeId.GetValueOrDefault()));
+                    new ArrayConverter<TElement>(elementInfo.GetResolutionAsObject(null, elementMapping.DataTypeName),
+                        options.GetArrayPool<(ValueSize, object?)>()),
+                    options.GetArrayTypeId(elementInfo.PgTypeId.GetValueOrDefault()));
         }
 
         PgConverterInfo CreateNullableArrayInfo(ConverterInfoMapping mapping, PgConverterOptions options)
         {
             var elementInfo = nullableElementMapping.Factory(mapping, options);
             return elementInfo.ToComposedConverterInfo(
-                    new ArrayConverter<TElement?>(elementInfo.GetResolution<TElement?>(default, elementMapping.DataTypeName),
-                        elementInfo.Options.GetArrayPool<(ValueSize, object?)>()),
-                    elementInfo.Options.GetArrayTypeId(elementInfo.PgTypeId.GetValueOrDefault()), isDefault: false);
+                    new ArrayConverter<TElement?>(elementInfo.GetResolutionAsObject(null, elementMapping.DataTypeName),
+                        options.GetArrayPool<(ValueSize, object?)>()),
+                    options.GetArrayTypeId(elementInfo.PgTypeId.GetValueOrDefault()), isDefault: false);
         }
 
         PgConverterInfo CreatePolymorphicArrayInfo(ConverterInfoMapping mapping, PgConverterOptions options)

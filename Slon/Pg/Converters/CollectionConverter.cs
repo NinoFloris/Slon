@@ -286,10 +286,10 @@ sealed class ArrayConverter<TElement> : CollectionConverter<TElement?[]>, IEleme
 {
     readonly PgConverter<TElement> _elemConverter;
 
-    public ArrayConverter(PgConverterResolution<TElement> elemResolution, ArrayPool<(ValueSize, object?)> statePool, int pgLowerBound = 1)
-        : base(elemResolution.ToConverterResolution(), statePool, pgLowerBound)
+    public ArrayConverter(PgConverterResolution elemResolution, ArrayPool<(ValueSize, object?)> statePool, int pgLowerBound = 1)
+        : base(elemResolution, statePool, pgLowerBound)
     {
-        _elemConverter = elemResolution.Converter;
+        _elemConverter = (PgConverter<TElement>)elemResolution.Converter;
     }
 
     // We only support binary arrays for now.
