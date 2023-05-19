@@ -48,19 +48,42 @@ readonly struct ConverterInfoMappingCollection
         _items.Add(new ConverterInfoMapping(typeof(T), dataTypeName, isDefault, createInfo));
     }
 
-    public void AddArrayType<TElement>(DataTypeName elementDataTypeName) where TElement : class
+    ConverterInfoMapping? TryFindMapping(Type type, DataTypeName dataTypeName)
     {
-        AddArrayType<TElement>(_items.Single(x => x.Type == typeof(TElement) && x.DataTypeName == elementDataTypeName));
+        ConverterInfoMapping? elementMapping = null;
+        foreach (var mapping in _items)
+            if (mapping.Type == type && mapping.DataTypeName == dataTypeName)
+            {
+                elementMapping = mapping;
+                break;
+            }
+
+        return elementMapping;
     }
+
+    ConverterInfoMapping FindMapping(Type type, DataTypeName dataTypeName)
+    {
+        if (TryFindMapping(type, dataTypeName) is not { } mapping)
+            throw new InvalidOperationException("Could not find mappings for " + dataTypeName);
+
+        return mapping;
+    }
+
+    // Helper to eliminate generic display class duplication.
+    static Func<ConverterInfoMapping, PgConverterOptions, PgConverterInfo> CreateComposedFactory(ConverterInfoMapping innerMapping, Func<PgConverterInfo, PgConverter> mapper) =>
+        (mapping, options) =>
+        {
+            var info = innerMapping.Factory(innerMapping, options);
+            return info.ToComposedConverterInfo(mapper(info), mapping.DataTypeName, isDefault: mapping.IsDefault);
+        };
+
+    public void AddArrayType<TElement>(DataTypeName elementDataTypeName) where TElement : class
+        => AddArrayType<TElement>(FindMapping(typeof(TElement), elementDataTypeName));
 
     public void AddArrayType<TElement>(ConverterInfoMapping elementMapping) where TElement: class
     {
         var arrayDataTypeName = elementMapping.DataTypeName.ToArrayName();
         _items.Add(new ConverterInfoMapping(typeof(TElement[]), arrayDataTypeName, elementMapping.IsDefault, CreateArrayInfo));
-        if (typeof(TElement).IsValueType)
-        {
-            _items.Add(new ConverterInfoMapping(typeof(object), arrayDataTypeName, elementMapping.IsDefault, CreateArrayInfo));
-        }
         // _mappings.Add(new ConverterInfoMapping(typeof(List<TElement>), arrayDataTypeName, baseMapping.IsDefaultMapping, CreateListInfo));
 
         PgConverterInfo CreateArrayInfo(ConverterInfoMapping mapping, PgConverterOptions options)
@@ -80,75 +103,51 @@ readonly struct ConverterInfoMappingCollection
 
     public void AddStructType<T>(DataTypeName dataTypeName, Func<ConverterInfoMapping, PgConverterOptions, PgConverterInfo> createInfo, bool isDefault = false) where T : struct
     {
-        _items.Add(new ConverterInfoMapping(typeof(T), dataTypeName, isDefault, createInfo));
-        _items.Add(new ConverterInfoMapping(typeof(T?), dataTypeName, isDefault, (mapping, options) =>
-        {
-            var info = createInfo(mapping, options);
-            return info.ToComposedConverterInfo(new NullableValueConverter<T>((PgBufferedConverter<T>)info.GetResolution<T>(default).Converter), dataTypeName);
-        }));
+        ConverterInfoMapping mapping;
+        _items.Add(mapping = new ConverterInfoMapping(typeof(T), dataTypeName, isDefault, createInfo));
+        _items.Add(new ConverterInfoMapping(typeof(T?), dataTypeName, isDefault,
+            CreateComposedFactory(mapping, static info => new NullableValueConverter<T>((PgBufferedConverter<T>)info.GetResolutionAsObject(null).Converter))));
     }
 
     public void AddStreamingStructType<T>(DataTypeName dataTypeName, Func<ConverterInfoMapping, PgConverterOptions, PgConverterInfo> createInfo, bool isDefault = false) where T : struct
     {
-        _items.Add(new ConverterInfoMapping(typeof(T), dataTypeName, isDefault, createInfo));
-        _items.Add(new ConverterInfoMapping(typeof(T?), dataTypeName, isDefault, (mapping, options) =>
-        {
-            var info = createInfo(mapping, options);
-            return info.ToComposedConverterInfo(new StreamingNullableValueConverter<T>((PgStreamingConverter<T>)info.GetResolution<T>(default).Converter), dataTypeName);
-        }));
+        ConverterInfoMapping mapping;
+        _items.Add(mapping = new ConverterInfoMapping(typeof(T), dataTypeName, isDefault, createInfo));
+        _items.Add(new ConverterInfoMapping(typeof(T?), dataTypeName, isDefault,
+            CreateComposedFactory(mapping, static info => new StreamingNullableValueConverter<T>((PgStreamingConverter<T>)info.GetResolutionAsObject(null).Converter))));
     }
 
     public void AddStructArrayType<TElement>(DataTypeName elementDataTypeName) where TElement: struct
-    {
-        AddStructArrayType<TElement>(
-            _items.Single(x => x.Type == typeof(TElement) && x.DataTypeName == elementDataTypeName),
-            _items.Single(x => x.Type == typeof(TElement?) && x.DataTypeName == elementDataTypeName));
-    }
+        => AddStructArrayType<TElement>(FindMapping(typeof(TElement), elementDataTypeName), FindMapping(typeof(TElement?), elementDataTypeName));
 
     public void AddStructArrayType<TElement>(ConverterInfoMapping elementMapping, ConverterInfoMapping nullableElementMapping) where TElement : struct
     {
         var arrayDataTypeName = elementMapping.DataTypeName.ToArrayName();
         ConverterInfoMapping arrayMapping;
         ConverterInfoMapping nullableArrayMapping;
-        _items.Add(arrayMapping = new ConverterInfoMapping(typeof(TElement[]), arrayDataTypeName, elementMapping.IsDefault, CreateArrayInfo));
-        _items.Add(nullableArrayMapping = new ConverterInfoMapping(typeof(TElement?[]), arrayDataTypeName, isDefault: false, CreateNullableArrayInfo));
-        _items.Add(new ConverterInfoMapping(typeof(object), arrayDataTypeName, isDefault: false, CreatePolymorphicArrayInfo));
+        _items.Add(arrayMapping = new ConverterInfoMapping(typeof(TElement[]), arrayDataTypeName, elementMapping.IsDefault,
+            CreateComposedFactory(elementMapping, static info =>
+                new ArrayConverter<TElement>(info.GetResolutionAsObject(null), info.Options.GetArrayPool<(ValueSize, object?)>()))));
+        _items.Add(nullableArrayMapping = new ConverterInfoMapping(typeof(TElement?[]), arrayDataTypeName, isDefault: false,
+            CreateComposedFactory(nullableElementMapping, static info =>
+                new ArrayConverter<TElement?>(info.GetResolutionAsObject(null), info.Options.GetArrayPool<(ValueSize, object?)>()))));
+        _items.Add(new ConverterInfoMapping(typeof(object), arrayDataTypeName, isDefault: false, CreatePolymorphicArrayInfo(arrayMapping, nullableArrayMapping)));
 
         // _mappings.Add(new ConverterInfoMapping(typeof(List<TElement>), arrayDataTypeName, baseMapping.IsDefaultMapping, CreateListInfo));
-
-        PgConverterInfo CreateArrayInfo(ConverterInfoMapping mapping, PgConverterOptions options)
-        {
-            var elementInfo = elementMapping.Factory(mapping, options);
-            return elementInfo.ToComposedConverterInfo(
-                    new ArrayConverter<TElement>(elementInfo.GetResolutionAsObject(null, elementMapping.DataTypeName),
-                        options.GetArrayPool<(ValueSize, object?)>()),
-                    options.GetArrayTypeId(elementInfo.PgTypeId.GetValueOrDefault()));
-        }
-
-        PgConverterInfo CreateNullableArrayInfo(ConverterInfoMapping mapping, PgConverterOptions options)
-        {
-            var elementInfo = nullableElementMapping.Factory(mapping, options);
-            return elementInfo.ToComposedConverterInfo(
-                    new ArrayConverter<TElement?>(elementInfo.GetResolutionAsObject(null, elementMapping.DataTypeName),
-                        options.GetArrayPool<(ValueSize, object?)>()),
-                    options.GetArrayTypeId(elementInfo.PgTypeId.GetValueOrDefault()), isDefault: false);
-        }
-
-        PgConverterInfo CreatePolymorphicArrayInfo(ConverterInfoMapping mapping, PgConverterOptions options)
-        {
-            return options.ArrayNullabilityMode switch
-            {
-                ArrayNullabilityMode.Never => arrayMapping.Factory(mapping, options).ToObjectConverterInfo(isDefault: false),
-                ArrayNullabilityMode.Always => nullableArrayMapping.Factory(mapping, options).ToObjectConverterInfo(isDefault: false),
-                ArrayNullabilityMode.PerInstance => arrayMapping.Factory(mapping, options).ToComposedConverterInfo(
-                    new PolymorphicCollectionConverter(
-                        arrayMapping.Factory(mapping, options).GetResolutionAsObject(null, elementMapping.DataTypeName).Converter,
-                        nullableElementMapping.Factory(mapping, options).GetResolutionAsObject(null, elementMapping.DataTypeName).Converter
-                    ), mapping.DataTypeName, isDefault: false),
-                _ => throw new ArgumentOutOfRangeException()
-            };
-        }
     }
+
+    static Func<ConverterInfoMapping, PgConverterOptions, PgConverterInfo> CreatePolymorphicArrayInfo(ConverterInfoMapping arrayMapping, ConverterInfoMapping nullableArrayMapping) =>
+        (mapping, options) => options.ArrayNullabilityMode switch
+        {
+            ArrayNullabilityMode.Never => arrayMapping.Factory(mapping, options).ToObjectConverterInfo(isDefault: false),
+            ArrayNullabilityMode.Always => nullableArrayMapping.Factory(mapping, options).ToObjectConverterInfo(isDefault: false),
+            ArrayNullabilityMode.PerInstance => arrayMapping.Factory(mapping, options).ToComposedConverterInfo(
+                new PolymorphicCollectionConverter(
+                    arrayMapping.Factory(mapping, options).GetResolutionAsObject(null).Converter,
+                    nullableArrayMapping.Factory(mapping, options).GetResolutionAsObject(null).Converter
+                ), mapping.DataTypeName, isDefault: false),
+            _ => throw new ArgumentOutOfRangeException()
+        };
 
     public void AddValueDependentArrayType<TElement>(ConverterInfoMapping elementMapping)
     {
