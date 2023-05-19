@@ -31,3 +31,33 @@ sealed class NullableValueConverter<T> : PgBufferedConverter<T?> where T : struc
     public override void Write(PgWriter writer, T? value)
         => _effectiveConverter.Write(writer, ConvertTo(value));
 }
+
+/// Special value converter to be able to use struct converters as System.Nullable converters, it delegates all behavior to the effective converter.
+sealed class StreamingNullableValueConverter<T> : PgStreamingConverter<T?> where T : struct
+{
+    readonly PgStreamingConverter<T> _effectiveConverter;
+    public StreamingNullableValueConverter(PgStreamingConverter<T> effectiveConverter)
+        : base(effectiveConverter.DbNullPredicateKind is DbNullPredicate.Extended)
+        => _effectiveConverter = effectiveConverter;
+
+    T ConvertTo(T? value) => value.GetValueOrDefault();
+
+    protected override bool IsDbNull(T? value)
+        => _effectiveConverter.IsDbNullValue(ConvertTo(value));
+
+    public override bool CanConvert(DataFormat format, out bool fixedSize) => _effectiveConverter.CanConvert(format, out fixedSize);
+
+    public override T? Read(PgReader reader) => _effectiveConverter.Read(reader);
+
+    public override ValueSize GetSize(ref SizeContext context, [DisallowNull]T? value)
+        => _effectiveConverter.GetSize(ref context, ConvertTo(value));
+
+    public override void Write(PgWriter writer, T? value)
+        => _effectiveConverter.Write(writer, ConvertTo(value));
+
+    public override async ValueTask<T?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
+        => await _effectiveConverter.ReadAsync(reader, cancellationToken);
+
+    public override ValueTask WriteAsync(PgWriter writer, T? value, CancellationToken cancellationToken = default)
+        => _effectiveConverter.WriteAsync(writer, ConvertTo(value), cancellationToken);
+}

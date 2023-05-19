@@ -145,22 +145,36 @@ class PgConverterInfo
         return size;
     }
 
-    internal PgConverterInfo Compose(PgConverter converter, PgTypeId pgTypeId, Type? unboxedType = null)
+    internal PgConverterInfo ToObjectConverterInfo(bool? isDefault = null)
+    {
+        if (IsValueDependent)
+        {
+            throw new NotImplementedException();
+        }
+
+        return new(Options, null, new CastingConverter<object>(Converter), PgTypeId.GetValueOrDefault())
+        {
+            IsDefault = isDefault ?? IsDefault,
+            PreferredFormat = PreferredFormat
+        };
+    }
+
+    internal PgConverterInfo ToComposedConverterInfo(PgConverter converter, PgTypeId pgTypeId, Type? unboxedType = null, bool? isDefault = null)
     {
         if (IsValueDependent)
             throw new InvalidOperationException("Cannot compose a normal converter info on top of a value dependent converter info.");
 
         return new(Options, unboxedType, converter, pgTypeId)
         {
-            IsDefault = IsDefault,
+            IsDefault = isDefault ?? IsDefault,
             PreferredFormat = PreferredFormat
         };
     }
 
-    internal PgConverterInfo Compose(PgConverterResolver resolver, PgTypeId? expectedPgTypeId, bool isBoxing = false)
+    internal PgConverterInfo ToComposedConverterInfo(PgConverterResolver resolver, PgTypeId? expectedPgTypeId, bool isBoxing = false, bool? isDefault = null)
         => new PgConverterResolverInfo(Options, resolver, expectedPgTypeId, isBoxing)
         {
-            IsDefault = IsDefault,
+            IsDefault = isDefault ?? IsDefault,
             PreferredFormat = PreferredFormat,
         };
 
@@ -181,7 +195,7 @@ class PgConverterInfo
         internal PgConverterResolverInfo(PgConverterOptions options, PgConverterResolver converterResolver, PgTypeId? pgTypeId, bool isBoxing = false)
             : base(options,
                 converterResolver.TypeToConvert,
-                pgTypeId is { } typeId ? converterResolver.GetDefaultAsObject(typeId, options.RequirePortableTypeIds) : null, 
+                pgTypeId is { } typeId ? converterResolver.GetDefaultAsObject(typeId, options.RequirePortableTypeIds) : null,
                 isBoxing)
         {
             ConverterResolver = converterResolver;

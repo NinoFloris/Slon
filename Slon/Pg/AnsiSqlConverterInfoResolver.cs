@@ -43,29 +43,30 @@ readonly struct ConverterInfoMappingCollection
 
     public IReadOnlyCollection<ConverterInfoMapping> Items => _items;
 
-    public void AddType<T>(DataTypeName baseDataTypeName, Func<ConverterInfoMapping, PgConverterOptions, PgConverterInfo> createInfo, bool isDefault = false)
+    public void AddType<T>(DataTypeName dataTypeName, Func<ConverterInfoMapping, PgConverterOptions, PgConverterInfo> createInfo, bool isDefault = false) where T : class
     {
-        _items.Add(new ConverterInfoMapping(typeof(T), baseDataTypeName, isDefault, createInfo));
+        _items.Add(new ConverterInfoMapping(typeof(T), dataTypeName, isDefault, createInfo));
     }
 
-    public void AddArrayType<TElement>(DataTypeName elementDataTypeName)
+    public void AddArrayType<TElement>(DataTypeName elementDataTypeName) where TElement : class
     {
         AddArrayType<TElement>(_items.Single(x => x.Type == typeof(TElement) && x.DataTypeName == elementDataTypeName));
     }
 
-    public void AddArrayType<TElement>(ConverterInfoMapping elementMapping)
+    public void AddArrayType<TElement>(ConverterInfoMapping elementMapping) where TElement: class
     {
         var arrayDataTypeName = elementMapping.DataTypeName.ToArrayName();
         _items.Add(new ConverterInfoMapping(typeof(TElement[]), arrayDataTypeName, elementMapping.IsDefault, CreateArrayInfo));
+        if (typeof(TElement).IsValueType)
+        {
+            _items.Add(new ConverterInfoMapping(typeof(object), arrayDataTypeName, elementMapping.IsDefault, CreateArrayInfo));
+        }
         // _mappings.Add(new ConverterInfoMapping(typeof(List<TElement>), arrayDataTypeName, baseMapping.IsDefaultMapping, CreateListInfo));
 
         PgConverterInfo CreateArrayInfo(ConverterInfoMapping mapping, PgConverterOptions options)
         {
             var baseTypeInfo = elementMapping.Factory(mapping, options);
-            return baseTypeInfo.IsValueDependent
-                ? baseTypeInfo.Compose(new ArrayConverterResolver<TElement>(baseTypeInfo),
-                    arrayDataTypeName)
-                : baseTypeInfo.Compose(
+            return baseTypeInfo.ToComposedConverterInfo(
                     new ArrayConverter<TElement>(baseTypeInfo.GetResolution<TElement>(default, elementMapping.DataTypeName),
                         baseTypeInfo.Options.GetArrayPool<(ValueSize, object?)>()),
                     baseTypeInfo.Options.GetArrayTypeId(baseTypeInfo.PgTypeId.GetValueOrDefault()));
@@ -76,6 +77,105 @@ readonly struct ConverterInfoMappingCollection
         //     throw new NotImplementedException();
         // }
     }
+
+    public void AddStructType<T>(DataTypeName dataTypeName, Func<ConverterInfoMapping, PgConverterOptions, PgConverterInfo> createInfo, bool isDefault = false) where T : struct
+    {
+        _items.Add(new ConverterInfoMapping(typeof(T), dataTypeName, isDefault, createInfo));
+        _items.Add(new ConverterInfoMapping(typeof(T?), dataTypeName, isDefault, (mapping, options) =>
+        {
+            var info = createInfo(mapping, options);
+            return info.ToComposedConverterInfo(new NullableValueConverter<T>((PgBufferedConverter<T>)info.GetResolution<T>(default).Converter), dataTypeName);
+        }));
+    }
+
+    public void AddStreamingStructType<T>(DataTypeName dataTypeName, Func<ConverterInfoMapping, PgConverterOptions, PgConverterInfo> createInfo, bool isDefault = false) where T : struct
+    {
+        _items.Add(new ConverterInfoMapping(typeof(T), dataTypeName, isDefault, createInfo));
+        _items.Add(new ConverterInfoMapping(typeof(T?), dataTypeName, isDefault, (mapping, options) =>
+        {
+            var info = createInfo(mapping, options);
+            return info.ToComposedConverterInfo(new StreamingNullableValueConverter<T>((PgStreamingConverter<T>)info.GetResolution<T>(default).Converter), dataTypeName);
+        }));
+    }
+
+    public void AddStructArrayType<TElement>(DataTypeName elementDataTypeName) where TElement: struct
+    {
+        AddStructArrayType<TElement>(
+            _items.Single(x => x.Type == typeof(TElement) && x.DataTypeName == elementDataTypeName),
+            _items.Single(x => x.Type == typeof(TElement?) && x.DataTypeName == elementDataTypeName));
+    }
+
+    public void AddStructArrayType<TElement>(ConverterInfoMapping elementMapping, ConverterInfoMapping nullableElementMapping) where TElement : struct
+    {
+        var arrayDataTypeName = elementMapping.DataTypeName.ToArrayName();
+        ConverterInfoMapping arrayMapping;
+        ConverterInfoMapping nullableArrayMapping;
+        _items.Add(arrayMapping = new ConverterInfoMapping(typeof(TElement[]), arrayDataTypeName, elementMapping.IsDefault, CreateArrayInfo));
+        _items.Add(nullableArrayMapping = new ConverterInfoMapping(typeof(TElement?[]), arrayDataTypeName, isDefault: false, CreateNullableArrayInfo));
+        _items.Add(new ConverterInfoMapping(typeof(object), arrayDataTypeName, isDefault: false, CreatePolymorphicArrayInfo));
+
+        // _mappings.Add(new ConverterInfoMapping(typeof(List<TElement>), arrayDataTypeName, baseMapping.IsDefaultMapping, CreateListInfo));
+
+        PgConverterInfo CreateArrayInfo(ConverterInfoMapping mapping, PgConverterOptions options)
+        {
+            var elementInfo = elementMapping.Factory(mapping, options);
+            return elementInfo.ToComposedConverterInfo(
+                    new ArrayConverter<TElement>(elementInfo.GetResolution<TElement>(default, elementMapping.DataTypeName),
+                        elementInfo.Options.GetArrayPool<(ValueSize, object?)>()),
+                    elementInfo.Options.GetArrayTypeId(elementInfo.PgTypeId.GetValueOrDefault()));
+        }
+
+        PgConverterInfo CreateNullableArrayInfo(ConverterInfoMapping mapping, PgConverterOptions options)
+        {
+            var elementInfo = nullableElementMapping.Factory(mapping, options);
+            return elementInfo.ToComposedConverterInfo(
+                    new ArrayConverter<TElement?>(elementInfo.GetResolution<TElement?>(default, elementMapping.DataTypeName),
+                        elementInfo.Options.GetArrayPool<(ValueSize, object?)>()),
+                    elementInfo.Options.GetArrayTypeId(elementInfo.PgTypeId.GetValueOrDefault()), isDefault: false);
+        }
+
+        PgConverterInfo CreatePolymorphicArrayInfo(ConverterInfoMapping mapping, PgConverterOptions options)
+        {
+            return options.ArrayNullabilityMode switch
+            {
+                ArrayNullabilityMode.Never => arrayMapping.Factory(mapping, options).ToObjectConverterInfo(isDefault: false),
+                ArrayNullabilityMode.Always => nullableArrayMapping.Factory(mapping, options).ToObjectConverterInfo(isDefault: false),
+                ArrayNullabilityMode.PerInstance => arrayMapping.Factory(mapping, options).ToComposedConverterInfo(
+                    new PolymorphicCollectionConverter(
+                        arrayMapping.Factory(mapping, options).GetResolutionAsObject(null, elementMapping.DataTypeName).Converter,
+                        nullableElementMapping.Factory(mapping, options).GetResolutionAsObject(null, elementMapping.DataTypeName).Converter
+                    ), mapping.DataTypeName, isDefault: false),
+                _ => throw new ArgumentOutOfRangeException()
+            };
+        }
+    }
+
+    public void AddValueDependentArrayType<TElement>(ConverterInfoMapping elementMapping)
+    {
+        var arrayDataTypeName = elementMapping.DataTypeName.ToArrayName();
+        _items.Add(new ConverterInfoMapping(typeof(TElement[]), arrayDataTypeName, elementMapping.IsDefault, CreateArrayInfo));
+        if (typeof(TElement).IsValueType)
+        {
+            _items.Add(new ConverterInfoMapping(typeof(object), arrayDataTypeName, elementMapping.IsDefault, CreateArrayInfo));
+        }
+
+        // _mappings.Add(new ConverterInfoMapping(typeof(List<TElement>), arrayDataTypeName, baseMapping.IsDefaultMapping, CreateListInfo));
+
+        PgConverterInfo CreateArrayInfo(ConverterInfoMapping mapping, PgConverterOptions options)
+        {
+            var baseTypeInfo = elementMapping.Factory(mapping, options);
+            return baseTypeInfo.IsValueDependent
+                ? baseTypeInfo.ToComposedConverterInfo(new ArrayConverterResolver<TElement>(baseTypeInfo),
+                    arrayDataTypeName)
+                : throw new InvalidOperationException("Unexpected normal mapping, map this via AddArrayType instead.");
+        }
+
+        // PgConverterInfo CreateListInfo(ConverterInfoMapping mapping, PgConverterOptions options)
+        // {
+        //     throw new NotImplementedException();
+        // }
+    }
+
 }
 
 class AnsiSqlConverterInfoResolver: IPgConverterInfoResolver
@@ -85,30 +185,30 @@ class AnsiSqlConverterInfoResolver: IPgConverterInfoResolver
     static void AddInfos(ConverterInfoMappingCollection mappings)
     {
         // Bool
-        mappings.AddType<bool>(DataTypeNames.Bool,
+        mappings.AddStructType<bool>(DataTypeNames.Bool,
             (mapping, options) => PgConverterInfo.Create(options, new BoolConverter(), mapping.DataTypeName, mapping.IsDefault),
             isDefault: true);
 
         // Int2
-        mappings.AddType<short>(DataTypeNames.Int2, CreateInt2ConverterInfo<short>, isDefault: true);
-        mappings.AddType<int>(DataTypeNames.Int2, CreateInt2ConverterInfo<int>);
-        mappings.AddType<long>(DataTypeNames.Int2, CreateInt2ConverterInfo<long>);
-        mappings.AddType<byte>(DataTypeNames.Int2, CreateInt2ConverterInfo<byte>);
-        mappings.AddType<sbyte>(DataTypeNames.Int2, CreateInt2ConverterInfo<sbyte>);
+        mappings.AddStructType<short>(DataTypeNames.Int2, CreateInt2ConverterInfo<short>, isDefault: true);
+        mappings.AddStructType<int>(DataTypeNames.Int2, CreateInt2ConverterInfo<int>);
+        mappings.AddStructType<long>(DataTypeNames.Int2, CreateInt2ConverterInfo<long>);
+        mappings.AddStructType<byte>(DataTypeNames.Int2, CreateInt2ConverterInfo<byte>);
+        mappings.AddStructType<sbyte>(DataTypeNames.Int2, CreateInt2ConverterInfo<sbyte>);
 
         // Int4
-        mappings.AddType<short>(DataTypeNames.Int4, CreateInt4ConverterInfo<short>);
-        mappings.AddType<int>(DataTypeNames.Int4, CreateInt4ConverterInfo<int>, isDefault: true);
-        mappings.AddType<long>(DataTypeNames.Int4, CreateInt4ConverterInfo<long>);
-        mappings.AddType<byte>(DataTypeNames.Int4, CreateInt4ConverterInfo<byte>);
-        mappings.AddType<sbyte>(DataTypeNames.Int4, CreateInt4ConverterInfo<sbyte>);
+        mappings.AddStructType<short>(DataTypeNames.Int4, CreateInt4ConverterInfo<short>);
+        mappings.AddStructType<int>(DataTypeNames.Int4, CreateInt4ConverterInfo<int>, isDefault: true);
+        mappings.AddStructType<long>(DataTypeNames.Int4, CreateInt4ConverterInfo<long>);
+        mappings.AddStructType<byte>(DataTypeNames.Int4, CreateInt4ConverterInfo<byte>);
+        mappings.AddStructType<sbyte>(DataTypeNames.Int4, CreateInt4ConverterInfo<sbyte>);
 
         // Int8
-        mappings.AddType<short>(DataTypeNames.Int8, CreateInt8ConverterInfo<short>);
-        mappings.AddType<int>(DataTypeNames.Int8, CreateInt8ConverterInfo<int>);
-        mappings.AddType<long>(DataTypeNames.Int8, CreateInt8ConverterInfo<long>, isDefault: true);
-        mappings.AddType<byte>(DataTypeNames.Int8, CreateInt8ConverterInfo<byte>);
-        mappings.AddType<sbyte>(DataTypeNames.Int8, CreateInt8ConverterInfo<sbyte>);
+        mappings.AddStructType<short>(DataTypeNames.Int8, CreateInt8ConverterInfo<short>);
+        mappings.AddStructType<int>(DataTypeNames.Int8, CreateInt8ConverterInfo<int>);
+        mappings.AddStructType<long>(DataTypeNames.Int8, CreateInt8ConverterInfo<long>, isDefault: true);
+        mappings.AddStructType<byte>(DataTypeNames.Int8, CreateInt8ConverterInfo<byte>);
+        mappings.AddStructType<sbyte>(DataTypeNames.Int8, CreateInt8ConverterInfo<sbyte>);
 
         // Text
         mappings.AddType<string>(DataTypeNames.Text, static (mapping, options) =>
@@ -116,46 +216,46 @@ class AnsiSqlConverterInfoResolver: IPgConverterInfoResolver
             isDefault: true);
         mappings.AddType<char[]>(DataTypeNames.Text, static (mapping, options) =>
             PgConverterInfo.Create(options, new CharArrayTextConverter(new ReadOnlyMemoryTextConverter(options)), mapping.DataTypeName, mapping.IsDefault, DataFormat.Text));
-        mappings.AddType<ReadOnlyMemory<char>>(DataTypeNames.Text, static (mapping, options) =>
+        mappings.AddStreamingStructType<ReadOnlyMemory<char>>(DataTypeNames.Text, static (mapping, options) =>
             PgConverterInfo.Create(options, new ReadOnlyMemoryTextConverter(options), mapping.DataTypeName, mapping.IsDefault, DataFormat.Text));
-        mappings.AddType<ArraySegment<char>>(DataTypeNames.Text, static (mapping, options) =>
+        mappings.AddStreamingStructType<ArraySegment<char>>(DataTypeNames.Text, static (mapping, options) =>
             PgConverterInfo.Create(options, new CharArraySegmentTextConverter(new ReadOnlyMemoryTextConverter(options)), mapping.DataTypeName, mapping.IsDefault, DataFormat.Text));
-        mappings.AddType<char>(DataTypeNames.Text, static (mapping, options) =>
+        mappings.AddStructType<char>(DataTypeNames.Text, static (mapping, options) =>
             PgConverterInfo.Create(options, new CharTextConverter(options), mapping.DataTypeName, mapping.IsDefault, DataFormat.Text));
     }
 
     static void AddArrayInfos(ConverterInfoMappingCollection mappings)
     {
         // Bool
-        mappings.AddArrayType<bool>(DataTypeNames.Bool);
+        mappings.AddStructArrayType<bool>(DataTypeNames.Bool);
 
         // Int2
-        mappings.AddArrayType<short>(DataTypeNames.Int2);
-        mappings.AddArrayType<int>(DataTypeNames.Int2);
-        mappings.AddArrayType<long>(DataTypeNames.Int2);
-        mappings.AddArrayType<byte>(DataTypeNames.Int2);
-        mappings.AddArrayType<sbyte>(DataTypeNames.Int2);
+        mappings.AddStructArrayType<short>(DataTypeNames.Int2);
+        mappings.AddStructArrayType<int>(DataTypeNames.Int2);
+        mappings.AddStructArrayType<long>(DataTypeNames.Int2);
+        mappings.AddStructArrayType<byte>(DataTypeNames.Int2);
+        mappings.AddStructArrayType<sbyte>(DataTypeNames.Int2);
 
         // Int4
-        mappings.AddArrayType<short>(DataTypeNames.Int4);
-        mappings.AddArrayType<int>(DataTypeNames.Int4);
-        mappings.AddArrayType<long>(DataTypeNames.Int4);
-        mappings.AddArrayType<byte>(DataTypeNames.Int4);
-        mappings.AddArrayType<sbyte>(DataTypeNames.Int4);
+        mappings.AddStructArrayType<short>(DataTypeNames.Int4);
+        mappings.AddStructArrayType<int>(DataTypeNames.Int4);
+        mappings.AddStructArrayType<long>(DataTypeNames.Int4);
+        mappings.AddStructArrayType<byte>(DataTypeNames.Int4);
+        mappings.AddStructArrayType<sbyte>(DataTypeNames.Int4);
 
         // Int8
-        mappings.AddArrayType<short>(DataTypeNames.Int8);
-        mappings.AddArrayType<int>(DataTypeNames.Int8);
-        mappings.AddArrayType<long>(DataTypeNames.Int8);
-        mappings.AddArrayType<byte>(DataTypeNames.Int8);
-        mappings.AddArrayType<sbyte>(DataTypeNames.Int8);
+        mappings.AddStructArrayType<short>(DataTypeNames.Int8);
+        mappings.AddStructArrayType<int>(DataTypeNames.Int8);
+        mappings.AddStructArrayType<long>(DataTypeNames.Int8);
+        mappings.AddStructArrayType<byte>(DataTypeNames.Int8);
+        mappings.AddStructArrayType<sbyte>(DataTypeNames.Int8);
 
         // Text
         mappings.AddArrayType<string>(DataTypeNames.Text);
         mappings.AddArrayType<char[]>(DataTypeNames.Text);
-        mappings.AddArrayType<ReadOnlyMemory<char>>(DataTypeNames.Text);
-        mappings.AddArrayType<ArraySegment<char>>(DataTypeNames.Text);
-        mappings.AddArrayType<char>(DataTypeNames.Text);
+        mappings.AddStructArrayType<ReadOnlyMemory<char>>(DataTypeNames.Text);
+        mappings.AddStructArrayType<ArraySegment<char>>(DataTypeNames.Text);
+        mappings.AddStructArrayType<char>(DataTypeNames.Text);
     }
 
     static AnsiSqlConverterInfoResolver()

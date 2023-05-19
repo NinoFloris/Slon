@@ -137,13 +137,13 @@ readonly struct PgArrayConverter
 
         reader.ReadInt32(); // Lower bound
 
-        var oneDimensional = _elementOperations.CreateCollection(arrayLength);
+        var collection = _elementOperations.CreateCollection(arrayLength);
         for (var i = 0; i < arrayLength; i++)
         {
             reader.ByteCount = reader.ReadInt32();
-            await _elementOperations.Read(async, reader, oneDimensional, i, cancellationToken);
+            await _elementOperations.Read(async, reader, collection, i, cancellationToken);
         }
-        return oneDimensional;
+        return collection;
     }
 
     public async ValueTask Write(bool async, PgWriter writer, object values, CancellationToken cancellationToken)
@@ -479,24 +479,34 @@ sealed class ArrayConverterResolver<T> : PgConverterResolver<T?[]>
     }
 }
 
-sealed class MultiDimArrayConverterResolver<TElement, T> : PgConverterResolver<T>
+
+sealed class PolymorphicCollectionConverter : PolymorphicReadConverter
 {
-    readonly PgConverterInfo _elemConverterInfo;
-    readonly int _rank;
+    readonly PgConverter _structElementCollectionConverter;
+    readonly PgConverter _nullableElementCollectionConverter;
 
-    public MultiDimArrayConverterResolver(PgConverterInfo elemConverterInfo, int rank)
+    // EffectiveType is object[] as we only know per instance, after reading 'has nulls'.
+    public PolymorphicCollectionConverter(PgConverter structElementCollectionConverter, PgConverter nullableElementCollectionConverter) : base(typeof(object[]))
     {
-        _elemConverterInfo = elemConverterInfo;
-        _rank = rank;
+        _structElementCollectionConverter = structElementCollectionConverter;
+        _nullableElementCollectionConverter = nullableElementCollectionConverter;
     }
 
-    public override PgConverterResolution<T> GetDefault(PgTypeId pgTypeId)
+    public override object Read(PgReader reader)
     {
-        throw new NotImplementedException();
+        var remaining = reader.Remaining;
+        var _ = reader.ReadInt32();
+        var containsNulls = reader.ReadInt32() == 1;
+        reader.Rewind(remaining - reader.Remaining);
+        return (containsNulls ? _nullableElementCollectionConverter.ReadAsObject(reader) : _structElementCollectionConverter.ReadAsObject(reader))!;
     }
 
-    public override PgConverterResolution<T> Get(T? value, PgTypeId? expectedPgTypeId)
+    public override ValueTask<object> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
     {
-        throw new NotImplementedException();
+        var remaining = reader.Remaining;
+        var _ = reader.ReadInt32();
+        var containsNulls = reader.ReadInt32() == 1;
+        reader.Rewind(remaining - reader.Remaining);
+        return (containsNulls ? _nullableElementCollectionConverter.ReadAsObjectAsync(reader, cancellationToken) : _structElementCollectionConverter.ReadAsObjectAsync(reader, cancellationToken))!;
     }
 }

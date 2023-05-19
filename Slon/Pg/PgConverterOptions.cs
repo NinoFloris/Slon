@@ -7,6 +7,13 @@ using Slon.Pg.Types;
 
 namespace Slon.Pg;
 
+enum ArrayNullabilityMode
+{
+    Never,
+    Always,
+    PerInstance
+}
+
 class PgConverterOptions
 {
     object? _converterInfoCache;
@@ -18,6 +25,8 @@ class PgConverterOptions
     public required Encoding TextEncoding { get; init; }
     public required IPgConverterInfoResolver ConverterInfoResolver { get; init; }
     public bool EnableDateTimeInfinityConversions { get; init; } = true;
+
+    public ArrayNullabilityMode ArrayNullabilityMode { get; init; } = ArrayNullabilityMode.Never;
 
     PgConverterInfo? GetConverterInfoCore(Type? type, PgTypeId? pgTypeId)
     {

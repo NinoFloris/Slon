@@ -51,4 +51,9 @@ class PgReader
     {
         throw new NotImplementedException();
     }
+
+    public void Rewind(int count)
+    {
+        throw new NotImplementedException();
+    }
 }

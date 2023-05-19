@@ -334,8 +334,8 @@ public sealed partial class SlonDataReader: DbDataReader
         };
         var dtTz = PgConverterInfo.Create(options, new DateTimeConverterResolver(DataTypeNames.TimestampTz, DataTypeNames.Timestamp), DataTypeNames.TimestampTz);
         var dtoTz = PgConverterInfo.Create(options, new DateTimeOffsetUtcOnlyConverterResolver(DataTypeNames.TimestampTz), DataTypeNames.TimestampTz);
-        dtTz.Compose(new ArrayConverterResolver<DateTime>(dtTz), options.GetArrayTypeId(dtTz.PgTypeId!.Value));
-        dtoTz.Compose(new ArrayConverterResolver<DateTimeOffset>(dtoTz), options.GetArrayTypeId(dtoTz.PgTypeId!.Value));
+        dtTz.ToComposedConverterInfo(new ArrayConverterResolver<DateTime>(dtTz), options.GetArrayTypeId(dtTz.PgTypeId!.Value));
+        dtoTz.ToComposedConverterInfo(new ArrayConverterResolver<DateTimeOffset>(dtoTz), options.GetArrayTypeId(dtoTz.PgTypeId!.Value));
 
         var bitArray = PgConverterInfo.Create(options, new BitArrayBitStringConverter(options), DataTypeNames.Varbit).GetResolution(default(BitArray));
         var bitVector32 = PgConverterInfo.Create(options, new BitVector32BitStringConverter(), DataTypeNames.Varbit).GetResolution(default(BitVector32));
