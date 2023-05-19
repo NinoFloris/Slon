@@ -1,11 +1,9 @@
 using System;
 using System.Buffers;
-using System.Collections;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Slon.Pg.Descriptors;
@@ -104,9 +102,16 @@ readonly struct PgArrayConverter
         return formatSize.Combine(elemsSize);
     }
 
-    public async ValueTask<object> Read(bool async, PgReader reader, int expectedDimensions, CancellationToken cancellationToken = default)
+    public async ValueTask<object> Read(bool async, PgReader reader, CancellationToken cancellationToken = default)
     {
+        const int expectedDimensions = 1;
+
         var dimensions = reader.ReadInt32();
+        if (dimensions == 0)
+            return _elementOperations.CreateCollection(0);
+        if (dimensions != expectedDimensions)
+            throw new InvalidOperationException($"Cannot read an array with {expectedDimensions} dimension(s) from an array with {dimensions} dimension(s)");
+
         var containsNulls = reader.ReadInt32() == 1;
         reader.ReadUInt32(); // Element OID. Ignored.
 
@@ -124,31 +129,21 @@ readonly struct PgArrayConverter
             //     _ => throw new ArgumentOutOfRangeException()
             // }
             // :
-            _elemTypeDbNullable && containsNulls
+            !_elemTypeDbNullable && containsNulls
                 ? throw new InvalidOperationException()
                 : _elementType;
 
-        if (dimensions == 0)
-            return expectedDimensions > 1
-                ? Array.CreateInstance(returnType, new int[expectedDimensions])
-                : _elementOperations.CreateCollection(0);
+        var arrayLength = reader.ReadInt32();
 
-        if (dimensions == 1 && returnType == _elementType)
+        reader.ReadInt32(); // Lower bound
+
+        var oneDimensional = _elementOperations.CreateCollection(arrayLength);
+        for (var i = 0; i < arrayLength; i++)
         {
-            var arrayLength = reader.ReadInt32();
-
-            reader.ReadInt32(); // Lower bound
-
-            var oneDimensional = _elementOperations.CreateCollection(arrayLength);
-            for (var i = 0; i < arrayLength; i++)
-            {
-                reader.ByteCount = reader.ReadInt32();
-                await _elementOperations.Read(async, reader, oneDimensional, i, cancellationToken);
-            }
-            return oneDimensional;
+            reader.ByteCount = reader.ReadInt32();
+            await _elementOperations.Read(async, reader, oneDimensional, i, cancellationToken);
         }
-
-        throw new NotSupportedException();
+        return oneDimensional;
     }
 
     public async ValueTask Write(bool async, PgWriter writer, object values, CancellationToken cancellationToken)
@@ -271,10 +266,10 @@ abstract class CollectionConverter<T> : PgStreamingConverter<T> where T : class
 
     public abstract override bool CanConvert(DataFormat format, out bool fixedSize);
 
-    public override T Read(PgReader reader) => (T)_pgArrayConverter.Read(async: false, reader, 1).Result;
+    public override T Read(PgReader reader) => (T)_pgArrayConverter.Read(async: false, reader).Result;
 
     public override ValueTask<T> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
-        => Unsafe.As<ValueTask<object>, ValueTask<T>>(ref Unsafe.AsRef(_pgArrayConverter.Read(async: true, reader, 1, cancellationToken)));
+        => Unsafe.As<ValueTask<object>, ValueTask<T>>(ref Unsafe.AsRef(_pgArrayConverter.Read(async: true, reader, cancellationToken)));
 
     public override ValueSize GetSize(ref SizeContext context, T values)
         => _pgArrayConverter.GetSize(ref context, values);

@@ -124,6 +124,15 @@ sealed partial class PgTypeCatalog
         return _typesByDataTypeName[(string)pgTypeId.DataTypeName];
     }
 
+    public PgType GetPortablePgType(PgTypeId pgTypeId)
+    {
+        ThrowIfPortableAndOidArgument(pgTypeId);
+        if (pgTypeId.IsOid)
+            return ToPortableType(_typesByOid[(uint)pgTypeId.Oid]);
+
+        return ToPortableType(_typesByDataTypeName[(string)pgTypeId.DataTypeName]);
+    }
+
     internal PgTypeCatalog CreatePortableCatalog(IEnumerable<PgType> types) => new(types);
 
     internal PgTypeCatalog ToPortableCatalog()

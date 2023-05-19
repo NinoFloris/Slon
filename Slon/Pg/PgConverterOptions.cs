@@ -42,6 +42,8 @@ class PgConverterOptions
     public PgConverterInfo? GetConverterInfo(Type type, PgTypeId? pgTypeId = null)
         => GetConverterInfoCore(type ?? throw new ArgumentNullException(), pgTypeId);
 
+    internal PgType GetPgType(PgTypeId pgTypeId) => RequirePortableTypeIds ? TypeCatalog.GetPortablePgType(pgTypeId) : GetPgType(pgTypeId);
+
     // If a given type id is in the opposite form than what was expected it will be mapped according to the requirement.
     internal PgTypeId GetCanonicalTypeId(PgTypeId pgTypeId)
         => RequirePortableTypeIds ? TypeCatalog.GetDataTypeName(pgTypeId) : TypeCatalog.GetOid(pgTypeId);
@@ -73,6 +75,8 @@ class PgConverterOptions
 
     public PgTypeId GetElementTypeId(PgTypeId arrayTypeId)
         => RequirePortableTypeIds ? TypeCatalog.GetElementDataTypeName(arrayTypeId) : TypeCatalog.GetElementOid(arrayTypeId);
+
+    public DataTypeName GetDataTypeName(PgTypeId pgTypeId) => TypeCatalog.GetDataTypeName(pgTypeId);
 
     public PgWriter GetBufferedWriter<TWriter>(TWriter bufferWriter, object? state) where TWriter : IBufferWriter<byte>
     {

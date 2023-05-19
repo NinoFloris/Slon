@@ -22,9 +22,7 @@ static class Int16Converter
 
 sealed class Int16Converter<T> : PgBufferedConverter<T>
 #if !NETSTANDARD2_0
-    where T : struct, INumberBase<T>
-#else
-    where T : struct
+    where T : INumberBase<T>
 #endif
 {
 #if NETSTANDARD2_0
@@ -65,23 +63,23 @@ sealed class Int16Converter<T> : PgBufferedConverter<T>
     public override void Write(PgWriter writer, T value)
     {
         if (typeof(short) == typeof(T))
-            writer.WriteInt16((short)(object)value);
+            writer.WriteInt16((short)(object)value!);
         else if (typeof(int) == typeof(T))
-            writer.WriteInt16(checked((short)(int)(object)value));
+            writer.WriteInt16(checked((short)(int)(object)value!));
         else if (typeof(long) == typeof(T))
-            writer.WriteInt16(checked((short)(long)(object)value));
+            writer.WriteInt16(checked((short)(long)(object)value!));
 
         else if (typeof(byte) == typeof(T))
-            writer.WriteInt16((byte)(object)value);
+            writer.WriteInt16((byte)(object)value!);
         else if (typeof(sbyte) == typeof(T))
-            writer.WriteInt16((sbyte)(object)value);
+            writer.WriteInt16((sbyte)(object)value!);
 
         else if (typeof(float) == typeof(T))
-            writer.WriteInt16(checked((short)(float)(object)value));
+            writer.WriteInt16(checked((short)(float)(object)value!));
         else if (typeof(double) == typeof(T))
-            writer.WriteInt16(checked((short)(double)(object)value));
+            writer.WriteInt16(checked((short)(double)(object)value!));
         else if (typeof(decimal) == typeof(T))
-            writer.WriteInt16((short)(decimal)(object)value);
+            writer.WriteInt16((short)(decimal)(object)value!);
         else
             throw new InvalidCastException();
     }

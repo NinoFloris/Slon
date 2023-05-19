@@ -104,6 +104,7 @@ static class DefaultPgTypes
     }
 }
 
+// TODO multirangearray (and range is its own type, or we should introduce a full type family here)
 readonly struct PgTypeGroup
 {
     public required DataTypeName BaseName { get; init; }
