@@ -42,7 +42,8 @@ sealed class ConverterInfoCache<TPgTypeId> where TPgTypeId : struct
 
         PgConverterInfo? AddByType(Type type)
         {
-            var info = CreateInfo(type, pgTypeId, _options);
+            // We don't pass PgTypeId as we're interested in default converters here.
+            var info = CreateInfo(type, null, _options);
             if (info is null)
                 return null;
 

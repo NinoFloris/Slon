@@ -94,7 +94,7 @@ readonly struct ParameterContextFactory
             else
             {
                 cacheItem.DbType = new SlonDbType(_frontendTypeCatalog.GetDataTypeName(parameter.PgTypeId));
-                dbParameter.SetInferredDbType(cacheItem.DbType, parameter.ConverterInfo.IsValueDependent);
+                dbParameter.SetInferredDbType(cacheItem.DbType, parameter.ConverterInfo.PgTypeId is not null);
             }
         }
 
@@ -134,7 +134,7 @@ readonly struct ParameterContextFactory
                         {
                             dbParameter = (SlonDbParameter)enumerator.Current.Value!;
                             if (cacheItem.IsInferredDbType && dbParameter.HasInferredSlonDbType == false && dbParameter.SlonDbType == SlonDbType.Infer)
-                                dbParameter.SetInferredDbType(cacheItem.DbType, cachedParameter.ConverterInfo.IsValueDependent);
+                                dbParameter.SetInferredDbType(cacheItem.DbType, cachedParameter.ConverterInfo.PgTypeId is not null);
 
                             // If our value is an SlonDbParameter we have to use our fresh session as the value.
                             cachedParameter = cachedParameter with { Value = lastSession };
@@ -149,8 +149,8 @@ readonly struct ParameterContextFactory
                         if (cacheItem.IsSlonDbParameter)
                         {
                             dbParameter = (SlonDbParameter)enumerator.Current.Value!;
-                            if (!cachedConverterInfo.IsValueDependent && cacheItem.IsInferredDbType && dbParameter is { HasInferredSlonDbType: false, SlonDbType.IsInfer: true })
-                                dbParameter.SetInferredDbType(cacheItem.DbType, cachedConverterInfo.IsValueDependent);
+                            if (cachedConverterInfo.PgTypeId is not null && cacheItem.IsInferredDbType && dbParameter is { HasInferredSlonDbType: false, SlonDbType.IsInfer: true })
+                                dbParameter.SetInferredDbType(cacheItem.DbType, cachedConverterInfo.PgTypeId is not null);
                         }
 
                         // We don't update the cache for converter info matches as it does not seem worth the cost

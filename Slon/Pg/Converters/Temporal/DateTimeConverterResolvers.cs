@@ -7,21 +7,23 @@ sealed class DateTimeConverterResolver: PgConverterResolver<DateTime>
 {
     readonly PgTypeId _timestampTz;
     readonly PgTypeId _timestamp;
+    readonly bool _dateTimeInfinityConversions;
     PgConverter<DateTime>? _converter;
     PgConverter<DateTime>? _tzConverter;
 
-    public DateTimeConverterResolver(PgTypeId timestampTz, PgTypeId timestamp)
+    public DateTimeConverterResolver(PgTypeId timestampTz, PgTypeId timestamp, bool dateTimeInfinityConversions)
     {
         _timestampTz = timestampTz;
         _timestamp = timestamp;
+        _dateTimeInfinityConversions = dateTimeInfinityConversions;
     }
 
     public override PgConverterResolution<DateTime> GetDefault(PgTypeId pgTypeId)
     {
         if (pgTypeId == _timestampTz)
-            return new(_tzConverter ??= new DateTimeConverter(null!, DateTimeKind.Utc), _timestampTz);
+            return new(_tzConverter ??= new DateTimeConverter(_dateTimeInfinityConversions, DateTimeKind.Utc), _timestampTz);
         if (pgTypeId == _timestamp)
-            return new(_converter ??= new DateTimeConverter(null!, DateTimeKind.Unspecified), _timestamp);
+            return new(_converter ??= new DateTimeConverter(_dateTimeInfinityConversions, DateTimeKind.Unspecified), _timestamp);
 
         throw CreateUnsupportedPgTypeIdException(pgTypeId);
     }
@@ -53,9 +55,13 @@ sealed class DateTimeConverterResolver: PgConverterResolver<DateTime>
 sealed class DateTimeOffsetUtcOnlyConverterResolver: PgConverterResolver<DateTimeOffset>
 {
     readonly PgTypeId _timestampTz;
-    readonly PgConverter<DateTimeOffset> _converter = new DateTimeOffsetConverter(null!);
+    readonly PgConverter<DateTimeOffset> _converter;
 
-    public DateTimeOffsetUtcOnlyConverterResolver(PgTypeId timestampTz) => _timestampTz = timestampTz;
+    public DateTimeOffsetUtcOnlyConverterResolver(PgTypeId timestampTz, bool dateTimeInfinityConversions)
+    {
+        _timestampTz = timestampTz;
+        _converter = new DateTimeOffsetConverter(dateTimeInfinityConversions);
+    }
 
     public override PgConverterResolution<DateTimeOffset> GetDefault(PgTypeId pgTypeId)
         => pgTypeId == _timestampTz

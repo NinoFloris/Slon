@@ -52,7 +52,7 @@ class PgConverterInfo
 
     PgConverter? Converter { get; }
     [MemberNotNullWhen(false, nameof(Converter))]
-    public bool IsValueDependent => Converter is null;
+     bool IsValueDependent => Converter is null;
 
     // Only used for internal converters to save on binary bloat, we never hand out one to converters that don't support it.
     internal bool IsBoxing { get; }
@@ -69,8 +69,8 @@ class PgConverterInfo
             disposable.Dispose();
     }
 
-    public PgConverterResolution<T> GetResolution<T>(T? value, PgTypeId? expectedPgTypeId = null) => GetResolutionCore(value, expectedPgTypeId, field: null);
-    public PgConverterResolution GetResolutionAsObject(object? value, PgTypeId? expectedPgTypeId = null) => GetResolutionCore(value, expectedPgTypeId, field: null);
+    public PgConverterResolution<T> GetResolution<T>(T? value = default, PgTypeId? expectedPgTypeId = null) => GetResolutionCore(value, expectedPgTypeId, field: null);
+    public PgConverterResolution GetResolutionAsObject(object? value = default, PgTypeId? expectedPgTypeId = null) => GetResolutionCore(value, expectedPgTypeId, field: null);
 
     public PgConverterResolution<T> GetResolution<T>(Field field) => GetResolutionCore<T>(field: field);
     public PgConverterResolution GetResolutionAsObject(Field field) => GetResolutionCore(field: field);
@@ -184,11 +184,18 @@ class PgConverterInfo
     internal static PgConverterInfo CreateBoxing(PgConverterOptions options, PgConverterResolver resolver, PgTypeId? expectedPgTypeId, bool isDefault = false, DataFormat? preferredFormat = null)
         => new PgConverterResolverInfo(options, resolver, expectedPgTypeId, isBoxing: true) { IsDefault = isDefault, PreferredFormat = preferredFormat };
 
-    public static PgConverterInfo Create(PgConverterOptions options, PgConverter converter, PgTypeId pgTypeId, bool isDefault = false, DataFormat? preferredFormat = null)
-        => new(options, null, converter, pgTypeId) { IsDefault = isDefault, PreferredFormat = preferredFormat };
+    public static PgConverterInfo Create(PgConverterOptions options, PgConverter converter, PgTypeId pgTypeId, DataFormat? preferredFormat = null)
+        => new(options, null, converter, pgTypeId) { PreferredFormat = preferredFormat };
 
-    public static PgConverterInfo Create(PgConverterOptions options, PgConverterResolver resolver, PgTypeId? expectedPgTypeId, bool isDefault = false, DataFormat? preferredFormat = null)
-        => new PgConverterResolverInfo(options, resolver, expectedPgTypeId) { IsDefault = isDefault, PreferredFormat = preferredFormat };
+    // It should not be possible to create a resolver based info that has IsDefault false and an empty PgTypeId.
+    public static PgConverterInfo Create(PgConverterOptions options, PgConverterResolver resolver, PgTypeId expectedPgTypeId, DataFormat? preferredFormat = null)
+        => new PgConverterResolverInfo(options, resolver, expectedPgTypeId) { PreferredFormat = preferredFormat };
+
+    public static PgConverterInfo CreateDefault(PgConverterOptions options, PgConverterResolver resolver, PgTypeId? expectedPgTypeId = null, DataFormat? preferredFormat = null)
+        => new PgConverterResolverInfo(options, resolver, expectedPgTypeId) { IsDefault = true, PreferredFormat = preferredFormat };
+
+    public static PgConverterInfo CreateDefault(PgConverterOptions options, PgConverter converter, PgTypeId pgTypeId, DataFormat? preferredFormat = null)
+        => new(options, null, converter, pgTypeId) { IsDefault = true, PreferredFormat = preferredFormat };
 
     sealed class PgConverterResolverInfo : PgConverterInfo
     {
