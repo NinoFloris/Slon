@@ -12,7 +12,7 @@ namespace Slon.Pg.Converters;
 sealed class BitArrayBitStringConverter : PgStreamingConverter<BitArray>
 {
     readonly ArrayPool<byte> _arrayPool;
-    public BitArrayBitStringConverter(PgConverterOptions options) => _arrayPool = options.GetArrayPool<byte>();
+    public BitArrayBitStringConverter(ArrayPool<byte> arrayPool) => _arrayPool = arrayPool;
 
     public static BitArray ReadValue(PgReader reader)
         => new(reader.ReadExact((reader.ReadInt32() + 7) / 8).ToArray());

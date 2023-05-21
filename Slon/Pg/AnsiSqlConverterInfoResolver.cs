@@ -260,7 +260,7 @@ class AnsiSqlConverterInfoResolver: IPgConverterInfoResolver
 
         // Varbit
         mappings.AddType<BitArray>(DataTypeNames.Varbit,
-            static (options, mapping, _) => mapping.CreateInfo(options, new BitArrayBitStringConverter(options)), isDefault: true);
+            static (options, mapping, _) => mapping.CreateInfo(options, new BitArrayBitStringConverter(options.GetArrayPool<byte>())), isDefault: true);
         mappings.AddStructType<bool>(DataTypeNames.Varbit,
             static (options, mapping, _) => mapping.CreateInfo(options, new BoolBitStringConverter()));
         mappings.AddStructType<BitVector32>(DataTypeNames.Varbit,
@@ -268,6 +268,17 @@ class AnsiSqlConverterInfoResolver: IPgConverterInfoResolver
         mappings.AddType<object>(DataTypeNames.Varbit,
             static (options, mapping, _) => mapping.CreateInfo(options,
                 new PolymorphicBitStringConverterResolver(options.GetCanonicalTypeId(DataTypeNames.Varbit))));
+
+        // Bit
+        mappings.AddType<BitArray>(DataTypeNames.Bit,
+            static (options, mapping, _) => mapping.CreateInfo(options, new BitArrayBitStringConverter(options.GetArrayPool<byte>())), isDefault: true);
+        mappings.AddStructType<bool>(DataTypeNames.Bit,
+            static (options, mapping, _) => mapping.CreateInfo(options, new BoolBitStringConverter()));
+        mappings.AddStructType<BitVector32>(DataTypeNames.Bit,
+            static (options, mapping, _) => mapping.CreateInfo(options, new BitVector32BitStringConverter()));
+        mappings.AddType<object>(DataTypeNames.Bit,
+            static (options, mapping, _) => mapping.CreateInfo(options,
+                new PolymorphicBitStringConverterResolver(options.GetCanonicalTypeId(DataTypeNames.Bit))));
 
         // TimestampTz
         mappings.AddStructType<DateTime>(DataTypeNames.TimestampTz,
@@ -288,6 +299,24 @@ class AnsiSqlConverterInfoResolver: IPgConverterInfoResolver
                     options.EnableDateTimeInfinityConversions), resolvedDataTypeName), isDefault: true);
         mappings.AddStructType<long>(DataTypeNames.Timestamp,
             static (options, mapping, _) => mapping.CreateInfo(options, new Int64Converter<long>()));
+
+        // Time
+        mappings.AddStructType<TimeSpan>(DataTypeNames.Time,
+            static (options, mapping, _) => mapping.CreateInfo(options, new TimeSpanTimeConverter()), isDefault: true);
+        mappings.AddStructType<long>(DataTypeNames.Time,
+            static (options, mapping, _) => mapping.CreateInfo(options, new Int64Converter<long>()));
+#if NET6_0_OR_GREATER
+        mappings.AddStructType<TimeOnly>(DataTypeNames.Time,
+            static (options, mapping, _) => mapping.CreateInfo(options, new TimeOnlyTimeConverter()));
+#endif
+
+        // TimeTz
+        mappings.AddStructType<DateTimeOffset>(DataTypeNames.TimeTz,
+            static (options, mapping, _) => mapping.CreateInfo(options, new DateTimeOffsetTimeTzConverter()), isDefault: true);
+
+        // Interval
+        mappings.AddStructType<TimeSpan>(DataTypeNames.Interval,
+            static (options, mapping, _) => mapping.CreateInfo(options, new TimeSpanIntervalConverter()), isDefault: true);
 
         // Text
         mappings.AddType<string>(DataTypeNames.Text,
@@ -334,6 +363,12 @@ class AnsiSqlConverterInfoResolver: IPgConverterInfoResolver
         mappings.AddStructArrayType<BitVector32>(DataTypeNames.Varbit);
         mappings.AddArrayType<object>(DataTypeNames.Varbit);
 
+        // Bit
+        mappings.AddArrayType<BitArray>(DataTypeNames.Bit);
+        mappings.AddStructArrayType<bool>(DataTypeNames.Bit);
+        mappings.AddStructArrayType<BitVector32>(DataTypeNames.Bit);
+        mappings.AddArrayType<object>(DataTypeNames.Bit);
+
         // TimestampTz
         mappings.AddResolverStructArrayType<DateTime>(DataTypeNames.TimestampTz);
         mappings.AddStructArrayType<DateTimeOffset>(DataTypeNames.TimestampTz);
@@ -342,6 +377,19 @@ class AnsiSqlConverterInfoResolver: IPgConverterInfoResolver
         // Timestamp
         mappings.AddResolverStructArrayType<DateTime>(DataTypeNames.Timestamp);
         mappings.AddStructArrayType<long>(DataTypeNames.Timestamp);
+
+        // Time
+        mappings.AddStructArrayType<TimeSpan>(DataTypeNames.Time);
+        mappings.AddStructArrayType<long>(DataTypeNames.Time);
+#if NET6_0_OR_GREATER
+        mappings.AddStructArrayType<TimeOnly>(DataTypeNames.Time);
+#endif
+
+        // TimeTz
+        mappings.AddStructArrayType<DateTimeOffset>(DataTypeNames.TimeTz);
+
+        // Interval
+        mappings.AddStructArrayType<TimeSpan>(DataTypeNames.Interval);
 
         // Text
         mappings.AddArrayType<string>(DataTypeNames.Text);
