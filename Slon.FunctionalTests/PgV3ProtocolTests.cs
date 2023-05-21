@@ -40,11 +40,11 @@ public class PgV3ProtocolTests
     }
 
     string _commandText = string.Empty;
-    PgV3Protocol _protocol;
+    // PgV3Protocol _protocol = null!;
     const int PipelinedCommands = 10;
     readonly TaskCompletionSource<IOCompletionPair>[] _readActivations = new TaskCompletionSource<IOCompletionPair>[PipelinedCommands];
-    Channel<TaskCompletionSource<IOCompletionPair>> _channel;
-    SlonDataReader _dataReader;
+    // Channel<TaskCompletionSource<IOCompletionPair>> _channel = null!;
+    // SlonDataReader _dataReader = null!;
     public int NumRows { get; set; } = 1000;
 
     // [Test]
