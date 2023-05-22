@@ -95,26 +95,10 @@ class PgConverterInfo
         return resolution;
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     PgConverterResolution GetResolutionCore(object? value = default, PgTypeId? expectedPgTypeId = null, Field? field = null)
     {
-        PgConverterResolution resolution;
-        switch (this)
-        {
-            case { Converter: { } converter }:
-                resolution = new(converter, PgTypeId.GetValueOrDefault(), IsBoxing ? Type : null);
-                break;
-            case PgConverterResolverInfo { ConverterResolver: { } resolver }:
-                resolution = field is null
-                    ? resolver.GetAsObject(value, expectedPgTypeId, Options.RequirePortableTypeIds)
-                    : resolver.GetAsObject(field.GetValueOrDefault(), Options.RequirePortableTypeIds);
-                ThrowIfInvalidEffectiveType(resolution.EffectiveType);
-                break;
-            default:
-                ThrowNotSupportedType(Type);
-                return default;
-        }
-
-        return resolution;
+        return default;
     }
 
     public ValueSize? GetPreferredSize<T>(PgConverterResolution<T> resolution, T? value, int bufferLength, out object? writeState, out DataFormat format, DataFormat? preferredFormat = null)
