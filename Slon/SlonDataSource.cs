@@ -357,7 +357,7 @@ public partial class SlonDataSource: DbDataSource, IConnectionFactory<PgV3Protoc
         {
             TypeCatalog = databaseInfo.TypeCatalog,
             TextEncoding = _pgOptions.Encoding,
-            ConverterInfoResolver = new AnsiSqlConverterInfoResolver()
+            ConverterInfoResolver = new AdoConverterInfoResolver()
         };
 
         return new PgDbDependencies(databaseInfo, converterOptions, new StatementTracker(_options.AutoPrepareMinimumUses), DbDepsRevision++);

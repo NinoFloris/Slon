@@ -31,7 +31,7 @@ public class SlonParameterTests
             {
                 TypeCatalog = portableTypeCatalog ? FrontendPortableCatalog.TypeCatalog : FrontendCatalog.TypeCatalog,
                 TextEncoding = PgOptions.DefaultEncoding,
-                ConverterInfoResolver = new AnsiSqlConverterInfoResolver()
+                ConverterInfoResolver = new AdoConverterInfoResolver()
             });
     static ParameterContextFactory CreateFactory(int revision, string? statementText = null, bool portableTypeCatalog = false) => new(
         FrontendCatalog,
