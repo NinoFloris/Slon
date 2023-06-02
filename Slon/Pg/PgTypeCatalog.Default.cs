@@ -104,7 +104,7 @@ static class DefaultPgTypes
     }
 }
 
-// TODO multirangearray (and range is its own type, or we should introduce a full type family here)
+// TODO rangearray, multirangearray (and range is its own type, or we should introduce a full type family here)
 readonly struct PgTypeGroup
 {
     public required DataTypeName BaseName { get; init; }
@@ -134,7 +134,7 @@ readonly struct PgTypeGroup
             BaseName = baseName,
             BaseType = baseType,
 
-            ArrayName = DataTypeName.CreateFullyQualifiedName("_" + baseName.Value.Substring(baseName.Value.IndexOf('.'))),
+            ArrayName = baseName.ToArrayName(),
             ArrayType = new(arrayOid, new PgKind.Array(baseType)),
 
             RangeName = rangeName is { } ? DataTypeName.CreateFullyQualifiedName(rangeName) : null,

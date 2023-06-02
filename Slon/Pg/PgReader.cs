@@ -32,6 +32,17 @@ class PgReader
         throw new NotImplementedException();
     }
 
+    public float ReadFloat()
+    {
+        throw new NotImplementedException();
+    }
+
+    public float ReadDouble()
+    {
+        throw new NotImplementedException();
+    }
+
+    
     public int ReadInt32()
     {
         throw new NotImplementedException();
@@ -47,7 +58,12 @@ class PgReader
         throw new NotImplementedException();
     }
 
-    public void ReadUInt32()
+    public ushort ReadUInt16()
+    {
+        throw new NotImplementedException();
+    }
+
+    public uint ReadUInt32()
     {
         throw new NotImplementedException();
     }

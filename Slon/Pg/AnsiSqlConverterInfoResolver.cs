@@ -258,6 +258,33 @@ class AnsiSqlConverterInfoResolver: IPgConverterInfoResolver
         mappings.AddStructType<sbyte>(DataTypeNames.Int8,
             static (options, mapping, _) => mapping.CreateInfo(options, new Int64Converter<sbyte>()));
 
+        // Float4
+        mappings.AddStructType<float>(DataTypeNames.Float4,
+            static (options, mapping, _) => mapping.CreateInfo(options, new RealConverter<float>()));
+        mappings.AddStructType<double>(DataTypeNames.Float4,
+            static (options, mapping, _) => mapping.CreateInfo(options, new RealConverter<double>()));
+
+        // Float8
+        mappings.AddStructType<double>(DataTypeNames.Float8,
+            static (options, mapping, _) => mapping.CreateInfo(options, new DoubleConverter<double>()));
+
+        // Numeric
+        mappings.AddStructType<BigInteger>(DataTypeNames.Numeric,
+            static (options, mapping, _) => mapping.CreateInfo(options, new NumericConverter<BigInteger>()));
+        mappings.AddStructType<decimal>(DataTypeNames.Numeric,
+            static (options, mapping, _) => mapping.CreateInfo(options, new NumericConverter<decimal>()), isDefault: true);
+        mappings.AddStructType<short>(DataTypeNames.Numeric,
+            static (options, mapping, _) => mapping.CreateInfo(options, new NumericConverter<short>()));
+        mappings.AddStructType<int>(DataTypeNames.Numeric,
+            static (options, mapping, _) => mapping.CreateInfo(options, new NumericConverter<int>()));
+        mappings.AddStructType<long>(DataTypeNames.Numeric,
+            static (options, mapping, _) => mapping.CreateInfo(options, new NumericConverter<long>()));
+        mappings.AddStructType<float>(DataTypeNames.Numeric,
+            static (options, mapping, _) => mapping.CreateInfo(options, new NumericConverter<float>()));
+        mappings.AddStructType<double>(DataTypeNames.Numeric,
+            static (options, mapping, _) => mapping.CreateInfo(options, new NumericConverter<double>()));
+
+        // TODO might want to move to pg specific types.
         // Varbit
         mappings.AddType<BitArray>(DataTypeNames.Varbit,
             static (options, mapping, _) => mapping.CreateInfo(options, new BitArrayBitStringConverter(options.GetArrayPool<byte>())), isDefault: true);
@@ -325,7 +352,7 @@ class AnsiSqlConverterInfoResolver: IPgConverterInfoResolver
             static (options, mapping, _) => mapping.CreateInfo(options, new CharArrayTextConverter(new ReadOnlyMemoryTextConverter(options)), DataFormat.Text));
         mappings.AddStreamingStructType<ReadOnlyMemory<char>>(DataTypeNames.Text,
             static (options, mapping, _) => mapping.CreateInfo(options, new ReadOnlyMemoryTextConverter(options), DataFormat.Text));
-        mappings.AddStreamingStructType<ReadOnlyMemory<char>>(DataTypeNames.Text,
+        mappings.AddStreamingStructType<ArraySegment<char>>(DataTypeNames.Text,
             static (options, mapping, _) => mapping.CreateInfo(options, new CharArraySegmentTextConverter(new ReadOnlyMemoryTextConverter(options)), DataFormat.Text));
         mappings.AddStructType<char>(DataTypeNames.Text,
             static (options, mapping, _) => mapping.CreateInfo(options, new CharTextConverter(options), DataFormat.Text));
@@ -356,6 +383,22 @@ class AnsiSqlConverterInfoResolver: IPgConverterInfoResolver
         mappings.AddStructArrayType<long>(DataTypeNames.Int8);
         mappings.AddStructArrayType<byte>(DataTypeNames.Int8);
         mappings.AddStructArrayType<sbyte>(DataTypeNames.Int8);
+
+        // Float4
+        mappings.AddStructArrayType<float>(DataTypeNames.Float4);
+        mappings.AddStructArrayType<double>(DataTypeNames.Float4);
+
+        // Float8
+        mappings.AddStructArrayType<double>(DataTypeNames.Float8);
+
+        // Numeric
+        mappings.AddStructArrayType<BigInteger>(DataTypeNames.Numeric);
+        mappings.AddStructArrayType<decimal>(DataTypeNames.Numeric);
+        mappings.AddStructArrayType<short>(DataTypeNames.Numeric);
+        mappings.AddStructArrayType<int>(DataTypeNames.Numeric);
+        mappings.AddStructArrayType<long>(DataTypeNames.Numeric);
+        mappings.AddStructArrayType<float>(DataTypeNames.Numeric);
+        mappings.AddStructArrayType<double>(DataTypeNames.Numeric);
 
         // Varbit
         mappings.AddArrayType<BitArray>(DataTypeNames.Varbit);

@@ -4,7 +4,7 @@ using System.Numerics;
 namespace Slon.Pg.Converters;
 
 #if NETSTANDARD2_0
-static class Int64Converter
+file static class Int64Converter
 {
     public static Type[] SupportedTypes => new[]
     {
@@ -57,7 +57,7 @@ sealed class Int64Converter<T> : PgBufferedConverter<T>
         if (typeof(decimal) == typeof(T))
             return (T)(object)(decimal)value;
 
-        throw new InvalidCastException();
+        throw new NotSupportedException();
     }
 
     public override void Write(PgWriter writer, T value)
@@ -81,7 +81,7 @@ sealed class Int64Converter<T> : PgBufferedConverter<T>
         else if (typeof(decimal) == typeof(T))
             writer.WriteInt64((long)(decimal)(object)value!);
         else
-            throw new InvalidCastException();
+            throw new NotSupportedException();
     }
 #endif
 }

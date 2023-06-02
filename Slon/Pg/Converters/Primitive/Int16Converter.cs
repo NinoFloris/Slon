@@ -4,7 +4,7 @@ using System.Numerics;
 namespace Slon.Pg.Converters;
 
 #if NETSTANDARD2_0
-static class Int16Converter
+file static class Int16Converter
 {
     public static Type[] SupportedTypes => new[]
     {
@@ -26,7 +26,7 @@ sealed class Int16Converter<T> : PgBufferedConverter<T>
 #endif
 {
 #if NETSTANDARD2_0
-    static Int16Converter() => TypeSupport.ThrowIfNotSupported(Int64Converter.SupportedTypes, typeof(T));
+    static Int16Converter() => TypeSupport.ThrowIfNotSupported(Int16Converter.SupportedTypes, typeof(T));
 #endif
 
     public override ValueSize GetSize(ref SizeContext context, T value) => sizeof(short);
@@ -57,7 +57,7 @@ sealed class Int16Converter<T> : PgBufferedConverter<T>
         if (typeof(decimal) == typeof(T))
             return (T)(object)(decimal)value;
 
-        throw new InvalidCastException();
+        throw new NotSupportedException();
     }
 
     public override void Write(PgWriter writer, T value)
@@ -81,7 +81,7 @@ sealed class Int16Converter<T> : PgBufferedConverter<T>
         else if (typeof(decimal) == typeof(T))
             writer.WriteInt16((short)(decimal)(object)value!);
         else
-            throw new InvalidCastException();
+            throw new NotSupportedException();
     }
 #endif
 }
