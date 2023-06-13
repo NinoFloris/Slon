@@ -3,7 +3,6 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
-using Slon.Pg.Converters;
 
 namespace Slon.Pg;
 
@@ -31,7 +30,7 @@ abstract class PgConverter
 
     public bool IsDbNullable => DbNullPredicateKind is not DbNullPredicate.None;
 
-    /// FixedSize is true when GetSize can be called with a default value for the type and the given format without throwing.
+    /// When <see cref="fixedSize"/> is true GetSize can be called with a default value for the type and the given format without throwing.
     public virtual bool CanConvert(DataFormat format, out bool fixedSize)
     {
         fixedSize = false;
@@ -43,31 +42,22 @@ abstract class PgConverter
     internal ValueTask<object?> ReadAsObjectAsync(PgReader reader, CancellationToken cancellationToken = default)
         => ReadAsObject(async: true, reader, cancellationToken);
 
-    internal void WriteAsObject(PgWriter writer, object value)
+    /// When <see cref="value"/> is null the default value for the type is used.
+    internal void WriteAsObject(PgWriter writer, object? value)
         => WriteAsObject(async: false, writer, value).GetAwaiter().GetResult();
-    internal ValueTask WriteAsObjectAsync(PgWriter writer, object value, CancellationToken cancellationToken = default)
+
+    /// When <see cref="value"/> is null the default value for the type is used.
+    internal ValueTask WriteAsObjectAsync(PgWriter writer, object? value, CancellationToken cancellationToken = default)
         => WriteAsObject(async: true, writer, value, cancellationToken);
 
     internal abstract Type TypeToConvert { get; }
     internal abstract bool IsDbNullValueAsObject([NotNullWhen(false)]object? value);
-    internal abstract ValueSize GetSizeAsObject(ref SizeContext context, object value);
+    internal abstract ValueSize GetSizeAsObject(ref SizeContext context, object? value);
 
     // Shared sync/async abstract to reduce virtual method table size overhead and code size for each NpgsqlConverter<T> instantiation.
     private protected abstract ValueTask<object?> ReadAsObject(bool async, PgReader reader, CancellationToken cancellationToken = default);
     // Shared sync/async abstract to reduce virtual method table size overhead and code size for each NpgsqlConverter<T> instantiation.
-    private protected abstract ValueTask WriteAsObject(bool async, PgWriter writer, object value, CancellationToken cancellationToken = default);
-
-    private protected virtual ValueTask<object?> BoxResult(Task task) => throw new NotSupportedException();
-
-    // Split out from the generic class to amortize the huge size penalty per async state machine, which would otherwise be per instantiation.
-#if !NETSTANDARD2_0
-    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
-#endif
-    private protected async ValueTask<object?> AwaitReadTask(Task task)
-    {
-        await task;
-        return BoxResult(task);
-    }
+    private protected abstract ValueTask WriteAsObject(bool async, PgWriter writer, object? value, CancellationToken cancellationToken = default);
 
     static DbNullPredicate GetDbNullPredicateForType(DbNullPredicate? dbNullPredicate, Type type)
     {
@@ -99,7 +89,10 @@ abstract class PgConverter
         Extended
     }
 
+    [DoesNotReturn]
     private protected static void ThrowIORequired() => throw new InvalidOperationException("Fixed sizedness for format not respected, expected no IO to be required.");
+    [DoesNotReturn]
+    private protected static void ThrowNullReferenceException() => throw new NullReferenceException("Cannot write null value for reference type.");
 }
 
 abstract class PgConverter<T> : PgConverter
@@ -122,44 +115,100 @@ abstract class PgConverter<T> : PgConverter
     internal sealed override bool IsDbNullValueAsObject([NotNullWhen(false)]object? value)
         => (default(T) is null || value is not null) && IsDbNullValue((T?)value);
 
-    internal sealed override ValueSize GetSizeAsObject(ref SizeContext context, object value)
-        => GetSize(ref context, (T)value);
+    internal sealed override ValueSize GetSizeAsObject(ref SizeContext context, object? value)
+        => GetSize(ref context, GetValueOrNRE(value));
 
     private protected override ValueTask<object?> ReadAsObject(bool async, PgReader reader, CancellationToken cancellationToken = default)
         => new(Read(reader));
 
-    private protected override ValueTask WriteAsObject(bool async, PgWriter writer, object value, CancellationToken cancellationToken = default)
+    // When writing null for a struct type we want to pass default instead of failing the cast with a NullReferenceException.
+    // This allows us to do polymorphic writing of default values i.e. without having to know T.
+    // For reference types passing a null value is invalid as IsDbNullValue will always return true.
+    private protected override ValueTask WriteAsObject(bool async, PgWriter writer, object? value, CancellationToken cancellationToken = default)
     {
-        Write(writer, (T)value);
+        Write(writer, GetValueOrNRE(value));
         return new();
+    }
+
+    [return: NotNull]
+    private protected static T GetValueOrNRE(object? value)
+    {
+        if (default(T) is not null)
+            return (T)(value ?? default)!;
+
+        if (value is null)
+            ThrowNullReferenceException();
+
+        return (T)value;
+    }
+}
+
+// Using a function pointer here is safe against assembly unloading as the instance reference that the static pointer method lives on is passed
+// as such the instance cannot be collected by the gc which means the entire assembly is prevented from unloading until we're done.
+// The alternatives are:
+// 1. Add a virtual method to PgConverter and make AwaitReadTask call into it (bloating the vtable of all PgConverter derived types).
+// 2. Using a delegate (a static field + an alloc per T + metadata, slightly slower dispatch perf, so strictly worse as well).
+file static class PgStreamingConverterHelpers
+{
+    // Split out from the generic class to amortize the huge size penalty per async state machine, which would otherwise be per instantiation.
+#if !NETSTANDARD
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+#endif
+    public static async ValueTask<object?> AwaitTask(Task task, Continuation continuation)
+    {
+        await task;
+        var result = continuation.Invoke(task);
+        // Guarantee the type stays loaded until the function pointer call is done.
+        GC.KeepAlive(continuation.Handle);
+        return result;
+    }
+
+    // Split out into a struct as unsafe and async don't mix, while we do want a nicely typed function pointer signature to prevent mistakes.
+    public readonly unsafe struct Continuation
+    {
+        public object Handle { get; }
+        readonly delegate*<Task, ValueTask<object?>> _continuation;
+
+        /// <param name="handle">A reference to the type that houses the static method <see cref="continuation"/> points to.</param>
+        /// <param name="continuation">The continuation</param>
+        public Continuation(object handle, delegate*<Task, ValueTask<object?>> continuation)
+        {
+            Handle = handle;
+            _continuation = continuation;
+        }
+
+        public ValueTask<object?> Invoke(Task task) => _continuation(task);
     }
 }
 
 abstract class PgStreamingConverter<T> : PgConverter<T>
 {
     protected PgStreamingConverter(bool extendedDbNullPredicate = false) : base(extendedDbNullPredicate) { }
+
     public abstract ValueTask<T> ReadAsync(PgReader reader, CancellationToken cancellationToken = default);
     public abstract ValueTask WriteAsync(PgWriter writer, [DisallowNull]T value, CancellationToken cancellationToken = default);
 
-    private protected sealed override ValueTask<object?> BoxResult(Task task) => new(new ValueTask<object?>((Task<T>)task).Result);
-    private protected sealed override ValueTask<object?> ReadAsObject(bool async, PgReader reader, CancellationToken cancellationToken = default)
+    private protected sealed override unsafe ValueTask<object?> ReadAsObject(bool async, PgReader reader, CancellationToken cancellationToken = default)
     {
         if (!async)
             return new(Read(reader));
 
-        var task = ReadAsync(reader, cancellationToken);
-        if (task.IsCompletedSuccessfully)
+        if (ReadAsync(reader, cancellationToken) is { IsCompletedSuccessfully: true } task)
             return new(task.Result);
 
-        return AwaitReadTask(task.AsTask());
+        return PgStreamingConverterHelpers.AwaitTask(Task.CompletedTask, new(this, &BoxResult));
+
+        static ValueTask<object?> BoxResult(Task task) => new(new ValueTask<object?>((Task<T>)task).Result);
     }
 
-    private protected sealed override ValueTask WriteAsObject(bool async, PgWriter writer, object value, CancellationToken cancellationToken = default)
+    // When writing null for a struct type we want to pass default instead of failing the cast with a NullReferenceException.
+    // This allows us to do polymorphic writing of default values i.e. without having to know T.
+    private protected sealed override ValueTask WriteAsObject(bool async, PgWriter writer, object? value, CancellationToken cancellationToken = default)
     {
         if (async)
-            return WriteAsync(writer, (T)value, cancellationToken);
+            return WriteAsync(writer, GetValueOrNRE(value), cancellationToken);
 
-        Write(writer, (T)value);
+        Write(writer, GetValueOrNRE(value));
         return new();
     }
 }
@@ -198,55 +247,4 @@ abstract class PgBufferedConverter<T> : PgConverter<T>
 
         return ReadCore(reader);
     }
-
-    // In Npgsql we need this part too.
-    // protected abstract void WriteCore(PgWriter writer, T value);
-    // public override void Write(PgWriter writer, T value)
-    // {
-    //     var state = (object?)null;
-    //     if (writer.Remaining < GetSize(default, value, ref state).Value)
-    //         ThrowIORequired();
-    //
-    //     WriteCore(writer, value);
-    // }
 }
-
-/// <summary>
-/// A converter to map strongly typed apis onto boxed converter results to produce a strongly typed converter over T.
-/// </summary>
-sealed class CastingConverter<T> : PgStreamingConverter<T>
-{
-    readonly PgConverter _effectiveConverter;
-    public CastingConverter(PgConverter effectiveConverter)
-        : base(effectiveConverter.DbNullPredicateKind is DbNullPredicate.Extended)
-        => _effectiveConverter = effectiveConverter;
-
-    protected override bool IsDbNull(T? value)
-    {
-        DebugShim.Assert(value is not null);
-        return _effectiveConverter.IsDbNullValueAsObject(value);
-    }
-
-    public override bool CanConvert(DataFormat format, out bool fixedSize) => _effectiveConverter.CanConvert(format, out fixedSize);
-
-    public override ValueSize GetSize(ref SizeContext context, T value)
-        => _effectiveConverter.GetSizeAsObject(ref context, value!);
-
-    public override T Read(PgReader reader)
-        => (T)_effectiveConverter.ReadAsObject(reader)!;
-
-    public override ValueTask<T> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
-    {
-        var task = _effectiveConverter.ReadAsObjectAsync(reader, cancellationToken);
-        return task.IsCompletedSuccessfully ? new((T)task.GetAwaiter().GetResult()!) : Core(task);
-
-        async ValueTask<T> Core(ValueTask<object?> task) => (T)(await task)!;
-    }
-
-    public override void Write(PgWriter writer, T value)
-        => _effectiveConverter.WriteAsObject(writer, value!);
-
-    public override ValueTask WriteAsync(PgWriter writer, T value, CancellationToken cancellationToken = default)
-        => _effectiveConverter.WriteAsObjectAsync(writer, value!, cancellationToken);
-}
-

@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
+using Slon.Pg.Converters;
 using Slon.Pg.Descriptors;
 using Slon.Pg.Types;
 
