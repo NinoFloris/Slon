@@ -148,7 +148,7 @@ abstract class PgConverter<T> : PgConverter
 // The alternatives are:
 // 1. Add a virtual method to PgConverter and make AwaitReadTask call into it (bloating the vtable of all PgConverter derived types).
 // 2. Using a delegate (a static field + an alloc per T + metadata, slightly slower dispatch perf, so strictly worse as well).
-file static class PgStreamingConverterHelpers
+static class PgStreamingConverter
 {
     // Split out from the generic class to amortize the huge size penalty per async state machine, which would otherwise be per instantiation.
 #if !NETSTANDARD
@@ -196,8 +196,9 @@ abstract class PgStreamingConverter<T> : PgConverter<T>
         if (ReadAsync(reader, cancellationToken) is { IsCompletedSuccessfully: true } task)
             return new(task.Result);
 
-        return PgStreamingConverterHelpers.AwaitTask(Task.CompletedTask, new(this, &BoxResult));
+        return PgStreamingConverter.AwaitTask(Task.CompletedTask, new(this, &BoxResult));
 
+        // Using .Result on ValueTask is equivalent to GetAwaiter().GetResult(), this removes TaskAwaiter<TElement> rooting.
         static ValueTask<object?> BoxResult(Task task) => new(new ValueTask<object?>((Task<T>)task).Result);
     }
 

@@ -113,8 +113,10 @@ readonly struct ConverterInfoMappingCollection
         => AddArrayType<TElement>(FindMapping(typeof(TElement), elementDataTypeName));
 
     public void AddArrayType<TElement>(ConverterInfoMapping elementMapping) where TElement : class
-        => AddArrayType(elementMapping, typeof(TElement[]),
-            static innerInfo => new ArrayConverter<TElement>(innerInfo.GetResolutionAsObject(), innerInfo.Options.GetArrayPool<(ValueSize, object?)>()));
+    {
+        AddArrayType(elementMapping, typeof(TElement[]),
+            static innerInfo => new ArrayBasedArrayConverter<TElement>(innerInfo.GetResolutionAsObject(), innerInfo.Options.GetArrayPool<(ValueSize, object?)>()));
+    }
 
     void AddStructType(Type type, Type nullableType, DataTypeName dataTypeName, ConverterInfoFactory createInfo, Func<PgConverterInfo, PgConverter> nullableConverter, bool isDefault)
     {
@@ -135,9 +137,11 @@ readonly struct ConverterInfoMappingCollection
         => AddStructArrayType<TElement>(FindMapping(typeof(TElement), elementDataTypeName), FindMapping(typeof(TElement?), elementDataTypeName));
 
     public void AddStructArrayType<TElement>(ConverterInfoMapping elementMapping, ConverterInfoMapping nullableElementMapping) where TElement : struct
-        => AddStructArrayType(elementMapping, nullableElementMapping, typeof(TElement[]), typeof(TElement?[]),
-            static elemInfo => new ArrayConverter<TElement>(elemInfo.GetResolutionAsObject(), elemInfo.Options.GetArrayPool<(ValueSize, object?)>()),
-            static elemInfo => new ArrayConverter<TElement?>(elemInfo.GetResolutionAsObject(), elemInfo.Options.GetArrayPool<(ValueSize, object?)>()));
+    {
+        AddStructArrayType(elementMapping, nullableElementMapping, typeof(TElement[]), typeof(TElement?[]),
+            static elemInfo => new ArrayBasedArrayConverter<TElement>(elemInfo.GetResolutionAsObject(), elemInfo.Options.GetArrayPool<(ValueSize, object?)>()),
+            static elemInfo => new ArrayBasedArrayConverter<TElement?>(elemInfo.GetResolutionAsObject(), elemInfo.Options.GetArrayPool<(ValueSize, object?)>()));
+    }
 
     void AddStructArrayType(ConverterInfoMapping elementMapping, ConverterInfoMapping nullableElementMapping, Type type, Type nullableType, Func<PgConverterInfo, PgConverter> converter, Func<PgConverterInfo, PgConverter> nullableConverter)
     {
