@@ -357,7 +357,7 @@ public partial class SlonDataSource: DbDataSource, IConnectionFactory<PgV3Protoc
         {
             TypeCatalog = databaseInfo.TypeCatalog,
             TextEncoding = _pgOptions.Encoding,
-            ConverterInfoResolver = new DefaultConverterInfoResolver()
+            ConverterInfoResolver = new AdoWithArrayConverterInfoResolver()
         };
 
         return new PgDbDependencies(databaseInfo, converterOptions, new StatementTracker(_options.AutoPrepareMinimumUses), DbDepsRevision++);
@@ -437,14 +437,14 @@ public partial class SlonDataSource: DbDataSource, IConnectionFactory<PgV3Protoc
         _channelWriter?.Complete();
     }
 
-    internal PgConverterInfo GetConverterInfo(Type type, Field field)
+    internal PgConverterInfo GetConverterInfo(Type type, Field field, out bool asObject)
     {
-        var converterOptions = GetDbDependencies().ConverterOptions;
-        var info = converterOptions.GetConverterInfo(type, field.PgTypeId);
-        if (info is null && type == typeof(object))
-            info = converterOptions.GetDefaultConverterInfo(field.PgTypeId);
+        var options = GetDbDependencies().ConverterOptions;
+        if ((typeof(object) == type ? options.GetObjectOrDefaultConverterInfo(field.PgTypeId) : options.GetConverterInfo(type, field.PgTypeId)) is not { } info)
+            throw new InvalidOperationException($"Cannot find converter for clr type {type} and pg type {field.PgTypeId}.");
 
-        return info ?? throw new InvalidOperationException($"Cannot find converter for clr type {type} and pg type {field.PgTypeId}");
+        asObject = info.Type != type || info.IsBoxing;
+        return info;
     }
 
     internal ParameterContextFactory GetParameterContextFactory(string? statementText = null)

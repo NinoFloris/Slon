@@ -1,7 +1,7 @@
 using System;
 using System.Diagnostics.CodeAnalysis;
-using System.Threading;
-using System.Threading.Tasks;
+using System.Runtime.CompilerServices;
+using Slon.Pg.Converters;
 using Slon.Pg.Descriptors;
 using Slon.Pg.Types;
 
@@ -12,18 +12,22 @@ class PgConverterInfo
     readonly bool _canBinaryConvert;
     readonly bool _canTextConvert;
 
-    PgConverterInfo(PgConverterOptions options, PgConverter converter, PgTypeId pgTypeId)
+    PgConverterInfo(PgConverterOptions options, Type? unboxedType, PgConverter converter, PgTypeId pgTypeId)
     {
-        Type = converter.TypeToConvert;
+        if (unboxedType is not null && converter.TypeToConvert != typeof(object))
+            throw new ArgumentException("Cannot supply unboxed type information for converters that don't convert to object.", nameof(unboxedType));
+        IsBoxing = unboxedType is not null;
+        Type = unboxedType ?? converter.TypeToConvert;
         Options = options;
         Converter = converter;
         PgTypeId = options.GetCanonicalTypeId(pgTypeId);
-        _canBinaryConvert = converter.CanConvert(DataFormat.Binary);
-        _canTextConvert = converter.CanConvert(DataFormat.Text);
+        _canBinaryConvert = converter.CanConvert(DataFormat.Binary, out _);
+        _canTextConvert = converter.CanConvert(DataFormat.Text, out _);
     }
 
-    PgConverterInfo(PgConverterOptions options, Type type, PgConverterResolution? resolution)
+    PgConverterInfo(PgConverterOptions options, Type type, PgConverterResolution? resolution, bool isBoxing = false)
     {
+        IsBoxing = isBoxing;
         Type = type;
         Options = options;
         if (resolution is { } res)
@@ -33,8 +37,8 @@ class PgConverterInfo
                 throw new ArgumentException("Given type id is not in canonical form. Make sure ConverterResolver implementations close over canonical ids, e.g. by calling options.GetCanonicalTypeId(pgTypeId) on the constructor arguments.", nameof(PgTypeId));
 
             PgTypeId = res.PgTypeId;
-            _canBinaryConvert = res.Converter.CanConvert(DataFormat.Binary);
-            _canTextConvert = res.Converter.CanConvert(DataFormat.Text);
+            _canBinaryConvert = res.Converter.CanConvert(DataFormat.Binary, out _);
+            _canTextConvert = res.Converter.CanConvert(DataFormat.Text, out _);
         }
     }
 
@@ -49,7 +53,10 @@ class PgConverterInfo
 
     PgConverter? Converter { get; }
     [MemberNotNullWhen(false, nameof(Converter))]
-    public bool IsValueDependent => Converter is null;
+    bool IsValueDependent => Converter is null;
+
+    // Only used for internal converters to save on binary bloat, we never hand out one to converters that don't support it.
+    internal bool IsBoxing { get; }
 
     public PgTypeId? PgTypeId { get; }
 
@@ -63,181 +70,140 @@ class PgConverterInfo
             disposable.Dispose();
     }
 
-    public PgConverterResolution<T> GetResolution<T>(T? value, PgTypeId? expectedPgTypeId = null) => GetResolutionCore(value, expectedPgTypeId, field: null);
-    public PgConverterResolution GetResolution(object? value, PgTypeId? expectedPgTypeId = null) => GetResolutionCore(value, expectedPgTypeId, field: null);
+    public PgConverterResolution GetResolution<T>(T? value = default, PgTypeId? expectedPgTypeId = null) => GetResolutionCore(value, expectedPgTypeId, field: null);
+    public PgConverterResolution GetResolutionAsObject(object? value = default, PgTypeId? expectedPgTypeId = null) => GetResolutionCore(value, expectedPgTypeId, field: null);
+    public PgConverterResolution GetResolution(Field field) => GetResolutionCore(field: field);
 
-    PgConverterResolution<T> GetResolutionCore<T>(T? value = default, PgTypeId? expectedPgTypeId = null, Field? field = null)
+    PgConverterResolution GetResolutionCore<T>(T? value = default, PgTypeId? expectedPgTypeId = null, Field? field = null)
     {
+        PgConverterResolution resolution;
         switch (this)
         {
             case { Converter: PgConverter<T> converterT }:
-                return new(converterT, PgTypeId.GetValueOrDefault());
+                resolution = new PgConverterResolution(converterT, PgTypeId.GetValueOrDefault(), IsBoxing ? Type : null);
+                break;
             case PgConverterResolverInfo { ConverterResolver: PgConverterResolver<T> resolverT }:
-                return field is null
-                    ? resolverT.GetInternal(value, expectedPgTypeId, Options.RequirePortableTypeIds)
-                    : resolverT.GetInternal(field.GetValueOrDefault(), Options.RequirePortableTypeIds);
+                resolution = field is null ? resolverT.GetInternal(value, expectedPgTypeId, Options.RequirePortableTypeIds) : resolverT.GetInternal(field.GetValueOrDefault(), Options.RequirePortableTypeIds, validate: true);
+                ThrowIfInvalidEffectiveType(resolution.EffectiveType);
+                break;
             default:
-                ThrowNotSupported();
+                ThrowNotSupportedType(typeof(T));
                 return default;
         }
+
+        return resolution;
     }
 
     PgConverterResolution GetResolutionCore(object? value = default, PgTypeId? expectedPgTypeId = null, Field? field = null)
     {
+        PgConverterResolution resolution;
         switch (this)
         {
             case { Converter: { } converter }:
-                return new(converter, PgTypeId.GetValueOrDefault());
+                resolution = new(converter, PgTypeId.GetValueOrDefault(), IsBoxing ? Type : null);
+                break;
             case PgConverterResolverInfo { ConverterResolver: { } resolver }:
-                return field is null
-                    ? resolver.GetAsObject(value, expectedPgTypeId, Options.RequirePortableTypeIds)
-                    : resolver.GetAsObject(field.GetValueOrDefault(), Options.RequirePortableTypeIds);
+                resolution = field is null
+                    ? resolver.GetAsObjectInternal(value, expectedPgTypeId, Options.RequirePortableTypeIds, validate: true)
+                    : resolver.GetInternal(field.GetValueOrDefault(), Options.RequirePortableTypeIds, validate: true);
+                ThrowIfInvalidEffectiveType(resolution.EffectiveType);
+                break;
             default:
-                ThrowNotSupported();
+                ThrowNotSupportedType(value?.GetType());
                 return default;
         }
+
+        return resolution;
     }
 
-    internal Writer<T> GetWriter<T>(T? value) => new(GetResolutionCore(value, PgTypeId), this);
-    internal Writer GetWriter(object? value) => new(GetResolutionCore(value, PgTypeId), this);
-
-    internal Reader<T> GetReader<T>(Field field) => new(GetResolutionCore<T>(field: field), this);
-    internal Reader GetReader(Field field) => new(GetResolutionCore(field: field), this);
-
-    internal PgConverterInfo Compose(PgConverter converter, PgTypeId pgTypeId)
-        => new(Options, converter, pgTypeId)
-        {
-            IsDefault = IsDefault,
-            PreferredFormat = PreferredFormat
-        };
-
-    internal PgConverterInfo Compose(PgConverterResolver resolver, PgTypeId? expectedPgTypeId)
-        => new PgConverterResolverInfo(Options, resolver, expectedPgTypeId)
-        {
-            IsDefault = IsDefault,
-            PreferredFormat = PreferredFormat
-        };
-
-    public static PgConverterInfo Create(PgConverterOptions options, PgConverter converter, PgTypeId pgTypeId, bool isDefault = false, DataFormat? preferredFormat = null)
-        => new(options, converter, pgTypeId) { IsDefault = isDefault, PreferredFormat = preferredFormat };
-
-    public static PgConverterInfo Create(PgConverterOptions options, PgConverterResolver resolver, PgTypeId? expectedPgTypeId, bool isDefault = false, DataFormat? preferredFormat = null)
-        => new PgConverterResolverInfo(options, resolver, expectedPgTypeId) { IsDefault = isDefault, PreferredFormat = preferredFormat };
-
-    internal readonly struct Writer<T>
+    public ValueSize? GetPreferredSize<T>(PgConverterResolution resolution, T? value, int bufferLength, out object? writeState, out DataFormat format, DataFormat? preferredFormat = null)
     {
-        readonly PgConverter<T> _converter;
-        readonly PgTypeId _pgTypeId;
-        public PgConverterInfo Info { get; }
-
-        public Writer(PgConverterResolution<T> resolution, PgConverterInfo info)
-        {
-            _converter = resolution.Converter;
-            _pgTypeId = resolution.PgTypeId;
-            Info = info;
-        }
-
-        public bool IsDbNullValue([NotNullWhen(false)]T? value)
-            => _converter.IsDbNullValue(value, Info.Options);
-
-        public ValueSize GetAnySize(T value, int bufferLength, out object? writeState, out DataFormat format, DataFormat? preferredFormat = null)
+        format = ResolvePreferredFormat(resolution.Converter, preferredFormat ?? PreferredFormat);
+        var context = new SizeContext(format, bufferLength);
+        var converter = resolution.GetConverter<T>();
+        if (converter.IsDbNullValue(value))
         {
             writeState = null;
-            format = Info.ResolvePreferredFormat(_converter, preferredFormat ?? Info.PreferredFormat);
-            return _converter.GetSize(value!, ref writeState, new(format, bufferLength), Info.Options);
+            return null;
         }
-
-        public void Write(PgWriter pgWriter, T value)
-            => _converter.Write(pgWriter, value, Info.Options);
-
-        public ValueTask WriteAsync(PgWriter pgWriter, T value, CancellationToken cancellationToken = default)
-            => _converter.WriteAsync(pgWriter, value, Info.Options, cancellationToken);
-
-        public Writer ToWriter() => new(new(_converter, _pgTypeId), Info);
+        var size = converter.GetSize(ref context, value);
+        writeState = context.WriteState;
+        return size;
     }
 
-    internal readonly struct Writer
+    public ValueSize? GetPreferredSizeAsObject(PgConverterResolution resolution, object? value, int bufferLength, out object? writeState, out DataFormat format, DataFormat? preferredFormat = null)
     {
-        readonly PgConverter _converter;
-        readonly PgTypeId _pgTypeId;
-        public PgConverterInfo Info { get; }
-
-        public Writer(PgConverterResolution resolution, PgConverterInfo info)
-        {
-            _converter = resolution.Converter;
-            _pgTypeId = resolution.PgTypeId;
-            Info = info;
-        }
-
-        public bool IsDbNullValue([NotNullWhen(false)]object? value)
-            => _converter.IsDbNullValueAsObject(value, Info.Options);
-
-        public ValueSize GetAnySize(object value, int bufferLength, out object? writeState, out DataFormat format, DataFormat? preferredFormat = null)
+        format = ResolvePreferredFormat(resolution.Converter, preferredFormat ?? PreferredFormat);
+        var context = new SizeContext(format, bufferLength);
+        if (resolution.Converter.IsDbNullValueAsObject(value))
         {
             writeState = null;
-            format = Info.ResolvePreferredFormat(_converter, preferredFormat ?? Info.PreferredFormat);
-            return _converter.GetSizeAsObject(value!, ref writeState, new(format, bufferLength), Info.Options);
+            return null;
         }
-
-        public void Write(PgWriter pgWriter, object value)
-            => _converter.WriteAsObject(pgWriter, value, Info.Options);
-
-        public ValueTask WriteAsync(PgWriter pgWriter, object value, CancellationToken cancellationToken)
-            => _converter.WriteAsObjectAsync(pgWriter, value, Info.Options, cancellationToken);
-
-        public Writer<T> ToWriter<T>() => new(new((PgConverter<T>)_converter, _pgTypeId), Info);
+        var size = resolution.Converter.GetSizeAsObject(ref context, value);
+        writeState = context.WriteState;
+        return size;
     }
 
-    internal readonly struct Reader<T>
+    internal PgConverterInfo ToObjectConverterInfo(bool? isDefault = null)
     {
-        readonly PgConverter<T> _converter;
-        readonly PgConverterInfo _info;
-
-        public Reader(PgConverterResolution<T> resolution, PgConverterInfo info)
+        if (IsValueDependent)
         {
-            _converter = resolution.Converter;
-            _info = info;
-            EffectiveType = resolution.EffectiveType;
+            throw new NotImplementedException();
         }
 
-        public Type EffectiveType { get; }
-
-        public bool IsDbNullValue(T? value) => _converter.IsDbNullValue(value, _info.Options);
-
-        public T? Read(PgReader reader)
-            => _converter.Read(reader, _info.Options);
-
-        public ValueTask<T?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
-            => _converter.ReadAsync(reader, _info.Options, cancellationToken);
+        return new(Options, null, new CastingConverter<object>(Converter), PgTypeId.GetValueOrDefault())
+        {
+            IsDefault = isDefault ?? IsDefault,
+            PreferredFormat = PreferredFormat
+        };
     }
 
-    internal readonly struct Reader
+    internal PgConverterInfo ToComposedConverterInfo(PgConverter converter, PgTypeId pgTypeId, Type? unboxedType = null, bool? isDefault = null)
     {
-        readonly PgConverter _converter;
-        readonly PgConverterInfo _info;
+        if (IsValueDependent)
+            throw new InvalidOperationException("Cannot compose a normal converter info on top of a value dependent converter info.");
 
-        public Reader(PgConverterResolution resolution, PgConverterInfo info)
+        return new(Options, unboxedType, converter, pgTypeId)
         {
-            _converter = resolution.Converter;
-            _info = info;
-            EffectiveType = resolution.EffectiveType;
-        }
-
-        public Type EffectiveType { get; }
-
-        public object? Read(PgReader reader)
-            => _converter.ReadAsObject(reader, _info.Options);
-
-        public ValueTask<object?> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
-            => _converter.ReadAsObjectAsync(reader, _info.Options, cancellationToken);
+            IsDefault = isDefault ?? IsDefault,
+            PreferredFormat = PreferredFormat
+        };
     }
+
+    internal PgConverterInfo ToComposedConverterInfo(PgConverterResolver resolver, PgTypeId? expectedPgTypeId, bool isBoxing = false, bool? isDefault = null)
+        => new PgConverterResolverInfo(Options, resolver, expectedPgTypeId, isBoxing)
+        {
+            IsDefault = isDefault ?? IsDefault,
+            PreferredFormat = PreferredFormat,
+        };
+
+    internal static PgConverterInfo CreateBoxing(PgConverterOptions options, Type effectiveType, PgConverter converter, PgTypeId pgTypeId, bool isDefault = false, DataFormat? preferredFormat = null)
+        => new(options, effectiveType, converter, pgTypeId) { IsDefault = isDefault, PreferredFormat = preferredFormat };
+
+    internal static PgConverterInfo CreateBoxing(PgConverterOptions options, PgConverterResolver resolver, PgTypeId? expectedPgTypeId, bool isDefault = false, DataFormat? preferredFormat = null)
+        => new PgConverterResolverInfo(options, resolver, expectedPgTypeId, isBoxing: true) { IsDefault = isDefault, PreferredFormat = preferredFormat };
+
+    public static PgConverterInfo Create(PgConverterOptions options, PgConverter converter, PgTypeId pgTypeId, DataFormat? preferredFormat = null)
+        => new(options, null, converter, pgTypeId) { PreferredFormat = preferredFormat };
+
+    // It should not be possible to create a resolver based info that has IsDefault false and an empty PgTypeId.
+    public static PgConverterInfo Create(PgConverterOptions options, PgConverterResolver resolver, PgTypeId expectedPgTypeId, DataFormat? preferredFormat = null)
+        => new PgConverterResolverInfo(options, resolver, expectedPgTypeId) { PreferredFormat = preferredFormat };
+
+    public static PgConverterInfo CreateDefault(PgConverterOptions options, PgConverterResolver resolver, PgTypeId? expectedPgTypeId = null, DataFormat? preferredFormat = null)
+        => new PgConverterResolverInfo(options, resolver, expectedPgTypeId) { IsDefault = true, PreferredFormat = preferredFormat };
+
+    public static PgConverterInfo CreateDefault(PgConverterOptions options, PgConverter converter, PgTypeId pgTypeId, DataFormat? preferredFormat = null)
+        => new(options, null, converter, pgTypeId) { IsDefault = true, PreferredFormat = preferredFormat };
 
     sealed class PgConverterResolverInfo : PgConverterInfo
     {
-        internal PgConverterResolverInfo(PgConverterOptions options, PgConverterResolver converterResolver, PgTypeId? pgTypeId)
+        internal PgConverterResolverInfo(PgConverterOptions options, PgConverterResolver converterResolver, PgTypeId? pgTypeId, bool isBoxing = false)
             : base(options,
                 converterResolver.TypeToConvert,
-                pgTypeId is { } typeId ? converterResolver.GetDefaultAsObject(typeId, options.RequirePortableTypeIds) : null)
+                pgTypeId is { } typeId ? converterResolver.GetDefaultInternal(typeId, options.RequirePortableTypeIds, validate: true) : null,
+                isBoxing)
         {
             ConverterResolver = converterResolver;
         }
@@ -249,33 +215,22 @@ class PgConverterInfo
         // If we don't have a converter stored we must ask the retrieved one through virtual calls.
         => preferredFormat switch
         {
-            DataFormat.Binary when (HasCachedInfo ? _canBinaryConvert : converter.CanConvert(DataFormat.Binary))
+            DataFormat.Binary when (HasCachedInfo ? _canBinaryConvert : converter.CanConvert(DataFormat.Binary, out _))
                 => DataFormat.Binary,
-            DataFormat.Text when (HasCachedInfo ? !_canTextConvert : !converter.CanConvert(DataFormat.Text))
+            DataFormat.Text when (HasCachedInfo ? !_canTextConvert : !converter.CanConvert(DataFormat.Text, out _))
                 => DataFormat.Binary,
-            _ => (HasCachedInfo ? _canBinaryConvert : converter.CanConvert(DataFormat.Binary)) ? DataFormat.Binary : DataFormat.Text
+            _ => (HasCachedInfo ? _canBinaryConvert : converter.CanConvert(DataFormat.Binary, out _)) ? DataFormat.Binary : DataFormat.Text
         };
 
-    void ThrowNotSupported() => throw new NotSupportedException();
-}
-
-readonly struct PgConverterResolution<T>
-{
-    readonly Type? _effectiveType;
-
-    public PgConverterResolution(PgConverter<T> converter, PgTypeId pgTypeId, Type? effectiveType = null)
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    void ThrowIfInvalidEffectiveType(Type actual)
     {
-        DebugShim.Assert(effectiveType is null || converter.TypeToConvert == typeof(object), "effectiveType can only be set for object polymorphic converters.");
-        Converter = converter;
-        PgTypeId = pgTypeId;
-        _effectiveType = effectiveType;
+        if (IsBoxing && Type != actual)
+            throw new InvalidOperationException($"{nameof(PgConverterResolution.EffectiveType)} for a boxing info can't be {actual} but must return {Type}");
     }
 
-    public PgConverter<T> Converter { get; }
-    public PgTypeId PgTypeId { get; }
-    public Type EffectiveType => _effectiveType ?? Converter.TypeToConvert;
-
-    public PgConverterResolution ToConverterResolution() => new(Converter, PgTypeId);
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    void ThrowNotSupportedType(Type? type) => throw new NotSupportedException(IsBoxing ? $"ConverterInfo only supports boxing conversions, call GetResolution<T> with {typeof(object)} instead of {type}." : null);
 }
 
 readonly struct PgConverterResolution
@@ -294,5 +249,5 @@ readonly struct PgConverterResolution
     public PgTypeId PgTypeId { get; }
     public Type EffectiveType => _effectiveType ?? Converter.TypeToConvert;
 
-    public PgConverterResolution<T> ToConverterResolution<T>() => new((PgConverter<T>)Converter, PgTypeId);
+    public PgConverter<T> GetConverter<T>() => (PgConverter<T>)Converter;
 }

@@ -45,12 +45,12 @@ namespace Slon.Benchmark
 
         string _commandText = string.Empty;
 
-        Npgsql.NpgsqlConnection _npgsqlConn;
+        Npgsql.NpgsqlConnection _npgsqlConn = null!;
 
-        Slon.SlonConnection _conn;
-        Slon.SlonCommand _pipeliningCommand;
-        Slon.SlonCommand _multiplexedPipeliningCommand;
-        Slon.SlonCommand _multiplexingCommand;
+        Slon.SlonConnection _conn = null!;
+        Slon.SlonCommand _pipeliningCommand = null!;
+        Slon.SlonCommand _multiplexedPipeliningCommand = null!;
+        Slon.SlonCommand _multiplexingCommand = null!;
 
         [GlobalSetup(Targets = new[] { nameof(PipelinesPipelined), nameof(PipelinesMultiplexingPipelined), nameof(PipelinesMultiplexing) })]
         public async ValueTask SetupPipelines()

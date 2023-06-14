@@ -6,6 +6,7 @@ readonly record struct DataTypeName
 {
     // This is the maximum length of names in an unmodified Postgres installation.
     // We need to respect this to get to valid names when deriving them (for multirange/arrays etc)
+    // This does not include the namespace.
     const int NAMEDATALEN = 64 - 1; // Minus null terminator.
 
     readonly string _value;
@@ -63,40 +64,45 @@ readonly record struct DataTypeName
         => dataTypeName.IndexOf('.') != -1 ? new(dataTypeName) : new("pg_catalog." + dataTypeName);
 
     // Static transform as defined by https://www.postgresql.org/docs/current/sql-createtype.html#SQL-CREATETYPE-ARRAY
+    // We don't have to deal with [] as we're always starting from a normalized fully qualified name.
     public DataTypeName ToArrayName()
     {
-        if (_value.StartsWith("_", StringComparison.Ordinal) || _value.EndsWith("[]", StringComparison.Ordinal))
+        var unqualifiedName = UnqualifiedName;
+        if (unqualifiedName.StartsWith("_", StringComparison.Ordinal))
             return this;
 
-        if (_value.Length + "_".Length > NAMEDATALEN)
-            return new("_" + _value.Substring(0, NAMEDATALEN - "_".Length));
+        if (unqualifiedName.Length + "_".Length > NAMEDATALEN)
+            return new(Schema + "._" + unqualifiedName.Substring(0, NAMEDATALEN - "_".Length));
 
-        return new("_" + _value);
+        return new(Schema + "._" + unqualifiedName);
     }
 
     // Static transform as defined by https://www.postgresql.org/docs/current/sql-createtype.html#SQL-CREATETYPE-ARRAY
-    // Manual testing confirmed it's only the first occurence of 'range' that gets replaced.
+    // Manual testing on PG confirmed it's only the first occurence of 'range' that gets replaced.
     public DataTypeName ToMultiRangeName()
     {
-        if (_value.IndexOf("multirange", StringComparison.Ordinal) != -1)
+        var unqualifiedName = UnqualifiedName;
+        if (unqualifiedName.IndexOf("multirange", StringComparison.Ordinal) != -1)
             return this;
 
         var rangeIndex = _value.IndexOf("range", StringComparison.Ordinal);
         if (rangeIndex != -1)
         {
-            var str = _value.Substring(0, rangeIndex) + "multirange" + _value.Substring(rangeIndex + "range".Length);
+            var str = unqualifiedName.Substring(0, rangeIndex) + "multirange" + unqualifiedName.Substring(rangeIndex + "range".Length);
 
-            if (_value.Length + "multi".Length > NAMEDATALEN)
+            if (unqualifiedName.Length + "multi".Length > NAMEDATALEN)
                 return new(str.Substring(0, NAMEDATALEN - "multi".Length));
 
-            return new(str);
+            return new(Schema + "." + str);
         }
 
-        if (_value.Length + "_multirange".Length > NAMEDATALEN)
-            return new(_value.Substring(0, NAMEDATALEN - "_multirange".Length) + "_multirange");
+        if (unqualifiedName.Length + "_multirange".Length > NAMEDATALEN)
+            return new(Schema + "." + unqualifiedName.Substring(0, NAMEDATALEN - "_multirange".Length) + "_multirange");
 
-        return new(_value + "_multirange");
+        return new(Schema + "." + unqualifiedName + "_multirange");
     }
+
+    // TODO FromDisplayName
 
     // The type names stored in a DataTypeName are usually the actual typname from the pg_type column.
     // There are some canonical aliases defined in the SQL standard which we take into account.

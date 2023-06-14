@@ -1,5 +1,7 @@
 using System;
 using System.Buffers;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Slon.Pg;
 
@@ -9,6 +11,16 @@ class PgReader
     public int ByteCount { get; internal set; }
     public DataFormat Format { get; internal set; }
     public int Remaining { get; }
+
+    public void WaitForData(int count)
+    {
+        
+    }
+    
+    public ValueTask WaitForDataAsync(int count, CancellationToken cancellationToken = default)
+    {
+        return new();
+    }
 
     public byte ReadByte()
     {
@@ -20,6 +32,17 @@ class PgReader
         throw new NotImplementedException();
     }
 
+    public float ReadFloat()
+    {
+        throw new NotImplementedException();
+    }
+
+    public float ReadDouble()
+    {
+        throw new NotImplementedException();
+    }
+
+    
     public int ReadInt32()
     {
         throw new NotImplementedException();
@@ -31,6 +54,21 @@ class PgReader
     }
 
     public ReadOnlySequence<byte> ReadExact(int byteCount)
+    {
+        throw new NotImplementedException();
+    }
+
+    public ushort ReadUInt16()
+    {
+        throw new NotImplementedException();
+    }
+
+    public uint ReadUInt32()
+    {
+        throw new NotImplementedException();
+    }
+
+    public void Rewind(int count)
     {
         throw new NotImplementedException();
     }

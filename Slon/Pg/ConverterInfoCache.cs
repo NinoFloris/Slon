@@ -22,7 +22,15 @@ sealed class ConverterInfoCache<TPgTypeId> where TPgTypeId : struct
             throw new InvalidOperationException("Cannot use this type argument.");
     }
 
-    public PgConverterInfo? GetOrAddInfo(Type? type, TPgTypeId? pgTypeId)
+    /// <summary>
+    /// 
+    /// </summary>
+    /// <param name="type"></param>
+    /// <param name="pgTypeId"></param>
+    /// <param name="defaultTypeFallback">When this flag is true, and both type and pgTypeId are non null, a default info for the pgTypeId can be returned if an exact match can't be found.</param>
+    /// <returns></returns>
+    /// <exception cref="InvalidOperationException"></exception>
+    public PgConverterInfo? GetOrAddInfo(Type? type, TPgTypeId? pgTypeId, bool defaultTypeFallback = false)
     {
         if (pgTypeId is null && type is not null)
         {
@@ -34,15 +42,29 @@ sealed class ConverterInfoCache<TPgTypeId> where TPgTypeId : struct
             return null;
 
         if (_cacheByPgTypeId.TryGetValue(id, out var infos))
+        {
+            PgConverterInfo? defaultInfo = null;
             foreach (var cachedInfo in infos)
-                if (type is null && cachedInfo.IsDefault || cachedInfo.Type == type)
+            {
+                if (cachedInfo.Type == type)
                     return cachedInfo;
+
+                if (cachedInfo.IsDefault)
+                {
+                    if (type is null)
+                        return cachedInfo;
+                    defaultInfo = cachedInfo;
+                }
+            }
+            return defaultTypeFallback ? defaultInfo : null;
+        }
 
         return AddEntryById(id, infos);
 
         PgConverterInfo? AddByType(Type type)
         {
-            var info = CreateInfo(type, pgTypeId, _options);
+            // We don't pass PgTypeId as we're interested in default converters here.
+            var info = CreateInfo(type, null, _options);
             if (info is null)
                 return null;
 

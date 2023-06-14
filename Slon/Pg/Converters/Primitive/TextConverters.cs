@@ -7,46 +7,54 @@ using System.Threading.Tasks;
 
 namespace Slon.Pg.Converters;
 
-sealed class ReadOnlyMemoryTextConverter: PgConverter<ReadOnlyMemory<char>>
+sealed class ReadOnlyMemoryTextConverter: PgStreamingConverter<ReadOnlyMemory<char>>
 {
-    public override ReadOnlyMemory<char> Read(PgReader reader, PgConverterOptions options)
-        => ReadCore(async: false, reader, options).GetAwaiter().GetResult();
+    readonly Encoding _textEncoding;
+    public ReadOnlyMemoryTextConverter(PgConverterOptions options)
+        => _textEncoding = options.TextEncoding;
 
-    public override ValueTask<ReadOnlyMemory<char>> ReadAsync(PgReader reader, PgConverterOptions options, CancellationToken cancellationToken = default)
-        => ReadCore(async: true, reader, options);
+    public override ReadOnlyMemory<char> Read(PgReader reader)
+        => ReadCore(async: false, reader).GetAwaiter().GetResult();
 
-    public override ValueSize GetSize(ReadOnlyMemory<char> value, ref object? writeState, SizeContext context, PgConverterOptions options)
+    public override ValueTask<ReadOnlyMemory<char>> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
+        => ReadCore(async: true, reader);
+
+    public override ValueSize GetSize(ref SizeContext context, ReadOnlyMemory<char> value)
     {
         // Benchmarks indicated sizing 50 chars takes between 6 and 50ns for utf8 depending on ascii/unicode mix.
         // That is fast enough we're not bothering with upper bounds/unknown sizing for those smaller strings.
         if (value.Length > 50 && context.BufferLength >= value.Length)
         {
-            var upperBound = options.TextEncoding.GetMaxByteCount(value.Length);
+            var upperBound = _textEncoding.GetMaxByteCount(value.Length);
             // Saves a traverse if it fits, we'll write the used buffer space as its length afterwards.
             if (context.BufferLength > upperBound)
                 return ValueSize.CreateUpperBound(upperBound);
         }
 
-        return options.TextEncoding.GetByteCount(value.Span);
+        return _textEncoding.GetByteCount(value.Span);
     }
 
-    public override void Write(PgWriter writer, ReadOnlyMemory<char> value, PgConverterOptions options)
-        => WriteCore(async: false, writer, value, options.TextEncoding, CancellationToken.None).GetAwaiter().GetResult();
-    public override ValueTask WriteAsync(PgWriter writer, ReadOnlyMemory<char> value, PgConverterOptions options, CancellationToken cancellationToken = default)
-        => WriteCore(async: true, writer, value, options.TextEncoding, cancellationToken);
+    public override void Write(PgWriter writer, ReadOnlyMemory<char> value)
+        => WriteCore(async: false, writer, value, _textEncoding, CancellationToken.None).GetAwaiter().GetResult();
+    public override ValueTask WriteAsync(PgWriter writer, ReadOnlyMemory<char> value, CancellationToken cancellationToken = default)
+        => WriteCore(async: true, writer, value, _textEncoding, cancellationToken);
 
-    public override bool CanConvert(DataFormat format) => format is DataFormat.Binary or DataFormat.Text;
+    public override bool CanConvert(DataFormat format, out bool fixedSize)
+    {
+        fixedSize = false;
+        return format is DataFormat.Binary or DataFormat.Text;
+    }
 
-    ValueTask<ReadOnlyMemory<char>> ReadCore(bool async, PgReader reader, PgConverterOptions options)
+    ValueTask<ReadOnlyMemory<char>> ReadCore(bool async, PgReader reader)
     {
         var bytes = reader.ReadExact(reader.ByteCount);
-        var rentedArray = ArrayPool<char>.Shared.Rent(options.TextEncoding.GetMaxCharCount(reader.ByteCount));
+        var rentedArray = ArrayPool<char>.Shared.Rent(_textEncoding.GetMaxCharCount(reader.ByteCount));
 
-        var count = options.TextEncoding.GetChars(bytes, rentedArray.AsSpan());
+        var count = _textEncoding.GetChars(bytes, rentedArray.AsSpan());
         var arrayValue = new char[count];
         Array.Copy(rentedArray, arrayValue, count);
         ArrayPool<char>.Shared.Return(rentedArray);
-        return new(arrayValue);
+        return new(arrayValue.AsMemory());
     }
 
     async ValueTask WriteCore(bool async, PgWriter writer, ReadOnlyMemory<char> value, Encoding encoding, CancellationToken cancellationToken)
@@ -66,25 +74,29 @@ sealed class ReadOnlyMemoryTextConverter: PgConverter<ReadOnlyMemory<char>>
 
 sealed class StringTextConverter : ValueConverter<string, ReadOnlyMemory<char>>
 {
-    public StringTextConverter(PgConverter<ReadOnlyMemory<char>> effectiveConverter) : base(effectiveConverter) { }
-    protected override string ConvertFrom(ReadOnlyMemory<char> value, PgConverterOptions options) => throw new NotSupportedException();
-    protected override ReadOnlyMemory<char> ConvertTo(string value, PgConverterOptions options) => value.AsMemory();
+    readonly Encoding _textEncoding;
+    public StringTextConverter(PgConverter<ReadOnlyMemory<char>> effectiveConverter, PgConverterOptions options) : base(effectiveConverter)
+    {
+        _textEncoding = options.TextEncoding;
+    }
+    protected override string ConvertFrom(ReadOnlyMemory<char> value) => throw new NotSupportedException();
+    protected override ReadOnlyMemory<char> ConvertTo(string value) => value.AsMemory();
 
-    public override string? Read(PgReader reader, PgConverterOptions options)
-        => ReadCore(async: false, reader, options).GetAwaiter().GetResult();
+    public override string Read(PgReader reader)
+        => ReadCore(async: false, reader).GetAwaiter().GetResult();
 
-    public override ValueTask<string?> ReadAsync(PgReader reader, PgConverterOptions options, CancellationToken cancellationToken = default)
-        => ReadCore(async: true, reader, options, cancellationToken);
+    public override ValueTask<string> ReadAsync(PgReader reader, CancellationToken cancellationToken = default)
+        => ReadCore(async: true, reader, cancellationToken);
 
-    ValueTask<string?> ReadCore(bool async, PgReader reader, PgConverterOptions options, CancellationToken cancellationToken = default)
-        => new(options.TextEncoding.GetString(reader.ReadExact(reader.ByteCount)));
+    ValueTask<string> ReadCore(bool async, PgReader reader, CancellationToken cancellationToken = default)
+        => new(_textEncoding.GetString(reader.ReadExact(reader.ByteCount)));
 }
 
 sealed class CharArrayTextConverter : ValueConverter<char[], ReadOnlyMemory<char>>
 {
     public CharArrayTextConverter(PgConverter<ReadOnlyMemory<char>> effectiveConverter) : base(effectiveConverter) { }
 
-    protected override char[] ConvertFrom(ReadOnlyMemory<char> value, PgConverterOptions options)
+    protected override char[] ConvertFrom(ReadOnlyMemory<char> value)
     {
         if (MemoryMarshal.TryGetArray(value, out var segment))
             // We need to return an exact sized array.
@@ -92,39 +104,49 @@ sealed class CharArrayTextConverter : ValueConverter<char[], ReadOnlyMemory<char
 
         return value.ToArray();
     }
-    protected override ReadOnlyMemory<char> ConvertTo(char[] value, PgConverterOptions options) => value.AsMemory();
+    protected override ReadOnlyMemory<char> ConvertTo(char[] value) => value.AsMemory();
 }
 
 sealed class CharArraySegmentTextConverter : ValueConverter<ArraySegment<char>, ReadOnlyMemory<char>>
 {
     public CharArraySegmentTextConverter(PgConverter<ReadOnlyMemory<char>> effectiveConverter) : base(effectiveConverter) { }
 
-    protected override ArraySegment<char> ConvertFrom(ReadOnlyMemory<char> value, PgConverterOptions options)
+    protected override ArraySegment<char> ConvertFrom(ReadOnlyMemory<char> value)
         => MemoryMarshal.TryGetArray(value, out var segment) ? new(segment.Array!) : new(value.ToArray());
-    protected override ReadOnlyMemory<char> ConvertTo(ArraySegment<char> value, PgConverterOptions options) => value.AsMemory();
+    protected override ReadOnlyMemory<char> ConvertTo(ArraySegment<char> value) => value.AsMemory();
 }
 
-sealed class CharTextConverter : PgConverter<char>
+sealed class CharTextConverter : PgBufferedConverter<char>
 {
-    public override bool CanConvert(DataFormat format) => format is DataFormat.Binary or DataFormat.Text;
+    readonly Encoding _textEncoding;
+    public CharTextConverter(PgConverterOptions options) => _textEncoding = options.TextEncoding;
 
-    public override char Read(PgReader reader, PgConverterOptions options)
+    public override bool CanConvert(DataFormat format, out bool fixedSize)
     {
-        var bytes = reader.ReadExact(Math.Min(options.TextEncoding.GetMaxByteCount(1), reader.ByteCount));
+        fixedSize = format is DataFormat.Binary;
+        return format is DataFormat.Binary or DataFormat.Text;
+    }
+
+    protected override char ReadCore(PgReader reader)
+    {
+        var bytes = reader.ReadExact(Math.Min(_textEncoding.GetMaxByteCount(1), reader.ByteCount));
         Span<char> destination = stackalloc char[1];
-        options.TextEncoding.GetChars(bytes, destination);
+        _textEncoding.GetChars(bytes, destination);
         return destination[0];
     }
 
-    public override ValueSize GetSize(char value, ref object? writeState, SizeContext context, PgConverterOptions options)
+    public override ValueSize GetSize(ref SizeContext context, char value)
     {
+        if (context.Format is DataFormat.Binary)
+            return sizeof(char);
+
         Span<char> spanValue = stackalloc char[] { value };
-        return options.TextEncoding.GetByteCount(spanValue);
+        return _textEncoding.GetByteCount(spanValue);
     }
 
-    public override void Write(PgWriter writer, char value, PgConverterOptions options)
+    public override void Write(PgWriter writer, char value)
     {
         Span<char> spanValue = stackalloc char[] { value };
-        writer.WriteTextResumable(spanValue, options.TextEncoding);
+        writer.WriteTextResumable(spanValue, _textEncoding);
     }
 }

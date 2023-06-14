@@ -7,7 +7,7 @@ using Xunit;
 namespace Slon.FunctionalTests;
 
 [Collection("Database")]
-public record SlonParameterTests(DatabaseService DbService)
+public class SlonParameterTests(DatabaseService DbService)
 {
     [Fact]
     public async Task SendOneInt()

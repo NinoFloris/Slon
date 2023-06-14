@@ -1,10 +1,18 @@
 using System;
 using System.Buffers;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Slon.Pg.Types;
 
 namespace Slon.Pg;
+
+enum ArrayNullabilityMode
+{
+    Never,
+    Always,
+    PerInstance
+}
 
 class PgConverterOptions
 {
@@ -18,7 +26,9 @@ class PgConverterOptions
     public required IPgConverterInfoResolver ConverterInfoResolver { get; init; }
     public bool EnableDateTimeInfinityConversions { get; init; } = true;
 
-    PgConverterInfo? GetConverterInfoCore(Type? type, PgTypeId? pgTypeId)
+    public ArrayNullabilityMode ArrayNullabilityMode { get; init; } = ArrayNullabilityMode.Never;
+
+    PgConverterInfo? GetConverterInfoCore(Type? type, PgTypeId? pgTypeId, bool defaultTypeFallback)
     {
         // We don't verify the kind of pgTypeId we get, it'll throw if it's incorrect.
         // It's up to the Converter author to call GetCanonicalTypeId if they want to use an oid instead of a datatypename.
@@ -26,20 +36,25 @@ class PgConverterOptions
         if (RequirePortableTypeIds)
         {
             return Unsafe.As<ConverterInfoCache<DataTypeName>>(_converterInfoCache ??= new ConverterInfoCache<DataTypeName>(this))
-                .GetOrAddInfo(type, pgTypeId is { } id ? id.DataTypeName : null);
+                .GetOrAddInfo(type, pgTypeId is { } id ? id.DataTypeName : null, defaultTypeFallback);
         }
         else
         {
             return Unsafe.As<ConverterInfoCache<Oid>>(_converterInfoCache ??= new ConverterInfoCache<Oid>(this))
-                .GetOrAddInfo(type, pgTypeId is { } id ? id.Oid : null);
+                .GetOrAddInfo(type, pgTypeId is { } id ? id.Oid : null, defaultTypeFallback);
         }
     }
 
     public PgConverterInfo? GetDefaultConverterInfo(PgTypeId pgTypeId)
-        => GetConverterInfoCore(null, pgTypeId);
+        => GetConverterInfoCore(null, pgTypeId, false);
 
     public PgConverterInfo? GetConverterInfo(Type type, PgTypeId? pgTypeId = null)
-        => GetConverterInfoCore(type ?? throw new ArgumentNullException(), pgTypeId);
+        => GetConverterInfoCore(type ?? throw new ArgumentNullException(nameof(type)), pgTypeId, false);
+
+    public PgConverterInfo? GetObjectOrDefaultConverterInfo(PgTypeId pgTypeId)
+        => GetConverterInfoCore(typeof(object), pgTypeId, true);
+
+    internal PgType GetPgType(PgTypeId pgTypeId) => RequirePortableTypeIds ? TypeCatalog.GetPortablePgType(pgTypeId) : GetPgType(pgTypeId);
 
     // If a given type id is in the opposite form than what was expected it will be mapped according to the requirement.
     internal PgTypeId GetCanonicalTypeId(PgTypeId pgTypeId)
@@ -73,6 +88,8 @@ class PgConverterOptions
     public PgTypeId GetElementTypeId(PgTypeId arrayTypeId)
         => RequirePortableTypeIds ? TypeCatalog.GetElementDataTypeName(arrayTypeId) : TypeCatalog.GetElementOid(arrayTypeId);
 
+    public DataTypeName GetDataTypeName(PgTypeId pgTypeId) => TypeCatalog.GetDataTypeName(pgTypeId);
+
     public PgWriter GetBufferedWriter<TWriter>(TWriter bufferWriter, object? state) where TWriter : IBufferWriter<byte>
     {
         var bufferedWriter = (PgWriter)null!;
@@ -80,10 +97,10 @@ class PgConverterOptions
         return bufferedWriter;
     }
 
-    public BufferedOutput GetBufferedOutput<T>(PgConverter<T> converter, T value, object? state, DataFormat dataFormat)
+    public BufferedOutput GetBufferedOutput<T>(PgConverter<T> converter, [DisallowNull]T value, object? state, DataFormat dataFormat)
     {
         var writer = GetBufferedWriter<IBufferWriter<byte>>(null!, state); // TODO this should be some array pool thing.
-        converter.Write(writer, value, this);
+        converter.Write(writer, value);
 
         return new BufferedOutput(default);
     }

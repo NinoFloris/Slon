@@ -48,7 +48,7 @@ class PgWriter
 
     internal FlushMode FlushMode => _flushSuppressed ? FlushMode.None : _flushMode;
 
-    public DataFormat DataFormat { get; internal set; }
+    public DataFormat Format { get; internal set; }
     // TODO state shouldn't live here.
     public object? State { get; private set; }
     public ValueSize Size { get; private set; }
@@ -115,6 +115,16 @@ class PgWriter
         throw new NotImplementedException();
     }
 
+    public void WriteFloat(float value)
+    {
+        throw new NotImplementedException();
+    }
+
+    public void WriteDouble(double value)
+    {
+        throw new NotImplementedException();
+    }
+
 // #if !NETSTANDARD2_0
 //     public void WriteInt32(Int128 value);
 // #endif
@@ -158,6 +168,11 @@ class PgWriter
     public void WriteInt16(short value)
     {
         _writer.WriteShort(value);
+    }
+
+    public void WriteUInt16(ushort value)
+    {
+        throw new NotImplementedException();
     }
 }
 
