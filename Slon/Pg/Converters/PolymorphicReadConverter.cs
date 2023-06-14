@@ -31,7 +31,7 @@ abstract class PolymorphicReadConverterResolver : PgConverterResolver<object>
 
     protected abstract PolymorphicReadConverter Get(Field? field);
 
-    public sealed override PgConverterResolution<object> GetDefault(PgTypeId pgTypeId)
+    public sealed override PgConverterResolution GetDefault(PgTypeId pgTypeId)
     {
         if (pgTypeId != PgTypeId)
             throw CreateUnsupportedPgTypeIdException(pgTypeId);
@@ -40,10 +40,10 @@ abstract class PolymorphicReadConverterResolver : PgConverterResolver<object>
         return new(converter, PgTypeId, converter.EffectiveType);
     }
 
-    public sealed override PgConverterResolution<object> Get(object? value, PgTypeId? expectedPgTypeId)
+    public sealed override PgConverterResolution Get(object? value, PgTypeId? expectedPgTypeId)
         => throw new NotSupportedException("Polymorphic writing is not supported, try to resolve a converter by the type of an actual value instead.");
 
-    public sealed override PgConverterResolution<object> Get(Field field)
+    public sealed override PgConverterResolution Get(Field field)
     {
         if (field.PgTypeId != PgTypeId)
             throw CreateUnsupportedPgTypeIdException(field.PgTypeId);

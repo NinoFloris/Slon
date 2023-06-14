@@ -216,7 +216,7 @@ abstract class PgStreamingConverter<T> : PgConverter<T>
 
 static class PgConverterOfTExtensions
 {
-    public static ValueTask<T> ReadAsync<T>(this PgConverter<T> converter, PgReader reader, CancellationToken cancellationToken)
+    public static ValueTask<T> ReadAsync<T>(this PgConverter<T> converter, PgReader reader, CancellationToken cancellationToken = default)
     {
         if (converter is PgStreamingConverter<T> asyncConverter)
             return asyncConverter.ReadAsync(reader, cancellationToken);
@@ -224,7 +224,7 @@ static class PgConverterOfTExtensions
         return new(converter.Read(reader));
     }
 
-    public static ValueTask WriteAsync<T>(this PgConverter<T> converter, PgWriter writer, [DisallowNull]T value, CancellationToken cancellationToken)
+    public static ValueTask WriteAsync<T>(this PgConverter<T> converter, PgWriter writer, [DisallowNull]T value, CancellationToken cancellationToken = default)
     {
         if (converter is PgStreamingConverter<T> asyncConverter)
             return asyncConverter.WriteAsync(writer, value, cancellationToken);

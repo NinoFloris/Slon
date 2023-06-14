@@ -18,7 +18,7 @@ sealed class DateTimeConverterResolver: PgConverterResolver<DateTime>
         _dateTimeInfinityConversions = dateTimeInfinityConversions;
     }
 
-    public override PgConverterResolution<DateTime> GetDefault(PgTypeId pgTypeId)
+    public override PgConverterResolution GetDefault(PgTypeId pgTypeId)
     {
         if (pgTypeId == _timestampTz)
             return new(_tzConverter ??= new DateTimeConverter(_dateTimeInfinityConversions, DateTimeKind.Utc), _timestampTz);
@@ -28,7 +28,7 @@ sealed class DateTimeConverterResolver: PgConverterResolver<DateTime>
         throw CreateUnsupportedPgTypeIdException(pgTypeId);
     }
 
-    public override PgConverterResolution<DateTime> Get(DateTime value, PgTypeId? expectedPgTypeId)
+    public override PgConverterResolution Get(DateTime value, PgTypeId? expectedPgTypeId)
     {
         if (value.Kind is DateTimeKind.Utc)
         {
@@ -63,12 +63,12 @@ sealed class DateTimeOffsetUtcOnlyConverterResolver: PgConverterResolver<DateTim
         _converter = new DateTimeOffsetConverter(dateTimeInfinityConversions);
     }
 
-    public override PgConverterResolution<DateTimeOffset> GetDefault(PgTypeId pgTypeId)
+    public override PgConverterResolution GetDefault(PgTypeId pgTypeId)
         => pgTypeId == _timestampTz
             ? new(_converter, _timestampTz)
             : throw CreateUnsupportedPgTypeIdException(pgTypeId);
 
-    public override PgConverterResolution<DateTimeOffset> Get(DateTimeOffset value, PgTypeId? expectedPgTypeId)
+    public override PgConverterResolution Get(DateTimeOffset value, PgTypeId? expectedPgTypeId)
     {
         // We run GetDefault first to make sure the expectedPgTypeId is known.
         var resolution = GetDefault(expectedPgTypeId ?? _timestampTz);

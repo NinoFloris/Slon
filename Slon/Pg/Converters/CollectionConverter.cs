@@ -25,8 +25,6 @@ interface IElementOperations
 readonly struct PgArrayConverter
 {
     readonly IElementOperations _elementOperations;
-
-
     public bool ElemTypeDbNullable { get; }
     readonly ArrayPool<(ValueSize, object?)> _statePool;
     readonly int _pgLowerBound;
@@ -442,13 +440,13 @@ sealed class ArrayConverterResolver<TElement> : PgConverterResolver<object>
     readonly PgConverterInfo _elemConverterInfo;
     readonly ConcurrentDictionary<PgConverter<TElement>, ArrayBasedArrayConverter<TElement>> _arrayConverters = new(ReferenceEqualityComparer.Instance);
     readonly ConcurrentDictionary<PgConverter<TElement>, ListBasedArrayConverter<TElement>> _listConverters = new(ReferenceEqualityComparer.Instance);
-    PgConverterResolution<TElement> _lastElemResolution;
-    PgConverterResolution<object> _lastResolution;
+    PgConverterResolution _lastElemResolution;
+    PgConverterResolution _lastResolution;
 
     public ArrayConverterResolver(PgConverterInfo elemConverterInfo) => _elemConverterInfo = elemConverterInfo;
 
-    public override PgConverterResolution<object> GetDefault(PgTypeId pgTypeId) => Get(Array.Empty<TElement>(), pgTypeId);
-    public override PgConverterResolution<object> Get(object? values, PgTypeId? expectedPgTypeId)
+    public override PgConverterResolution GetDefault(PgTypeId pgTypeId) => Get(Array.Empty<TElement>(), pgTypeId);
+    public override PgConverterResolution Get(object? values, PgTypeId? expectedPgTypeId)
     {
         // We get the pg type id for the first element to be able to pass it in for the subsequent, per element calls.
         // This is how we allow resolvers to catch value inconsistencies that would cause converter mixing and helps return useful error messages.
@@ -488,7 +486,7 @@ sealed class ArrayConverterResolver<TElement> : PgConverterResolver<object>
         }
 
         _lastElemResolution = expectedResolution;
-        return _lastResolution = new PgConverterResolution<object>(arrayConverter, expectedPgTypeId ?? _elemConverterInfo.Options.GetArrayTypeId(expectedResolution.PgTypeId));
+        return _lastResolution = new PgConverterResolution(arrayConverter, expectedPgTypeId ?? _elemConverterInfo.Options.GetArrayTypeId(expectedResolution.PgTypeId));
 
         // We don't need to check lower bounds here, only relevant for multi dim.
         static TElement? GetFirstValueOrDefault(object? values) => values switch
@@ -499,13 +497,13 @@ sealed class ArrayConverterResolver<TElement> : PgConverterResolver<object>
         };
 
         ArrayBasedArrayConverter<TElement> GetOrAddArrayBased()
-            => _arrayConverters.GetOrAdd(expectedResolution.Converter,
+            => _arrayConverters.GetOrAdd(expectedResolution.GetConverter<TElement>(),
                 static (elemConverter, expectedElemPgTypeId) =>
                     new ArrayBasedArrayConverter<TElement>(new(elemConverter, expectedElemPgTypeId)),
                 expectedResolution.PgTypeId);
 
         ListBasedArrayConverter<TElement> GetOrAddListBased()
-            => _listConverters.GetOrAdd(expectedResolution.Converter,
+            => _listConverters.GetOrAdd(expectedResolution.GetConverter<TElement>(),
                 static (elemConverter, expectedElemPgTypeId) =>
                     new ListBasedArrayConverter<TElement>(new(elemConverter, expectedElemPgTypeId)),
                 expectedResolution.PgTypeId);

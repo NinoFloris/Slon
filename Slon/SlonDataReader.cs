@@ -309,13 +309,11 @@ public sealed partial class SlonDataReader: DbDataReader
         var reader = new PgReader();
         // TODO store last used converter per column for quick checking.
         var field = new Field();
-        var info = _dataSource.GetConverterInfo(typeof(T), field);
-        if (typeof(T) == typeof(object) && info.Type != typeof(object))
-        {
-            return (T)info.GetResolutionAsObject(field).Converter.ReadAsObject(reader)!;
-        }
 
-        return info.GetResolution<T>(field).Converter.Read(reader) ?? throw new InvalidOperationException("DbNull returned");
+        // When asObject is true it's either a default converter fallback when typeof(T) == typeof(object) or a boxing converter that needs unboxing to T.
+        return _dataSource.GetConverterInfo(typeof(T), field, out var asObject).GetResolution(field) is var resolution && asObject
+            ? (T)resolution.Converter.ReadAsObject(reader)!
+            : resolution.GetConverter<T>().Read(reader);
     }
 
     public override async Task<T> GetFieldValueAsync<T>(int ordinal, CancellationToken cancellationToken)
@@ -385,13 +383,10 @@ public sealed partial class SlonDataReader: DbDataReader
         var reader = new PgReader();
         // TODO store last used converter per column for quick checking.
         var field = new Field();
-        var info = _dataSource.GetConverterInfo(typeof(T), field);
-        if (typeof(T) == typeof(object) && info.Type != typeof(object))
-        {
-            return (T)(await info.GetResolutionAsObject(field).Converter.ReadAsObjectAsync(reader, cancellationToken) ?? throw new InvalidOperationException("DbNull returned"));
-        }
-
-        return await info.GetResolution<T>(field).Converter.ReadAsync(reader, cancellationToken) ?? throw new InvalidOperationException("DbNull returned");
+        // When asObject is true it's either a default converter fallback when typeof(T) == typeof(object) or a boxing converter that needs unboxing to T.
+        return _dataSource.GetConverterInfo(typeof(T), field, out var asObject).GetResolution(field) is var resolution && asObject
+            ? (T)(await resolution.Converter.ReadAsObjectAsync(reader, cancellationToken))!
+            : await resolution.GetConverter<T>().ReadAsync(reader, cancellationToken);
     }
 
     public override bool GetBoolean(int ordinal)

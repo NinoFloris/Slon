@@ -104,15 +104,13 @@ static class PgConverterInfoExtensions
 
         public void Read<T>(T? value)
         {
-            var resolution = _info.GetResolution(value);
-            ConverterResolution = resolution.ToConverterResolution();
+            var resolution = ConverterResolution = _info.GetResolution(value);
             Size = _info.GetPreferredSize(resolution, value, _bufferLength, out _writeState, out _format, _preferredFormat);
         }
 
         public void ReadAsObject(object? value)
         {
-            var resolution = _info.GetResolutionAsObject(value);
-            ConverterResolution = resolution;
+            var resolution = ConverterResolution = _info.GetResolutionAsObject(value);
             if (!_nullStructValueIsDbNull || value is not null)
                 Size = _info.GetPreferredSizeAsObject(resolution, value, _bufferLength, out _writeState, out _format, _preferredFormat);
         }

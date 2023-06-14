@@ -28,7 +28,7 @@ class PgConverterOptions
 
     public ArrayNullabilityMode ArrayNullabilityMode { get; init; } = ArrayNullabilityMode.Never;
 
-    PgConverterInfo? GetConverterInfoCore(Type? type, PgTypeId? pgTypeId)
+    PgConverterInfo? GetConverterInfoCore(Type? type, PgTypeId? pgTypeId, bool defaultTypeFallback)
     {
         // We don't verify the kind of pgTypeId we get, it'll throw if it's incorrect.
         // It's up to the Converter author to call GetCanonicalTypeId if they want to use an oid instead of a datatypename.
@@ -36,20 +36,23 @@ class PgConverterOptions
         if (RequirePortableTypeIds)
         {
             return Unsafe.As<ConverterInfoCache<DataTypeName>>(_converterInfoCache ??= new ConverterInfoCache<DataTypeName>(this))
-                .GetOrAddInfo(type, pgTypeId is { } id ? id.DataTypeName : null);
+                .GetOrAddInfo(type, pgTypeId is { } id ? id.DataTypeName : null, defaultTypeFallback);
         }
         else
         {
             return Unsafe.As<ConverterInfoCache<Oid>>(_converterInfoCache ??= new ConverterInfoCache<Oid>(this))
-                .GetOrAddInfo(type, pgTypeId is { } id ? id.Oid : null);
+                .GetOrAddInfo(type, pgTypeId is { } id ? id.Oid : null, defaultTypeFallback);
         }
     }
 
     public PgConverterInfo? GetDefaultConverterInfo(PgTypeId pgTypeId)
-        => GetConverterInfoCore(null, pgTypeId);
+        => GetConverterInfoCore(null, pgTypeId, false);
 
     public PgConverterInfo? GetConverterInfo(Type type, PgTypeId? pgTypeId = null)
-        => GetConverterInfoCore(type ?? throw new ArgumentNullException(), pgTypeId);
+        => GetConverterInfoCore(type ?? throw new ArgumentNullException(nameof(type)), pgTypeId, false);
+
+    public PgConverterInfo? GetObjectOrDefaultConverterInfo(PgTypeId pgTypeId)
+        => GetConverterInfoCore(typeof(object), pgTypeId, true);
 
     internal PgType GetPgType(PgTypeId pgTypeId) => RequirePortableTypeIds ? TypeCatalog.GetPortablePgType(pgTypeId) : GetPgType(pgTypeId);
 
