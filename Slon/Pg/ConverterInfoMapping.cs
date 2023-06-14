@@ -116,6 +116,8 @@ readonly struct ConverterInfoMappingCollection
     {
         AddArrayType(elementMapping, typeof(TElement[]),
             static innerInfo => new ArrayBasedArrayConverter<TElement>(innerInfo.GetResolutionAsObject(), innerInfo.Options.GetArrayPool<(ValueSize, object?)>()));
+        AddArrayType(elementMapping, typeof(List<TElement>),
+            static innerInfo => new ListBasedArrayConverter<TElement>(innerInfo.GetResolutionAsObject(), innerInfo.Options.GetArrayPool<(ValueSize, object?)>()));
     }
 
     void AddStructType(Type type, Type nullableType, DataTypeName dataTypeName, ConverterInfoFactory createInfo, Func<PgConverterInfo, PgConverter> nullableConverter, bool isDefault)
@@ -141,6 +143,9 @@ readonly struct ConverterInfoMappingCollection
         AddStructArrayType(elementMapping, nullableElementMapping, typeof(TElement[]), typeof(TElement?[]),
             static elemInfo => new ArrayBasedArrayConverter<TElement>(elemInfo.GetResolutionAsObject(), elemInfo.Options.GetArrayPool<(ValueSize, object?)>()),
             static elemInfo => new ArrayBasedArrayConverter<TElement?>(elemInfo.GetResolutionAsObject(), elemInfo.Options.GetArrayPool<(ValueSize, object?)>()));
+        AddStructArrayType(elementMapping, nullableElementMapping, typeof(List<TElement>), typeof(List<TElement?>),
+            static elemInfo => new ListBasedArrayConverter<TElement>(elemInfo.GetResolutionAsObject(), elemInfo.Options.GetArrayPool<(ValueSize, object?)>()),
+            static elemInfo => new ListBasedArrayConverter<TElement?>(elemInfo.GetResolutionAsObject(), elemInfo.Options.GetArrayPool<(ValueSize, object?)>()));
     }
 
     void AddStructArrayType(ConverterInfoMapping elementMapping, ConverterInfoMapping nullableElementMapping, Type type, Type nullableType, Func<PgConverterInfo, PgConverter> converter, Func<PgConverterInfo, PgConverter> nullableConverter)
