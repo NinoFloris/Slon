@@ -94,6 +94,7 @@ class PgConverterInfo
         return resolution;
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     PgConverterResolution GetResolutionCore(object? value = default, PgTypeId? expectedPgTypeId = null, Field? field = null)
     {
         PgConverterResolution resolution;
